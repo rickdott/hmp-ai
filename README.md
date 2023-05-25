@@ -17,6 +17,6 @@ Plan:
 - Then train on more classes (include experiment 3, AR/LDM)
 
 Based on [HMP](https://github.com/GWeindel/hmp) created by Gabriel Weindel\
-Written by Rick den Otter\
+Written by Rick den Otter for a Master's thesis at Utrecht University\
 r.denotter@students.uu.nl\
 rickdotyt@gmail.com
