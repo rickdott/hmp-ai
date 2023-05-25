@@ -1,3 +1,11 @@
+# Ignore data
+preprocessing/sat1/*.csv
+preprocessing/sat1/*.ipynb
+preprocessing/sat1/*.fif
+preprocessing/sat1/*.mat
+!preprocessing/sat1/sat1_template.ipynb
+preprocessing/sat1/behavior/*.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
