@@ -7,7 +7,7 @@ J. P. Borst and J. R. Anderson, “The discovery of processing stages: Analyzing
 
 Plan:
 - Find data from EEG experiments where bump localizing is already done
-	- Divide data into 'chunks' based on bump location, labeling according to experiment
+	- Divide data into segments based on bump location, labeling according to experiment
 		- First is perceptual stage, second is x stage, third is y stage, fourth is motor stage
 - Train different models (CNN, RNN(LSTM), DBN) to see if they classify above chance
 	- First train on perception experiment 1
