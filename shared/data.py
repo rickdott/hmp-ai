@@ -1,12 +1,10 @@
 import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
-from pathlib import Path
 
 
 def add_stages_to_dataset(
     epoched_data_path,
-    output_path,
     labels,
     conditions=[],
     condition_variable="cue",
@@ -32,10 +30,9 @@ def add_stages_to_dataset(
 
     # Load required data and set up paths
     epoch_data = xr.load_dataset(epoched_data_path)
-    output_path = Path(output_path)
 
     # Subset here for easier debugging
-    epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
+    # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
 
     # Transform data into principal component (PC) space
     # will ask in a pop-up how many components to keep
@@ -82,7 +79,7 @@ def add_stages_to_dataset(
         print("Labeling dataset")
         model_labels = label_model(model, epoch_data, labels)
 
-    stage_data = epoch_data.assign_coords(
+    stage_data = epoch_data.assign(
         labels=(["participant", "epochs", "samples"], model_labels)
     )
     return stage_data
@@ -129,7 +126,7 @@ def label_model(model, eeg_data, labels):
     # Remove channels dimension
     shape = list(eeg_data.data.shape)
     shape.pop(2)
-    labels_array = np.full(shape, fill_value=np.nan, dtype=object)
+    labels_array = np.full(shape, fill_value="", dtype=object)
     participants = list(eeg_data.participant.values)
     prev_participant = None
 
@@ -166,8 +163,3 @@ def label_model(model, eeg_data, labels):
             labels_array[participant, epoch, samples_slice] = labels[j]
 
     return labels_array
-
-
-class DataLoader:
-    def __init__():
-        pass
