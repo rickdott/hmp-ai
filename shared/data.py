@@ -33,6 +33,7 @@ def add_stages_to_dataset(
 
     # Subset here for easier debugging
     # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
+    epoch_data = epoch_data.sel(participant=["0001"])
 
     # Transform data into principal component (PC) space
     # will ask in a pop-up how many components to keep
@@ -132,6 +133,8 @@ def label_model(model, eeg_data, labels):
 
     # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
     for locations, data in zip(event_locations, model.trial_x_participant):
+        # TODO: DATA[1] is NOT the correct epoch number when model is trained on a subset
+        # Get subset of data where cue == condition?
         data = data.item()
         locations = locations.values
 
@@ -140,14 +143,16 @@ def label_model(model, eeg_data, labels):
             print(f"Processing participant {data[0]}")
 
         # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
-        # Find sample for combination of participant + epoch where the value is null, this is the reaction time sample
-        # where the participant pressed the button and the last stage ends
-        RT_sample = int(
-            eeg_data.sel(participant=data[0], epochs=data[1])
-            .isnull()
-            .argmax("samples")
-            .data[0]
+        # Find first sample from the end for combination of participant + epoch where the value is null
+        # this is the reaction time sample where participant pressed the button and stage ends
+        RT_data = eeg_data.sel(
+            participant=data[0], epochs=data[1], channels="Fp1"
+        ).data.to_numpy()
+        RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
+        RT_sample = (
+            len(RT_data) - 1 if RT_idx_reverse == 0 else len(RT_data) - RT_idx_reverse
         )
+
         prev_participant = participant
         epoch = data[1]
 
@@ -155,11 +160,19 @@ def label_model(model, eeg_data, labels):
         for j, location in enumerate(locations):
             # Slice from known event location n to known event location n + 1
             # unless it is the last event, then slice from known event location n to reaction time
-            samples_slice = (
-                slice(location, locations[j + 1])
-                if j != n_events - 1
-                else slice(location, RT_sample - 1)
-            )
+            if j != n_events - 1:
+                if not locations[j + 1] > RT_sample - 1:
+                    samples_slice = slice(location, locations[j + 1])
+                else:
+                    # End of stage is later than NaNs begin
+                    continue
+            else:
+                if not location > RT_sample - 1:
+                    samples_slice = slice(location, RT_sample - 1)
+                else:
+                    # NaNs begin before beginning of stage, error in measurement, disregard stage
+                    continue
+            print(participant, epoch, samples_slice, RT_sample)
             labels_array[participant, epoch, samples_slice] = labels[j]
 
-    return labels_array
+    return np.copy(labels_array)
