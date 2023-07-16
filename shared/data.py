@@ -3,176 +3,196 @@ import hsmm_mvpy as hmp
 import numpy as np
 
 
-def add_stages_to_dataset(
-    epoched_data_path,
-    labels,
-    conditions=[],
-    condition_variable="cue",
-    cpus=1,
-    fit_function="fit",
-    fit_args=dict(),
-):
-    # Check for faulty input
-    if len(conditions) > 0:
-        if type(labels) is dict:
-            assert len(labels) == len(
-                conditions
-            ), "Not the same amount of conditions as label+conditions combinations"
-        else:
-            raise ValueError(
-                'Provide conditions as dict(condition: list(labels)), example: {"AC": SAT1_STAGES_ACCURACY, "SP": SAT1_STAGES_SPEED}'
-            )
-    else:
-        if type(labels) is not list:
-            raise ValueError(
-                "Provide labels argument as list of strings, denoting stages"
-            )
-
-    # Load required data and set up paths
-    epoch_data = xr.load_dataset(epoched_data_path)
-
-    # Subset here for easier debugging
-    # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
-    epoch_data = epoch_data.sel(participant=["0001"])
-
-    # Transform data into principal component (PC) space
-    # will ask in a pop-up how many components to keep
-    # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
-    print("Transforming epoched data to principal component (PC) space")
-    hmp_data = hmp.utils.transform_data(epoch_data)
-
-    # Keep conditions empty to train HMP model on all data, add conditions to separate them
-    # this is useful when conditions cause different stages or stage lengths
-    if len(conditions) > 0:
-        model_labels = None
-        for condition in conditions:
-            condition_subset = hmp.utils.condition_selection(
-                hmp_data, epoch_data, condition, variable=condition_variable
-            )
-
-            # Determine amount of expected events from number of supplied labels
-            if fit_function == "fit_single":
-                fit_args["n_events"] = len(labels[condition])
-
-            # Fit
-            print(f"Fitting HMP model for {condition} condition")
-            model = fit_model(
-                condition_subset,
-                epoch_data,
-                cpus=cpus,
-                fit_function=fit_function,
-                fit_args=fit_args,
-            )
-
-            # Label
-            print(f"Labeling dataset for {condition} condition")
-            new_labels = label_model(model, epoch_data, labels[condition])
-            if model_labels is None:
-                model_labels = new_labels
+class StageFinder:
+    def __init__(
+        self,
+        epoched_data_path,
+        labels,
+        conditions=[],
+        condition_variable="cue",
+        cpus=1,
+        fit_function="fit",
+        fit_args=dict(),
+    ):
+        # Check for faulty input
+        if len(conditions) > 0:
+            if type(labels) is dict:
+                assert len(labels) == len(
+                    conditions
+                ), "Not the same amount of conditions as label+conditions combinations"
             else:
-                # Merge new labels with old labels, will always be disjoint sets since an epoch can only be one condition
-                model_labels = np.where(
-                    model_labels == np.nan, new_labels, model_labels
+                raise ValueError(
+                    'Provide conditions as dict(condition: list(labels)), example: {"AC": SAT1_STAGES_ACCURACY, "SP": SAT1_STAGES_SPEED}'
                 )
-    else:
-        print("Fitting HMP model")
-        model = fit_model(hmp_data, epoch_data, cpus=cpus)
-        print("Labeling dataset")
-        model_labels = label_model(model, epoch_data, labels)
+        else:
+            if type(labels) is not list:
+                raise ValueError(
+                    "Provide labels argument as list of strings, denoting stages"
+                )
+        # Load required data and set up paths
+        self.epoch_data = xr.load_dataset(epoched_data_path)
 
-    stage_data = epoch_data.assign(
-        labels=(["participant", "epochs", "samples"], model_labels)
-    )
-    return stage_data
+        self.labels = labels
+        self.conditions = conditions
+        self.condition_variable = condition_variable
+        self.cpus = cpus
+        self.fit_function = fit_function
+        self.fit_args = fit_args
 
+        # Subset here for easier debugging
+        # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
+        # self.epoch_data = self.epoch_data.sel(participant=["0001"])
 
-def fit_model(hmp_data, epoch_data, cpus=1, fit_function="fit", fit_args=dict()):
-    # Initialize model
-    model = hmp.models.hmp(hmp_data, epoch_data, cpus=cpus, sfreq=epoch_data.sfreq)
+        return
 
-    # Using the provided fit_function name, attempt to fit the model
-    if hasattr(model, fit_function):
-        func = getattr(model, fit_function)
-        try:
-            fitted = func(**fit_args)
-            return fitted
-        except Exception as e:
+    def add_stages_to_dataset(self):
+        # Transform data into principal component (PC) space
+        # will ask in a pop-up how many components to keep
+        # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
+        print("Transforming epoched data to principal component (PC) space")
+        hmp_data = hmp.utils.transform_data(self.epoch_data)
+
+        # Keep conditions empty to train HMP model on all data, add conditions to separate them
+        # this is useful when conditions cause different stages or stage lengths
+        if len(self.conditions) > 0:
+            model_labels = None
+            for condition in self.conditions:
+                condition_subset = hmp.utils.condition_selection(
+                    hmp_data,
+                    self.epoch_data,
+                    condition,
+                    variable=self.condition_variable,
+                )
+
+                # Determine amount of expected events from number of supplied labels
+                if self.fit_function == "fit_single":
+                    self.fit_args["n_events"] = len(self.labels[condition])
+
+                # Fit
+                print(f"Fitting HMP model for {condition} condition")
+                model = self.fit_model(condition_subset)
+
+                # Label
+                print(f"Labeling dataset for {condition} condition")
+                new_labels = self.label_model(model, condition)
+                if model_labels is None:
+                    model_labels = new_labels
+                else:
+                    # Merge new labels with old labels, will always be disjoint sets since an epoch can only be one condition
+                    model_labels = np.where(
+                        model_labels == "", new_labels, model_labels
+                    )
+        else:
+            print("Fitting HMP model")
+            model = self.fit_model(hmp_data)
+            print("Labeling dataset")
+            model_labels = self.label_model(model)
+
+        # Add label information to stage_data: ['', '', 'stage1', 'stage1', 'stage2' ...]
+        stage_data = self.epoch_data.assign(
+            labels=(["participant", "epochs", "samples"], model_labels)
+        )
+        return stage_data
+
+    def fit_model(self, hmp_data):
+        # Initialize model
+        model = hmp.models.hmp(
+            hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
+        )
+
+        # Using the provided fit_function name, attempt to fit the model
+        if hasattr(model, self.fit_function):
+            func = getattr(model, self.fit_function)
+            try:
+                fitted = func(**self.fit_args)
+                return fitted
+            except Exception as e:
+                raise ValueError(
+                    f"An error occurred when trying to fit the model with the provided arguments. Error details: {str(e)}"
+                )
+        else:
+            available_methods = [
+                method_name
+                for method_name in dir(model)
+                if callable(getattr(model, method_name))
+            ]
             raise ValueError(
-                f"An error occurred when trying to fit the model with the provided arguments. Error details: {str(e)}"
+                f'Provided fit_function "{self.fit_function}" not found on model instance. Available methods are: {available_methods}'
             )
-    else:
-        available_methods = [
-            method_name
-            for method_name in dir(model)
-            if callable(getattr(model, method_name))
-        ]
-        raise ValueError(
-            f'Provided fit_function "{fit_function}" not found on model instance. Available methods are: {available_methods}'
+
+    def label_model(self, model, condition=None):
+        n_events = len(model.event)
+        labels = self.labels if condition is None else self.labels[condition]
+
+        if len(labels) != n_events:
+            raise ValueError(
+                "Amount of labels is not equal to amount of events, adjust labels parameter"
+            )
+
+        # Set up output datatypes
+        event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
+
+        # Remove channels dimension
+        shape = list(self.epoch_data.data.shape)
+        shape.pop(2)
+
+        # Fill with empty strings since XArray saves np.NaN and other None values as empty strings anyway
+        # this avoids discrepancies in data
+        labels_array = np.full(shape, fill_value="", dtype=object)
+        participants = list(self.epoch_data.participant.values)
+        prev_participant = None
+
+        # Mapping from trial_x_participant epoch numbers to dataset epoch numbers
+        condition_epochs = (
+            self.epoch_data.epochs
+            if condition is None
+            else self.epoch_data.where(
+                self.epoch_data[self.condition_variable] == condition, drop=True
+            ).epochs
         )
 
+        # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
+        for locations, data in zip(event_locations, model.trial_x_participant):
+            data = data.item()
+            locations = locations.values
 
-# TODO: Update function description
-# Takes a model and the probabilities of events occuring within the dataset the model was initiated on
-# and returns an ndarray of shape samples x time x #electrodes
-# length of labels must be equal to amount of events
-def label_model(model, eeg_data, labels):
-    n_events = len(model.event)
-    if len(labels) != n_events:
-        raise ValueError(
-            "Amount of labels is not equal to amount of events, adjust labels parameter"
-        )
+            participant = participants.index(data[0])
+            if participant != prev_participant:
+                print(f"Processing participant {data[0]}")
 
-    # Set up output datatypes
-    event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
-    # Remove channels dimension
-    shape = list(eeg_data.data.shape)
-    shape.pop(2)
-    labels_array = np.full(shape, fill_value="", dtype=object)
-    participants = list(eeg_data.participant.values)
-    prev_participant = None
+            # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
+            # Find first sample from the end for combination of participant + epoch where the value is NaN
+            # this is the reaction time sample where the participant pressed the button and stage ends
+            RT_data = self.epoch_data.sel(
+                participant=data[0], epochs=data[1], channels="Fp1"
+            ).data.to_numpy()
+            RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
+            RT_sample = (
+                len(RT_data) - 1
+                if RT_idx_reverse == 0
+                else len(RT_data) - RT_idx_reverse
+            )
 
-    # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
-    for locations, data in zip(event_locations, model.trial_x_participant):
-        # TODO: DATA[1] is NOT the correct epoch number when model is trained on a subset
-        # Get subset of data where cue == condition?
-        data = data.item()
-        locations = locations.values
+            prev_participant = participant
+            epoch = int(condition_epochs[data[1]])
 
-        participant = participants.index(data[0])
-        if participant != prev_participant:
-            print(f"Processing participant {data[0]}")
-
-        # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
-        # Find first sample from the end for combination of participant + epoch where the value is null
-        # this is the reaction time sample where participant pressed the button and stage ends
-        RT_data = eeg_data.sel(
-            participant=data[0], epochs=data[1], channels="Fp1"
-        ).data.to_numpy()
-        RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
-        RT_sample = (
-            len(RT_data) - 1 if RT_idx_reverse == 0 else len(RT_data) - RT_idx_reverse
-        )
-
-        prev_participant = participant
-        epoch = data[1]
-
-        # Set stage label for each stage
-        for j, location in enumerate(locations):
-            # Slice from known event location n to known event location n + 1
-            # unless it is the last event, then slice from known event location n to reaction time
-            if j != n_events - 1:
-                if not locations[j + 1] > RT_sample - 1:
-                    samples_slice = slice(location, locations[j + 1])
+            # Set stage label for each stage
+            for j, location in enumerate(locations):
+                # Slice from known event location n to known event location n + 1
+                # unless it is the last event, then slice from known event location n to reaction time
+                if j != n_events - 1:
+                    if not locations[j + 1] > RT_sample - 1:
+                        samples_slice = slice(location, locations[j + 1])
+                    else:
+                        # End of stage is later than NaNs begin
+                        continue
                 else:
-                    # End of stage is later than NaNs begin
-                    continue
-            else:
-                if not location > RT_sample - 1:
-                    samples_slice = slice(location, RT_sample - 1)
-                else:
-                    # NaNs begin before beginning of stage, error in measurement, disregard stage
-                    continue
-            print(participant, epoch, samples_slice, RT_sample)
-            labels_array[participant, epoch, samples_slice] = labels[j]
+                    if not location > RT_sample - 1:
+                        samples_slice = slice(location, RT_sample - 1)
+                    else:
+                        # NaNs begin before beginning of stage, error in measurement, disregard stage
+                        continue
+                # print(participant, epoch, samples_slice, RT_sample)
+                labels_array[participant, epoch, samples_slice] = labels[j]
 
-    return np.copy(labels_array)
+        return np.copy(labels_array)
