@@ -170,7 +170,7 @@ class StageFinder:
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
             locations = locations.values
-
+            epoch = int(condition_epochs[data[1]])
             participant = participants.index(data[0])
             if participant != prev_participant:
                 print(f"Processing participant {data[0]}")
@@ -179,7 +179,7 @@ class StageFinder:
             # Find first sample from the end for combination of participant + epoch where the value is NaN
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
-                participant=data[0], epochs=data[1], channels="Fp1"
+                participant=data[0], epochs=epoch, channels="Fp1"
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
             RT_sample = (
@@ -189,7 +189,6 @@ class StageFinder:
             )
 
             prev_participant = participant
-            epoch = int(condition_epochs[data[1]])
 
             # Set stage label for each stage
             for j, location in enumerate(locations):
