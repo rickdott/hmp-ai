@@ -2,6 +2,12 @@ import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
 
+SAT1_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
+SAT1_STAGES_SPEED = ["encoding", "decision", "response"]
+SAT2_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
+SAT2_STAGES_SPEED = ["encoding", "decision", "response"]
+AR_STAGES = ["encoding", "familiarity", "memory", "decision", "response"]
+
 
 class StageFinder:
     def __init__(
@@ -13,6 +19,7 @@ class StageFinder:
         cpus=1,
         fit_function="fit",
         fit_args=dict(),
+        verbose=False,
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -29,9 +36,11 @@ class StageFinder:
                 raise ValueError(
                     "Provide labels argument as list of strings, denoting stages"
                 )
+
         # Load required data and set up paths
         self.epoch_data = xr.load_dataset(epoched_data_path)
 
+        self.verbose = verbose
         self.labels = labels
         self.conditions = conditions
         self.condition_variable = condition_variable
@@ -39,9 +48,12 @@ class StageFinder:
         self.fit_function = fit_function
         self.fit_args = fit_args
 
+        if self.verbose:
+            print("Epoch data used:")
+            print(self.epoch_data)
         # Subset here for easier debugging
         # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
-        # self.epoch_data = self.epoch_data.sel(participant=["0001"])
+        self.epoch_data = self.epoch_data.sel(participant=["0001"])
 
         return
 
@@ -150,6 +162,9 @@ class StageFinder:
                 self.epoch_data[self.condition_variable] == condition, drop=True
             ).epochs
         )
+        if self.verbose:
+            print("Epochs used for current condition (if applicable):")
+            print(condition_epochs)
 
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
@@ -192,7 +207,10 @@ class StageFinder:
                     else:
                         # NaNs begin before beginning of stage, error in measurement, disregard stage
                         continue
-                # print(participant, epoch, samples_slice, RT_sample)
+                if self.verbose:
+                    print(
+                        f"Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
+                    )
                 labels_array[participant, epoch, samples_slice] = labels[j]
 
         return np.copy(labels_array)
