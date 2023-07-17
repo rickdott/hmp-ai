@@ -82,11 +82,11 @@ class StageFinder:
 
                 # Fit
                 print(f"Fitting HMP model for {condition} condition")
-                model = self.fit_model(condition_subset)
+                model = self.__fit_model__(condition_subset)
 
                 # Label
                 print(f"Labeling dataset for {condition} condition")
-                new_labels = self.label_model(model, condition)
+                new_labels = self.__label_model__(model, condition)
                 if model_labels is None:
                     model_labels = new_labels
                 else:
@@ -96,9 +96,9 @@ class StageFinder:
                     )
         else:
             print("Fitting HMP model")
-            model = self.fit_model(hmp_data)
+            model = self.__fit_model__(hmp_data)
             print("Labeling dataset")
-            model_labels = self.label_model(model)
+            model_labels = self.__label_model__(model)
 
         # Add label information to stage_data: ['', '', 'stage1', 'stage1', 'stage2' ...]
         stage_data = self.epoch_data.assign(
@@ -106,7 +106,7 @@ class StageFinder:
         )
         return stage_data
 
-    def fit_model(self, hmp_data):
+    def __fit_model__(self, hmp_data):
         # Initialize model
         model = hmp.models.hmp(
             hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
@@ -132,7 +132,7 @@ class StageFinder:
                 f'Provided fit_function "{self.fit_function}" not found on model instance. Available methods are: {available_methods}'
             )
 
-    def label_model(self, model, condition=None):
+    def __label_model__(self, model, condition=None):
         n_events = len(model.event)
         labels = self.labels if condition is None else self.labels[condition]
 
