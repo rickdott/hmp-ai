@@ -53,7 +53,7 @@ class StageFinder:
             print(self.epoch_data)
         # Subset here for easier debugging
         # epoch_data = epoch_data.sel(participant=["0021", "0022", "0023", "0024"])
-        self.epoch_data = self.epoch_data.sel(participant=["0001"])
+        # self.epoch_data = self.epoch_data.sel(participant=["0001"])
 
         return
 
