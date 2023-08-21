@@ -2,6 +2,10 @@ import tensorflow as tf
 import numpy as np
 
 
+class NewSAT1DataGenerator(tf.keras.utils.Sequence):
+    pass
+
+
 class SAT1DataGenerator(tf.keras.utils.Sequence):
     def __init__(self, data, labels, batch_size=16):
         # Shuffle data and labels

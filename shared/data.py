@@ -19,7 +19,7 @@ def add_stage_dimension(data_path):
 
     segments = []
 
-    print('Finding stage changes')
+    print("Finding stage changes")
     # Find every position where a stage change occurs
     changes = np.array(np.where(label_data[:, :, :-1] != label_data[:, :, 1:]))
     changes[2] += 1
@@ -50,7 +50,7 @@ def add_stage_dimension(data_path):
             last_change = change
 
     # Recombine into new segments dimension
-    print('Combining segments')
+    print("Combining segments")
     combined_segments = xr.combine_by_coords(segments)
     return combined_segments
 
