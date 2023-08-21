@@ -1,12 +1,58 @@
 import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
+from pathlib import Path
 
 SAT1_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
 SAT1_STAGES_SPEED = ["encoding", "decision", "response"]
 SAT2_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
 SAT2_STAGES_SPEED = ["encoding", "decision", "response"]
 AR_STAGES = ["encoding", "familiarity", "memory", "decision", "response"]
+
+
+def add_stage_dimension(data_path):
+    data_path = Path(data_path)
+
+    stage_data = xr.load_dataset(data_path)
+    # Must convert to numpy since np.where does not work in this case on XArray
+    label_data = stage_data.labels.to_numpy()
+
+    segments = []
+
+    print('Finding stage changes')
+    # Find every position where a stage change occurs
+    changes = np.array(np.where(label_data[:, :, :-1] != label_data[:, :, 1:]))
+    changes[2] += 1
+    last_change = None
+
+    for participant, epoch, change in zip(changes[0], changes[1], changes[2]):
+        if last_change is None:
+            last_change = change
+        else:
+            # Dont take segment ending at one epoch and beginning in the next
+            if last_change < change:
+                segment = stage_data.isel(
+                    participant=[participant],  # List to retain dimension in segment
+                    epochs=[epoch],  # List to retain dimension in segment
+                    samples=slice(last_change, change),
+                )
+                # Ignore start/end segments containing only empty strings
+                if np.any(segment.labels != ""):
+                    label = segment.labels[0, 0, 0].item()
+                    segment = (
+                        segment["data"]
+                        .expand_dims({"labels": 1}, axis=2)
+                        .assign_coords(labels=[label])
+                    )
+                    # Reset samples coordinate so it starts at zero
+                    segment["samples"] = np.arange(0, len(segment["samples"]))
+                    segments.append(segment)
+            last_change = change
+
+    # Recombine into new segments dimension
+    print('Combining segments')
+    combined_segments = xr.combine_by_coords(segments)
+    return combined_segments
 
 
 class StageFinder:
