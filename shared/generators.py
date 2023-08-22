@@ -12,7 +12,7 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         self.dataset = (self.dataset.data - np.min(self.dataset.data)) / (
             np.max(self.dataset.data) - np.min(self.dataset.data)
         )
-        
+
         self.n_participants = len(dataset.participant)
         self.n_epochs = len(dataset.epochs)
         self.n_labels = len(dataset.labels)
@@ -54,7 +54,9 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
             dim1_indices, dim2_indices, dim3_indices, slice(None), slice(None)
         ]
         batch_labels = batch_data.labels  # Labels as strings
-        batch_labels = np.array([self.cat_labels.index(label) for label in batch_labels])
+        batch_labels = np.array(
+            [self.cat_labels.index(label) for label in batch_labels]
+        )
 
         # Returns data: (batch_size, channels, max sample length) and labels: (batch_size, )
         # return batch_data.data[0, 0, :, :, :], batch_labels
