@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss",
+    monitor="val_accuracy",
     min_delta=0,
     patience=2,
     verbose=0,

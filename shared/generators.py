@@ -6,7 +6,7 @@ import xbatcher
 class NewSAT1DataGenerator(tf.keras.utils.Sequence):
     def __init__(self, dataset, batch_size=16):
         # Alphabetical ordering of labels used for categorization of labels
-        self.cat_labels = list(dataset.labels)
+        self.cat_labels = [label.item() for label in dataset.labels]
 
         self.batch_size = batch_size
         # Preprocess data
@@ -26,8 +26,14 @@ class NewSAT1DataGenerator(tf.keras.utils.Sequence):
 
         # Reshuffle
         np.random.seed(42)
-        perm = np.random.permutation(len(dataset.index))
+        n = len(dataset.index)
+        perm = np.random.permutation(n)
         dataset = dataset[perm]
+
+        # Get list of truth values, removing last to fit amount of batches
+        self.full_labels = dataset.labels
+        n_used = (n // batch_size) * batch_size
+        self.full_labels = self.full_labels[:n_used]
 
         # Create xbatcher generator
         self.generator = xbatcher.BatchGenerator(
