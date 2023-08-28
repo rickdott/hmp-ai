@@ -28,10 +28,10 @@ def SAT1Start(n_channels, n_samples, n_classes):
     input = Input(shape=(n_channels, n_samples, 1))
     x = Conv2D(filters=16, kernel_size=(1, 5), activation="relu")(input)
     # x = AvgPool2D((1, 2))(x)
-    x = Dropout(0.25)(x)
+    # x = Dropout(0.25)(x)
     x = Conv2D(filters=32, kernel_size=(5, 5), activation="relu")(x)
     # x = AvgPool2D((1, 2))(x)
-    x = Dropout(0.25)(x)
+    # x = Dropout(0.25)(x)
     x = Conv2D(filters=64, kernel_size=(5, 1), activation="relu")(x)
     x = BatchNormalization(epsilon=1e-05, momentum=0.9)(x)
     x = AvgPool2D(pool_size=(1, 5), strides=(1, 2))(x)
@@ -44,7 +44,7 @@ def SAT1Start(n_channels, n_samples, n_classes):
     return model
 
 
-def SAT1Test(n_channels, n_samples, n_classes):
+def SAT1Base(n_channels, n_samples, n_classes):
     input = Input(shape=(n_channels, n_samples, 1))
     x = Conv2D(filters=64, kernel_size=(1, 5), activation="relu")(input)
     # x = BatchNormalization(epsilon=1e-05, momentum=0.9)(x)
