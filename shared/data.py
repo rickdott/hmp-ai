@@ -10,7 +10,16 @@ SAT2_STAGES_SPEED = ["encoding", "decision", "response"]
 AR_STAGES = ["encoding", "familiarity", "memory", "decision", "response"]
 
 
-def add_stage_dimension(data_path):
+def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
+    """Adds stage dimension to xr.Dataset without a stage dimension.
+
+    Args:
+        data_path (str | Path): Path where data can be found, should be in NetCDF (.nc) format.
+        Output of estimation notebook is used for this.
+
+    Returns:
+        xr.Dataset: Dataset with added stage dimension.
+    """
     data_path = Path(data_path)
 
     stage_data = xr.load_dataset(data_path)
@@ -104,6 +113,8 @@ class StageFinder:
         return
 
     def add_stages_to_dataset(self):
+        # Fits HMP model on dataset and returns a labelled dataset
+
         # Transform data into principal component (PC) space
         # will ask in a pop-up how many components to keep
         # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point

@@ -1,14 +1,29 @@
 from shared.generators import NewSAT1DataGenerator
 import random
 import datetime
-from shared.utilities import get_summary_str, earlyStopping_cb, LoggingTensorBoard
+from shared.utilities import get_summary_str, earlyStopping_cb
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import classification_report
+import xarray as xr
+from keras.callbacks import TensorBoard
 
 
-def split_data_on_participants(data, train_percentage=60):
+def split_data_on_participants(
+    data: xr.Dataset, train_percentage: int = 60
+) -> (xr.Dataset, xr.Dataset, xr.Dataset):
+    """Splits dataset into three distinct set on participant, ensuring
+    that no participant occurs in more than one sets.
+    Splits remainder of train percentage into two sets.
+
+    Args:
+        data (xr.Dataset): Dataset to be split.
+        train_percentage (int): Percentage of participants used in the training set. Defaults to 60.
+
+    Returns:
+        (xr.Dataset, xr.Dataset, xr.Dataset): tuple of train, test, val datasets.
+    """
     random.seed(42)
     participants = data.participant.values.tolist()
     # In case of SAT1 experiment, 25 participants are used
@@ -34,8 +49,31 @@ def split_data_on_participants(data, train_percentage=60):
 
 
 def train_and_evaluate(
-    model, train, val, test, batch_size=16, epochs=20, workers=8, additional_info=dict()
-):
+    model: tf.keras.Model,
+    train: xr.Dataset,
+    val: xr.Dataset,
+    test: xr.Dataset,
+    batch_size: int = 16,
+    epochs: int = 20,
+    workers: int = 8,
+    additional_info: dict = None,
+) -> tf.keras.callbacks.History:
+    """Trains and evaluates a given model on the given datasets.
+    After training the model is tested on the test set, results are logged to Tensorboard.
+
+    Args:
+        model (tf.keras.Model): Model to be used in training.
+        train (xr.Dataset): Training dataset.
+        val (xr.Dataset): Valuation dataset.
+        test (xr.Dataset): Testing dataset.
+        batch_size (int, optional): Batch size used when training the model. Defaults to 16.
+        epochs (int, optional): How many epochs the model should train for. Defaults to 20.
+        workers (int, optional): How many workers (CPU threads) should be used in training. Defaults to 8.
+        additional_info (dict, optional): Additional info to be logged to Tensorboard. Defaults to None.
+
+    Returns:
+        tf.keras.History: History of model fitting, detailing loss/accuracy.
+    """
     # Create generators
     train_gen = NewSAT1DataGenerator(train, batch_size)
     val_gen = NewSAT1DataGenerator(val, batch_size)
@@ -45,7 +83,8 @@ def train_and_evaluate(
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     path = Path("logs/") / run_id
     to_write = {"Model summary": get_summary_str(model)}
-    to_write.update(additional_info)
+    if additional_info:
+        to_write.update(additional_info)
 
     fit = model.fit(
         train_gen,
@@ -60,10 +99,29 @@ def train_and_evaluate(
     writer = tf.summary.create_file_writer(str(path / "train"))
     predicted_classes = np.argmax(model.predict(test_gen), axis=1)
     predicted_classes = [test_gen.cat_labels[idx] for idx in list(predicted_classes)]
-    test_results = classification_report(test_gen.full_labels, predicted_classes).splitlines()
+    test_results = classification_report(
+        test_gen.full_labels, predicted_classes
+    ).splitlines()
     test_results = "    " + "\n    ".join(test_results)
 
     with writer.as_default():
-        tf.summary.text('Test results', test_results, step=0)
+        tf.summary.text("Test results", test_results, step=0)
 
     return fit
+
+
+# Credits:
+# https://stackoverflow.com/questions/52453305/how-do-i-add-text-summary-to-tensorboard-on-keras
+class LoggingTensorBoard(TensorBoard):
+    def __init__(self, dict_to_log=None, **kwargs):
+        super().__init__(**kwargs)
+        self.dict_to_log = dict_to_log
+
+    def on_train_begin(self, logs=None):
+        super().on_train_begin(logs=logs)
+
+        writer = self._train_writer
+
+        with writer.as_default():
+            for key, value in self.dict_to_log.items():
+                tf.summary.text(key, tf.convert_to_tensor(value), step=0)
