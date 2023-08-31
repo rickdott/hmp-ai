@@ -1,4 +1,4 @@
-from shared.generators import NewSAT1DataGenerator
+from shared.generators import SAT1DataGenerator
 import random
 import datetime
 from shared.utilities import get_summary_str, earlyStopping_cb
@@ -75,9 +75,9 @@ def train_and_evaluate(
         tf.keras.History: History of model fitting, detailing loss/accuracy.
     """
     # Create generators
-    train_gen = NewSAT1DataGenerator(train, batch_size)
-    val_gen = NewSAT1DataGenerator(val, batch_size)
-    test_gen = NewSAT1DataGenerator(test, batch_size)
+    train_gen = SAT1DataGenerator(train, batch_size)
+    val_gen = SAT1DataGenerator(val, batch_size)
+    test_gen = SAT1DataGenerator(test, batch_size)
 
     # Set up configuration logging
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
