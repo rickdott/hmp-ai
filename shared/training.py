@@ -8,14 +8,19 @@ import tensorflow as tf
 from sklearn.metrics import classification_report
 import xarray as xr
 from keras.callbacks import TensorBoard
+from typing import Callable
+from shared.normalization import norm_0_to_1
 
 
 def split_data_on_participants(
-    data: xr.Dataset, train_percentage: int = 60
+    data: xr.Dataset,
+    train_percentage: int = 60,
+    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
 ) -> (xr.Dataset, xr.Dataset, xr.Dataset):
     """Splits dataset into three distinct set on participant, ensuring
     that no participant occurs in more than one sets.
     Splits remainder of train percentage into two sets.
+    Also normalizes data based on training set parameters to prevent information leakage.
 
     Args:
         data (xr.Dataset): Dataset to be split.
@@ -45,6 +50,14 @@ def split_data_on_participants(
     val_data = data.sel(participant=val_participants)
     test_data = data.sel(participant=test_participants)
 
+    # Normalize data
+    train_min = train_data.min(skipna=True).data.item()
+    train_max = train_data.max(skipna=True).data.item()
+
+    train_data = normalization_fn(train_data, train_min, train_max)
+    val_data = normalization_fn(val_data, train_min, train_max)
+    test_data = normalization_fn(test_data, train_min, train_max)
+
     return train_data, val_data, test_data
 
 
@@ -56,6 +69,7 @@ def train_and_evaluate(
     batch_size: int = 16,
     epochs: int = 20,
     workers: int = 8,
+    logs_path: Path = Path("logs/"),
     additional_info: dict = None,
 ) -> tf.keras.callbacks.History:
     """Trains and evaluates a given model on the given datasets.
@@ -81,7 +95,7 @@ def train_and_evaluate(
 
     # Set up configuration logging
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = Path("logs/") / run_id
+    path = logs_path / run_id
     to_write = {"Model summary": get_summary_str(model)}
     if additional_info:
         to_write.update(additional_info)

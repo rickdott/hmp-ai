@@ -1,10 +1,15 @@
 import tensorflow as tf
 import numpy as np
 import xbatcher
+import xarray as xr
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):
-    def __init__(self, dataset, batch_size=16):
+    def __init__(
+        self,
+        dataset: xr.Dataset,
+        batch_size=16
+    ):
         # Alphabetical ordering of labels used for categorization of labels
         self.cat_labels = [label.item() for label in dataset.labels]
 
@@ -19,16 +24,11 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         dataset = dataset.dropna("index", how="all")
         dataset = dataset.fillna(0)
 
-        # Normalize to [0,1] TODO: Investigate if necessary or if [-1, 1] is better
-        dataset = (dataset.data - np.min(dataset.data)) / (
-            np.max(dataset.data) - np.min(dataset.data)
-        )
-
         # Reshuffle
         np.random.seed(42)
         n = len(dataset.index)
         perm = np.random.permutation(n)
-        dataset = dataset[perm]
+        dataset['data'] = dataset['data'][perm]
 
         # Get list of truth values, removing last to fit amount of batches
         self.full_labels = dataset.labels
