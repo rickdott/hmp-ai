@@ -100,12 +100,13 @@ def train_and_evaluate(
     if additional_info:
         to_write.update(additional_info)
 
+    use_multiprocessing = workers != 1
     fit = model.fit(
         train_gen,
         epochs=epochs,
         callbacks=[earlyStopping_cb, LoggingTensorBoard(to_write, log_dir=path)],
         validation_data=val_gen,
-        use_multiprocessing=True,
+        use_multiprocessing=use_multiprocessing,
         workers=workers,
     )
 
