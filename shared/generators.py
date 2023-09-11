@@ -22,7 +22,7 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         # Drop all indices for which all channels & samples are NaN, this happens in cases of
         # measuring error or label does not occur under condition in dataset
         dataset = dataset.dropna("index", how="all")
-        dataset = dataset.fillna(0)
+        dataset = dataset.fillna(0.5)
 
         # Reshuffle
         np.random.seed(42)

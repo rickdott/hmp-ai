@@ -75,6 +75,7 @@ class StageFinder:
         fit_function="fit",
         fit_args=dict(),
         verbose=False,
+        n_comp=4,
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -102,6 +103,10 @@ class StageFinder:
         self.cpus = cpus
         self.fit_function = fit_function
         self.fit_args = fit_args
+        self.n_comp = n_comp
+        self.models = []
+        self.fits = []
+        self.hmp_data = []
 
         if self.verbose:
             print("Epoch data used:")
@@ -112,19 +117,18 @@ class StageFinder:
 
         return
 
-    def add_stages_to_dataset(self):
-        # Fits HMP model on dataset and returns a labelled dataset
+    def fit_model(self):
+        # Fits HMP model on dataset
 
         # Transform data into principal component (PC) space
         # will ask in a pop-up how many components to keep
         # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
         print("Transforming epoched data to principal component (PC) space")
-        hmp_data = hmp.utils.transform_data(self.epoch_data)
+        hmp_data = hmp.utils.transform_data(self.epoch_data, n_comp=4)
 
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
         if len(self.conditions) > 0:
-            model_labels = None
             for condition in self.conditions:
                 condition_subset = hmp.utils.condition_selection(
                     hmp_data,
@@ -139,23 +143,29 @@ class StageFinder:
 
                 # Fit
                 print(f"Fitting HMP model for {condition} condition")
-                model = self.__fit_model__(condition_subset)
+                fit = self.__fit_model__(condition_subset)
 
-                # Label
-                print(f"Labeling dataset for {condition} condition")
-                new_labels = self.__label_model__(model, condition)
-                if model_labels is None:
-                    model_labels = new_labels
-                else:
-                    # Merge new labels with old labels, will always be disjoint sets since an epoch can only be one condition
-                    model_labels = np.where(
-                        model_labels == "", new_labels, model_labels
-                    )
+                self.fits.append(fit)
+                self.hmp_data.append(condition_subset)
+
         else:
             print("Fitting HMP model")
-            model = self.__fit_model__(hmp_data)
-            print("Labeling dataset")
-            model_labels = self.__label_model__(model)
+            fit = self.__fit_model__(hmp_data)
+            self.fits.append(fit)
+            self.hmp_data.append(hmp_data)
+            self.conditions.append('No condition')
+
+    def label_model(self):
+        model_labels = None
+        for fit, condition in zip(self.fits, self.conditions):
+            # Label
+            print(f"Labeling dataset for {condition} condition")
+            new_labels = self.__label_model__(fit, condition)
+            if model_labels is None:
+                model_labels = new_labels
+            else:
+                # Merge new labels with old labels, will always be disjoint sets since an epoch can only be one condition
+                model_labels = np.where(model_labels == "", new_labels, model_labels)
 
         # Add label information to stage_data: ['', '', 'stage1', 'stage1', 'stage2' ...]
         stage_data = self.epoch_data.assign(
@@ -163,11 +173,30 @@ class StageFinder:
         )
         return stage_data
 
+    def visualize_model(self, positions):
+        for condition in zip(
+            self.fits,
+            self.models,
+            self.hmp_data,
+            self.conditions,
+        ):
+            hmp.visu.plot_topo_timecourse(
+                self.epoch_data,
+                condition[0],
+                positions,
+                condition[1],
+                times_to_display=np.mean(condition[1].ends - condition[1].starts),
+                max_time=100,
+                figsize=(10, 1),
+                ylabels={"Condition": [condition[3]]},
+            )
+
     def __fit_model__(self, hmp_data):
         # Initialize model
         model = hmp.models.hmp(
             hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
         )
+        self.models.append(model)
 
         # Using the provided fit_function name, attempt to fit the model
         if hasattr(model, self.fit_function):
