@@ -3,11 +3,30 @@ import hsmm_mvpy as hmp
 import numpy as np
 from pathlib import Path
 
-SAT1_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
-SAT1_STAGES_SPEED = ["encoding", "decision", "response"]
-SAT2_STAGES_ACCURACY = ["encoding", "decision", "confirmation", "response"]
-SAT2_STAGES_SPEED = ["encoding", "decision", "response"]
-AR_STAGES = ["encoding", "familiarity", "memory", "decision", "response"]
+SAT1_STAGES_ACCURACY = [
+    "pre-attentive",
+    "encoding",
+    "decision",
+    "confirmation",
+    "response",
+]
+SAT1_STAGES_SPEED = ["pre-attentive", "encoding", "decision", "response"]
+SAT2_STAGES_ACCURACY = [
+    "pre-attentive",
+    "encoding",
+    "decision",
+    "confirmation",
+    "response",
+]
+SAT2_STAGES_SPEED = ["pre-attentive", "encoding", "decision", "response"]
+AR_STAGES = [
+    "pre-attentive",
+    "encoding",
+    "familiarity",
+    "memory",
+    "decision",
+    "response",
+]
 
 
 def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
@@ -33,6 +52,7 @@ def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
     changes = np.array(np.where(label_data[:, :, :-1] != label_data[:, :, 1:]))
     changes[2] += 1
     last_change = None
+    last_epoch = None
 
     for participant, epoch, change in zip(changes[0], changes[1], changes[2]):
         if last_change is None:
@@ -57,6 +77,25 @@ def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
                     segment["samples"] = np.arange(0, len(segment["samples"]))
                     segments.append(segment)
             last_change = change
+        if last_epoch != epoch:
+            segment = stage_data.isel(
+                participant=[participant],  # List to retain dimension in segment
+                epochs=[epoch],  # List to retain dimension in segment
+                samples=slice(0, change),
+            )
+            # Ignore start/end segments containing only empty strings
+            if np.any(segment.labels != ""):
+                label = segment.labels[0, 0, 0].item()
+                segment = (
+                    segment["data"]
+                    .expand_dims({"labels": 1}, axis=2)
+                    .assign_coords(labels=[label])
+                )
+                # Reset samples coordinate so it starts at zero
+                segment["samples"] = np.arange(0, len(segment["samples"]))
+                segments.append(segment)
+        # print(epoch)
+        last_epoch = epoch
 
     # Recombine into new segments dimension
     print("Combining segments")
@@ -138,8 +177,9 @@ class StageFinder:
                 )
 
                 # Determine amount of expected events from number of supplied labels
+                # Subtract 1 since pre-attentive stage does not have a peak
                 if self.fit_function == "fit_single":
-                    self.fit_args["n_events"] = len(self.labels[condition])
+                    self.fit_args["n_events"] = len(self.labels[condition]) - 1
 
                 # Fit
                 print(f"Fitting HMP model for {condition} condition")
@@ -153,7 +193,7 @@ class StageFinder:
             fit = self.__fit_model__(hmp_data)
             self.fits.append(fit)
             self.hmp_data.append(hmp_data)
-            self.conditions.append('No condition')
+            self.conditions.append("No condition")
 
     def label_model(self):
         model_labels = None
@@ -222,7 +262,7 @@ class StageFinder:
         n_events = len(model.event)
         labels = self.labels if condition is None else self.labels[condition]
 
-        if len(labels) != n_events:
+        if len(labels) - 1 != n_events:
             raise ValueError(
                 "Amount of labels is not equal to amount of events, adjust labels parameter"
             )
@@ -278,6 +318,9 @@ class StageFinder:
 
             # Set stage label for each stage
             for j, location in enumerate(locations):
+                # Record labels for pre-attentive stage (from stimulus onset to first peak)
+                if j == 0:
+                    labels_array[participant, epoch, slice(0, location)] = labels[0]
                 # Slice from known event location n to known event location n + 1
                 # unless it is the last event, then slice from known event location n to reaction time
                 if j != n_events - 1:
@@ -296,6 +339,6 @@ class StageFinder:
                     print(
                         f"Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
                     )
-                labels_array[participant, epoch, samples_slice] = labels[j]
+                labels_array[participant, epoch, samples_slice] = labels[j + 1]
 
         return np.copy(labels_array)

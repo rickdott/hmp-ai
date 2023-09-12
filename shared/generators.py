@@ -5,11 +5,7 @@ import xarray as xr
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):
-    def __init__(
-        self,
-        dataset: xr.Dataset,
-        batch_size=16
-    ):
+    def __init__(self, dataset: xr.Dataset, batch_size=16):
         # Alphabetical ordering of labels used for categorization of labels
         self.cat_labels = [label.item() for label in dataset.labels]
 
@@ -22,13 +18,13 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         # Drop all indices for which all channels & samples are NaN, this happens in cases of
         # measuring error or label does not occur under condition in dataset
         dataset = dataset.dropna("index", how="all")
-        dataset = dataset.fillna(0.5)
+        dataset = dataset.fillna(1)
 
         # Reshuffle
         np.random.seed(42)
         n = len(dataset.index)
         perm = np.random.permutation(n)
-        dataset['data'] = dataset['data'][perm]
+        dataset = dataset.isel(index=perm)
 
         # Get list of truth values, removing last to fit amount of batches
         self.full_labels = dataset.labels
