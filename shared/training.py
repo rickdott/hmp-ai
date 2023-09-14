@@ -11,6 +11,15 @@ from keras.callbacks import TensorBoard
 from typing import Callable
 from shared.normalization import norm_0_to_1
 
+def k_fold_cross_validate(data: xr.Dataset,
+                          k: int,
+                          normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1):
+    # Make sure #participants is divisible by k
+    # Divide data into k folds
+    # For each fold, train model (log?)
+    # Gather accuracy/F1 from sklearn classification_report
+    # Return {folds: scores{metric: value}} dictionary?
+    pass
 
 def split_data_on_participants(
     data: xr.Dataset,
