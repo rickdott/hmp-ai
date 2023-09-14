@@ -8,6 +8,7 @@ from tensorflow.keras.layers import (
     AvgPool2D,
     BatchNormalization,
     MaxPooling2D,
+    Masking
 )
 from tensorflow.keras.models import Model
 
@@ -46,7 +47,8 @@ def SAT1Start(n_channels, n_samples, n_classes):
 
 def SAT1Base(n_channels, n_samples, n_classes):
     input = Input(shape=(n_channels, n_samples, 1))
-    x = Conv2D(filters=64, kernel_size=(1, 5), activation="relu")(input)
+    x = Masking(999)(input)
+    x = Conv2D(filters=64, kernel_size=(1, 5), activation="relu")(x)
     # x = BatchNormalization(epsilon=1e-05, momentum=0.9)(x)
     # x = Dropout(0.25)(x)
     x = MaxPooling2D(pool_size=(1, 2))(x)
