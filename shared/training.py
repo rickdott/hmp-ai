@@ -1,38 +1,15 @@
 from shared.generators import SAT1DataGenerator
 import random
 import datetime
-from shared.utilities import get_summary_str, earlyStopping_cb
+from shared.utilities import get_summary_str, earlyStopping_cb, LoggingTensorBoard
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import classification_report
 import xarray as xr
-from keras.callbacks import TensorBoard
 from typing import Callable
 from shared.normalization import norm_0_to_1
-
-
-def k_fold_cross_validate(
-    data: xr.Dataset,
-    k: int,
-    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
-):
-    # Make sure #participants is divisible by k
-    n_participants = len(data.participant)
-    if n_participants % k != 0:
-        raise ValueError(
-            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
-        )
-    
-    # Divide data into k folds
-    perm = np.random.permutation(n_participants)
-    folds = np.array_split(perm, k)
-    print(folds)
-    # Translate folds to selected participant ID's, from data.participants
-    # For each fold, train model (log?)
-    # Gather accuracy/F1 from sklearn classification_report
-    # Return {folds: scores{metric: value}} dictionary?
-    pass
+from copy import deepcopy
 
 
 def split_data_on_participants(
@@ -148,18 +125,51 @@ def train_and_evaluate(
     return fit
 
 
-# Credits:
-# https://stackoverflow.com/questions/52453305/how-do-i-add-text-summary-to-tensorboard-on-keras
-class LoggingTensorBoard(TensorBoard):
-    def __init__(self, dict_to_log=None, **kwargs):
-        super().__init__(**kwargs)
-        self.dict_to_log = dict_to_log
+def k_fold_cross_validate(
+    data: xr.Dataset,
+    k: int,
+    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
+):
+    folds = get_folds(data, k)
+    for i in range(len(folds)):
+        # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
+        train_folds = deepcopy(folds)
+        test_fold = train_folds.pop(i)
+        train_fold = np.concatenate(train_folds, axis=0)
 
-    def on_train_begin(self, logs=None):
-        super().on_train_begin(logs=logs)
+        train_data = data.sel(participant=train_fold)
+        test_data = data.sel(participant=test_fold)
 
-        writer = self._train_writer
+        # Normalize data
+        train_min = train_data.min(skipna=True).data.item()
+        train_max = train_data.max(skipna=True).data.item()
 
-        with writer.as_default():
-            for key, value in self.dict_to_log.items():
-                tf.summary.text(key, tf.convert_to_tensor(value), step=0)
+        train_data = normalization_fn(train_data, train_min, train_max)
+        test_data = normalization_fn(test_data, train_min, train_max)
+
+        # TODO: Incorporate training loop
+
+    # Return results?
+    pass
+
+
+def get_folds(
+    data: xr.Dataset,
+    k: int,
+):
+    # Make sure #participants is divisible by k
+    n_participants = len(data.participant)
+    if n_participants % k != 0:
+        raise ValueError(
+            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
+        )
+
+    # Divide data into k folds
+    participants = data.participant.values
+    np.random.shuffle(participants)
+    folds = np.array_split(participants, k)
+    return folds
+    # Translate folds to selected participant ID's, from data.participants
+    # For each fold, train model (log?)
+    # Gather accuracy/F1 from sklearn classification_report
+    # Return {folds: scores{metric: value}} dictionary?

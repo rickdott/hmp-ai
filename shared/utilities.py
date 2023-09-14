@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+from tensorboard import TensorBoard
 
 
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
@@ -34,3 +35,20 @@ def get_summary_str(model: tf.keras.Model) -> str:
     lines = []
     model.summary(print_fn=lines.append)
     return "    " + "\n    ".join(lines)
+
+
+# Credits:
+# https://stackoverflow.com/questions/52453305/how-do-i-add-text-summary-to-tensorboard-on-keras
+class LoggingTensorBoard(TensorBoard):
+    def __init__(self, dict_to_log=None, **kwargs):
+        super().__init__(**kwargs)
+        self.dict_to_log = dict_to_log
+
+    def on_train_begin(self, logs=None):
+        super().on_train_begin(logs=logs)
+
+        writer = self._train_writer
+
+        with writer.as_default():
+            for key, value in self.dict_to_log.items():
+                tf.summary.text(key, tf.convert_to_tensor(value), step=0)
