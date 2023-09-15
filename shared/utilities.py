@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from tensorboard.program import TensorBoard
+from keras.callbacks import TensorBoard
 
 
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(

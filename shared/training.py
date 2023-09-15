@@ -125,7 +125,7 @@ def train_and_evaluate(
     # Test model and write test summary
     test_args = {}
     if write_log:
-        test_args["logs_path":path]
+        test_args["logs_path"] = path
     test_results = test_model(model, test_gen, log_report=write_log, **test_args)
 
     return fit, test_results
