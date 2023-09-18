@@ -71,6 +71,7 @@ def train_and_evaluate(
     workers: int = 8,
     logs_path: Path = None,
     additional_info: dict = None,
+    additional_name: str = None,
 ) -> (tf.keras.callbacks.History, dict):
     """Trains and evaluates a given model on the given datasets.
     After training the model is tested on the test set, results are logged to Tensorboard.
@@ -83,8 +84,9 @@ def train_and_evaluate(
         batch_size (int, optional): Batch size used when training the model. Defaults to 16.
         epochs (int, optional): How many epochs the model should train for. Defaults to 20.
         workers (int, optional): How many workers (CPU threads) should be used in training. Defaults to 8.
-        logs_path (Path, optional): If given, log info to TensorBoard at given Path, if excluded, return testing result
+        logs_path (Path, optional): If given, log info to TensorBoard at given Path, if excluded, return testing result.
         additional_info (dict, optional): Additional info to be logged to Tensorboard. Defaults to None.
+        additional_name (str, optional): Additional text to be added to the run name. Defaults to None.
 
     Returns:
         tf.keras.History: History of model fitting, detailing loss/accuracy.
@@ -106,7 +108,10 @@ def train_and_evaluate(
     write_log = logs_path is not None
     if write_log:
         run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        if additional_name is not None:
+            run_id = run_id + '_' + additional_name
         path = logs_path / run_id
+
         to_write = {"Model summary": get_summary_str(model)}
         if additional_info:
             to_write.update(additional_info)
