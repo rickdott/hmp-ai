@@ -14,6 +14,21 @@ earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
     start_from_epoch=3,
 )
 
+# Channel configuration for topological layout, "NA" means 'not available' and should not be used in training
+CHANNELS_2D = np.array(
+    [
+        ["NA", "Fp1", "NA", "Fp2", "NA"],
+        ["NA", "NA", "AFz", "NA", "NA"],
+        ["F7", "F3", "Fz", "F4", "F8"],
+        ["FC5", "FC1", "FCz", "FC2", "FC6"],
+        ["T7", "C3", "Cz", "C4", "T8"],
+        ["CP5", "CP1", "CPz", "CP2", "CP6"],
+        ["P7", "P3", "Pz", "P4", "P8"],
+        ["NA", "O1", "NA", "O2", "NA"],
+    ],
+    dtype=str,
+)
+
 
 def pad_to_max_sample_length(array: np.array, max_sample_length: int) -> np.array:
     """Pads ndarray to given length, in this case
