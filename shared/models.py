@@ -26,6 +26,8 @@ from tensorflow.keras.layers import SpatialDropout2D
 from tensorflow.keras.constraints import max_norm
 from tensorflow.keras import backend as K
 
+from shared.utilities import MASKING_VALUE
+
 
 def SAT1Start(n_channels, n_samples, n_classes):
     input = Input(shape=(n_channels, n_samples, 1))
@@ -49,7 +51,7 @@ def SAT1Start(n_channels, n_samples, n_classes):
 
 def SAT1Base(n_channels, n_samples, n_classes):
     input = Input(shape=(n_channels, n_samples, 1))
-    x = Masking(999)(input)
+    x = Masking(MASKING_VALUE)(input)
     x = Conv2D(filters=64, kernel_size=(1, 5), activation="relu")(x)
     # x = BatchNormalization(epsilon=1e-05, momentum=0.9)(x)
     # x = Dropout(0.25)(x)
@@ -74,16 +76,18 @@ def SAT1Base(n_channels, n_samples, n_classes):
 
 def SAT1Topological(n_x, n_y, n_samples, n_classes):
     input = Input(shape=(n_x, n_y, n_samples, 1))
-    x = Masking(999)(input)
+    x = Masking(MASKING_VALUE)(input)
     x = Conv3D(filters=64, kernel_size=(5, 3, 5), activation="relu")(x)
+    x = Dropout(0.25)(x)
     x = MaxPooling3D(pool_size=(1, 1, 2))(x)
     x = Conv3D(filters=128, kernel_size=(3, 3, 3), activation="relu")(x)
+    x = Dropout(0.25)(x)
     x = MaxPooling3D(pool_size=(1, 1, 2))(x)
     x = Conv3D(filters=256, kernel_size=(1, 1, 3), activation="relu")(x)
+    x = Dropout(0.25)(x)
     x = MaxPooling3D(pool_size=(1, 1, 2))(x)
     x = Flatten()(x)
     x = Dense(128, activation="relu")(x)
-    x = Dense(512, activation="relu")(x)
     x = Dropout(0.5)(x)
     x = Dense(n_classes, activation="softmax")(x)
 

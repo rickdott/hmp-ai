@@ -29,6 +29,9 @@ CHANNELS_2D = np.array(
     dtype=str,
 )
 
+# Value that means data should not be used in training
+MASKING_VALUE = 999
+
 
 def pad_to_max_sample_length(array: np.array, max_sample_length: int) -> np.array:
     """Pads ndarray to given length, in this case

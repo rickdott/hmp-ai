@@ -2,11 +2,10 @@ import tensorflow as tf
 import numpy as np
 import xbatcher
 import xarray as xr
-from shared.utilities import CHANNELS_2D
+from shared.utilities import CHANNELS_2D, MASKING_VALUE
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):
-    NA_value = 999
     sparse_height = 8
     sparse_width = 5
 
@@ -23,7 +22,7 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         # Drop all indices for which all channels & samples are NaN, this happens in cases of
         # measuring error or label does not occur under condition in dataset
         dataset = dataset.dropna("index", how="all")
-        dataset = dataset.fillna(self.NA_value)
+        dataset = dataset.fillna(MASKING_VALUE)
 
         # Reshape into (index, 8, 5, samples) sparse topological array
         if shape_topological:
@@ -77,7 +76,7 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
                 self.sparse_width,
                 len(dataset.samples),
             ),
-            self.NA_value,
+            MASKING_VALUE,
             dtype=dataset.data.dtype,
         )
 
