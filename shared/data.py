@@ -29,12 +29,13 @@ AR_STAGES = [
 ]
 
 
-def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
+def add_stage_dimension(data_path: str | Path, merge_dataset: xr.Dataset = None) -> xr.Dataset:
     """Adds stage dimension to xr.Dataset without a stage dimension.
 
     Args:
         data_path (str | Path): Path where data can be found, should be in NetCDF (.nc) format.
         Output of estimation notebook is used for this.
+        merge_dataset (xr.Dataset, optional): XArray Dataset the stage information should be added to, labels will be used from data_path. If th
 
     Returns:
         xr.Dataset: Dataset with added stage dimension.
@@ -46,10 +47,15 @@ def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
     label_data = stage_data.labels.to_numpy()
 
     segments = []
+    merge = False
 
     print("Finding stage changes")
     # Find every position where a stage change occurs
     changes = np.array(np.where(label_data[:, :, :-1] != label_data[:, :, 1:]))
+    if merge_dataset is not None:
+        merge = True
+        # Extrapolate bump locations from ratio between sampling frequencies
+        ratio = round(merge_dataset.sfreq / stage_data.sfreq)
     changes[2] += 1
     last_change = None
     last_epoch = None
@@ -65,11 +71,17 @@ def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
                     epochs=[epoch],  # List to retain dimension in segment
                     samples=slice(last_change, change),
                 )
+                if merge:
+                    merge_segment = merge_dataset.isel(
+                        participant=[participant],
+                        epochs=[epoch],
+                        samples=slice(last_change * ratio, change * ratio)
+                    )
                 # Ignore start/end segments containing only empty strings
                 if np.any(segment.labels != ""):
                     label = segment.labels[0, 0, 0].item()
                     segment = (
-                        segment["data"]
+                        merge_segment["data"] if merge else segment["data"]
                         .expand_dims({"labels": 1}, axis=2)
                         .assign_coords(labels=[label])
                     )
@@ -83,11 +95,17 @@ def add_stage_dimension(data_path: str | Path) -> xr.Dataset:
                 epochs=[epoch],  # List to retain dimension in segment
                 samples=slice(0, change),
             )
+            if merge:
+                merge_segment = merge_dataset.isel(
+                    participant=[participant],  # List to retain dimension in segment
+                    epochs=[epoch],  # List to retain dimension in segment
+                    samples=slice(0, change * ratio),
+                )
             # Ignore start/end segments containing only empty strings
             if np.any(segment.labels != ""):
                 label = segment.labels[0, 0, 0].item()
                 segment = (
-                    segment["data"]
+                    merge_segment["data"] if merge else segment["data"]
                     .expand_dims({"labels": 1}, axis=2)
                     .assign_coords(labels=[label])
                 )
