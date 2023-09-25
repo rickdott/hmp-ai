@@ -29,7 +29,9 @@ AR_STAGES = [
 ]
 
 
-def add_stage_dimension(data_path: str | Path, merge_dataset: xr.Dataset = None) -> xr.Dataset:
+def add_stage_dimension(
+    data_path: str | Path, merge_dataset: xr.Dataset = None
+) -> xr.Dataset:
     """Adds stage dimension to xr.Dataset without a stage dimension.
 
     Args:
@@ -75,16 +77,16 @@ def add_stage_dimension(data_path: str | Path, merge_dataset: xr.Dataset = None)
                     merge_segment = merge_dataset.isel(
                         participant=[participant],
                         epochs=[epoch],
-                        samples=slice(last_change * ratio, change * ratio)
+                        samples=slice(last_change * ratio, change * ratio),
                     )
                 # Ignore start/end segments containing only empty strings
                 if np.any(segment.labels != ""):
                     label = segment.labels[0, 0, 0].item()
-                    segment = (
-                        merge_segment["data"] if merge else segment["data"]
-                        .expand_dims({"labels": 1}, axis=2)
-                        .assign_coords(labels=[label])
+                    segment = merge_segment["data"] if merge else segment["data"]
+                    segment = segment.expand_dims({"labels": 1}, axis=2).assign_coords(
+                        labels=[label]
                     )
+
                     # Reset samples coordinate so it starts at zero
                     segment["samples"] = np.arange(0, len(segment["samples"]))
                     segments.append(segment)
@@ -104,11 +106,11 @@ def add_stage_dimension(data_path: str | Path, merge_dataset: xr.Dataset = None)
             # Ignore start/end segments containing only empty strings
             if np.any(segment.labels != ""):
                 label = segment.labels[0, 0, 0].item()
-                segment = (
-                    merge_segment["data"] if merge else segment["data"]
-                    .expand_dims({"labels": 1}, axis=2)
-                    .assign_coords(labels=[label])
+                segment = merge_segment["data"] if merge else segment["data"]
+                segment = segment.expand_dims({"labels": 1}, axis=2).assign_coords(
+                    labels=[label]
                 )
+
                 # Reset samples coordinate so it starts at zero
                 segment["samples"] = np.arange(0, len(segment["samples"]))
                 segments.append(segment)

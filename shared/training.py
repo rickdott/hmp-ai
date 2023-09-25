@@ -95,6 +95,8 @@ def train_and_evaluate(
         dict: Result of test run, only given if logs_path is None
     """
     # Create generators
+    if gen_kwargs is None:
+        gen_kwargs = dict()
     train_gen = SAT1DataGenerator(train, batch_size, **gen_kwargs)
     if val is not None:
         val_gen = SAT1DataGenerator(val, batch_size, **gen_kwargs)
