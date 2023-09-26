@@ -6,8 +6,8 @@ from shared.utilities import CHANNELS_2D, MASKING_VALUE
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):
-    sparse_height = 8
-    sparse_width = 5
+    sparse_height = CHANNELS_2D.shape[0]
+    sparse_width = CHANNELS_2D.shape[1]
 
     def __init__(self, dataset: xr.Dataset, batch_size=16, shape_topological=False):
         # Alphabetical ordering of labels used for categorization of labels

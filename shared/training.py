@@ -191,6 +191,7 @@ def k_fold_cross_validate(
     epochs: int = 10,
     workers: int = 8,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
+    gen_kwargs: dict = None,
 ) -> list[dict]:
     """Validate model performance using K-fold Cross Validation.
 
@@ -202,6 +203,7 @@ def k_fold_cross_validate(
         epochs (int, optional): Amount of epochs to train for. Defaults to 10.
         workers (int, optional): Number of workers used in multiprocessing. Defaults to 8.
         normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
+        gen_kwargs (dict, optional): Optional arguments for the generator to pass on to train_and_evaluate.
 
     Returns:
         list[dict]: List of dictionaries detailing model performance per-class and averag.
@@ -236,6 +238,7 @@ def k_fold_cross_validate(
             batch_size=batch_size,
             epochs=epochs,
             workers=workers,
+            gen_kwargs=gen_kwargs,
         )
 
         # Add test results to list
@@ -269,7 +272,8 @@ def get_folds(
         )
 
     # Divide data into k folds
-    participants = data.participant.values
+    participants = data.participant.values.copy()
+    np.random.seed(42)
     np.random.shuffle(participants)
     folds = np.array_split(participants, k)
     return folds
