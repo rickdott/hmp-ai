@@ -3,6 +3,7 @@ import numpy as np
 import xbatcher
 import xarray as xr
 from shared.utilities import CHANNELS_2D, MASKING_VALUE
+from shared.data import SAT1_STAGES_ACCURACY
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):
@@ -17,8 +18,8 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
         # Preprocess data
         # Stack three dimensions into one MultiIndex dimension 'index'
         dataset = dataset.stack({"index": ["participant", "epochs", "labels"]})
-        # Reorder so that index is at the front
-        dataset = dataset.transpose("index", ...)
+        # Reorder so index is in front and samples/channels are switched
+        dataset = dataset.transpose("index", "samples", "channels")
         # Drop all indices for which all channels & samples are NaN, this happens in cases of
         # measuring error or label does not occur under condition in dataset
         dataset = dataset.dropna("index", how="all")
@@ -99,3 +100,54 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
             data=(("index", "x", "y", "samples"), reshaped_data)
         )
         return dataset
+
+
+class SequentialSAT1DataGenerator(tf.keras.utils.Sequence):
+    # For models that use the whole sequence instead of split stages, IN PROGRESS
+    def __init__(self, dataset: xr.Dataset, batch_size=16):
+        # Alphabetical ordering of labels used for categorization of labels
+        # should span all stages found in dataset
+        self.cat_labels = SAT1_STAGES_ACCURACY
+
+        self.batch_size = batch_size
+        # Preprocess data
+        # Stack three dimensions into one MultiIndex dimension 'index'
+        dataset = dataset.stack({"index": ["participant", "epochs"]})
+        # Reorder so that index is at the front
+        dataset = dataset.transpose("index", ...)
+        # Drop all indices for which all channels & samples are NaN, this happens in cases of
+        # measuring error or label does not occur under condition in dataset
+        dataset = dataset.dropna("index", how="all", subset=["data"])
+        dataset = dataset.fillna(MASKING_VALUE)
+
+        # Reshuffle
+        np.random.seed(42)
+        n = len(dataset.index)
+        perm = np.random.permutation(n)
+        dataset = dataset.isel(index=perm)
+
+        # Get list of truth values, removing last to fit amount of batches
+        self.full_labels = dataset.labels
+        n_used = (n // batch_size) * batch_size
+        self.full_labels = self.full_labels[:n_used]
+
+        input_dims = {
+            "channels": len(dataset.channels),
+            "samples": len(dataset.samples),
+        }
+        # Create xbatcher generator
+        self.generator = xbatcher.BatchGenerator(
+            dataset,
+            input_dims=input_dims,
+            batch_dims={"index": batch_size},
+        )
+
+        def __len__(self):
+            return self.generator.__len__()
+
+        def __getitem__(self, idx):
+            batch = self.generator.__getitem__(idx)
+            batch_labels = np.array(
+                [self.cat_labels.index(label) for label in batch.labels]
+            )
+            return (batch.data, batch_labels)
