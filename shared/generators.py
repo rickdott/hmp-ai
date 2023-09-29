@@ -114,7 +114,7 @@ class SequentialSAT1DataGenerator(tf.keras.utils.Sequence):
         # Stack three dimensions into one MultiIndex dimension 'index'
         dataset = dataset.stack({"index": ["participant", "epochs"]})
         # Reorder so that index is at the front
-        dataset = dataset.transpose("index", ...)
+        dataset = dataset.transpose("index", "samples", "channels")
         # Drop all indices for which all channels & samples are NaN, this happens in cases of
         # measuring error or label does not occur under condition in dataset
         dataset = dataset.dropna("index", how="all", subset=["data"])
@@ -142,12 +142,16 @@ class SequentialSAT1DataGenerator(tf.keras.utils.Sequence):
             batch_dims={"index": batch_size},
         )
 
-        def __len__(self):
-            return self.generator.__len__()
+    def __len__(self):
+        return self.generator.__len__()
 
-        def __getitem__(self, idx):
-            batch = self.generator.__getitem__(idx)
-            batch_labels = np.array(
-                [self.cat_labels.index(label) for label in batch.labels]
-            )
-            return (batch.data, batch_labels)
+    def __getitem__(self, idx):
+        batch = self.generator.__getitem__(idx)
+        # Shape (16, 199) instead of (16, )
+        batch_labels = np.array(
+            [
+                [self.cat_labels.index(label.item()) if label != "" else -1 for label in seq_labels]
+                for seq_labels in batch.labels
+            ]
+        )
+        return (batch.data, batch_labels)

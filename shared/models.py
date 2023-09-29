@@ -12,7 +12,10 @@ from tensorflow.keras.layers import (
     MaxPooling3D,
     Masking,
     LSTM,
-    Bidirectional
+    SimpleRNN,
+    GRU,
+    Bidirectional,
+    TimeDistributed,
 )
 from tensorflow.keras import Model
 from shared.utilities import MASKING_VALUE
@@ -39,7 +42,6 @@ def SAT1Base(n_channels, n_samples, n_classes):
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
-
     return model
 
 
@@ -65,7 +67,6 @@ def SAT1Topological(n_x, n_y, n_samples, n_classes):
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
-
     return model
 
 
@@ -92,7 +93,6 @@ def SAT1TopologicalConv(n_x, n_y, n_samples, n_classes):
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
-
     return model
 
 
@@ -125,21 +125,48 @@ def SAT1Deep(n_channels, n_samples, n_classes):
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
-
     return model
 
 
 def SAT1LSTM(n_channels, n_samples, n_classes):
     input = Input(shape=(n_samples, n_channels))
     x = Masking(MASKING_VALUE)(input)
-    x = LSTM(50, dropout=0.25, return_sequences=True)(x)
-    x = LSTM(100)(x)
+    x = LSTM(128, return_sequences=True)(x)
+    x = LSTM(128)(x)
     # x = Dropout(0.5)(x)
     # x = LSTM(10, return_sequences=True)(x)
     # x = LSTM(20)(x)
-    x = Dense(50)(x)
+    x = Dense(128)(x)
+    # x = Dropout(0.5)(x)
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
+    return model
 
+
+def SAT1GRU(n_channels, n_samples, n_classes):
+    input = Input(shape=(n_samples, n_channels))
+    x = Masking(MASKING_VALUE)(input)
+    x = GRU(128, return_sequences=True)(x)
+    x = GRU(128)(x)
+    # x = Dropout(0.5)(x)
+    # x = LSTM(10, return_sequences=True)(x)
+    # x = LSTM(20)(x)
+    x = Dense(128)(x)
+    # x = Dropout(0.5)(x)
+    x = Dense(n_classes, activation="softmax")(x)
+
+    model = Model(inputs=input, outputs=x)
+    return model
+
+
+def SAT1seq2seqGRU(n_channels, n_samples, n_classes):
+    input = Input(shape=(n_samples, n_channels))
+    x = Masking(MASKING_VALUE)(input)
+    x = GRU(128, return_sequences=True)(x)
+    x = GRU(128, return_sequences=True)(x)
+    # Predict for each timestep
+    x = TimeDistributed(Dense(n_classes, activation='softmax'))(x)
+
+    model = Model(inputs=input, outputs=x)
     return model

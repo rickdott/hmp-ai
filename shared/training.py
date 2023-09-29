@@ -72,6 +72,7 @@ def train_and_evaluate(
     logs_path: Path = None,
     additional_info: dict = None,
     additional_name: str = None,
+    generator: tf.keras.utils.Sequence = None,
     gen_kwargs: dict = None,
 ) -> (tf.keras.callbacks.History, dict):
     """Trains and evaluates a given model on the given datasets.
@@ -88,6 +89,7 @@ def train_and_evaluate(
         logs_path (Path, optional): If given, log info to TensorBoard at given Path, if excluded, return testing result.
         additional_info (dict, optional): Additional info to be logged to Tensorboard. Defaults to None.
         additional_name (str, optional): Additional text to be added to the run name. Defaults to None.
+        generator (tf.keras.utils.Sequence, optional): Which generator class to use. Defaults to SAT1DataGenerator
         gen_kwargs (dict, optional): Extra arguments for the generator. Defaults to None.
 
     Returns:
@@ -95,14 +97,16 @@ def train_and_evaluate(
         dict: Result of test run, only given if logs_path is None
     """
     # Create generators
+    if generator is None:
+        generator = SAT1DataGenerator
     if gen_kwargs is None:
         gen_kwargs = dict()
-    train_gen = SAT1DataGenerator(train, batch_size, **gen_kwargs)
+    train_gen = generator(train, batch_size, **gen_kwargs)
     if val is not None:
-        val_gen = SAT1DataGenerator(val, batch_size, **gen_kwargs)
+        val_gen = generator(val, batch_size, **gen_kwargs)
     else:
         val_gen = None
-    test_gen = SAT1DataGenerator(test, batch_size, **gen_kwargs)
+    test_gen = generator(test, batch_size, **gen_kwargs)
 
     callbacks = []
     if val_gen is not None:
