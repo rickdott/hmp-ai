@@ -150,7 +150,10 @@ class SequentialSAT1DataGenerator(tf.keras.utils.Sequence):
         # Shape (16, 199) instead of (16, )
         batch_labels = np.array(
             [
-                [self.cat_labels.index(label.item()) if label != "" else -1 for label in seq_labels]
+                [
+                    self.cat_labels.index(label.item()) if label != "" else -1
+                    for label in seq_labels
+                ]
                 for seq_labels in batch.labels
             ]
         )
