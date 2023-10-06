@@ -315,7 +315,8 @@ class StageFinder:
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
-            locations = locations.values
+            # Shift locations by one backwards
+            locations = locations.values - 1
             epoch = int(condition_epochs[data[1]])
             participant = participants.index(data[0])
             if participant != prev_participant:
