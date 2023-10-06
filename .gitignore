@@ -5,6 +5,7 @@ preprocessing/sat1/*.fif
 preprocessing/sat1/*.mat
 data/*/*/*.fif
 models/*
+!models/README.md
 
 !preprocessing/sat1/sat1_template.ipynb
 preprocessing/sat1/behavior/*.csv
