@@ -147,8 +147,8 @@ def SAT1LSTM(n_channels, n_samples, n_classes):
 def SAT1GRU(n_channels, n_samples, n_classes):
     input = Input(shape=(n_samples, n_channels))
     x = Masking(MASKING_VALUE)(input)
-    x = GRU(128, return_sequences=True)(x)
-    x = GRU(128)(x)
+    # x = GRU(128, return_sequences=True)(x)
+    x = GRU(256)(x)
     # x = Dropout(0.5)(x)
     # x = LSTM(10, return_sequences=True)(x)
     # x = LSTM(20)(x)
@@ -166,7 +166,8 @@ def SAT1seq2seqGRU(n_channels, n_samples, n_classes):
     x = GRU(128, return_sequences=True)(x)
     x = GRU(128, return_sequences=True)(x)
     # Predict for each timestep
-    x = TimeDistributed(Dense(n_classes, activation='softmax'))(x)
+    # x = TimeDistributed(Dense(n_classes, activation='softmax'))(x)
+    x = Dense(n_classes, activation='softmax')(x)
 
     model = Model(inputs=input, outputs=x)
     return model

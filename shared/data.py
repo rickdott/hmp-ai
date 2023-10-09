@@ -345,14 +345,14 @@ class StageFinder:
                 # Slice from known event location n to known event location n + 1
                 # unless it is the last event, then slice from known event location n to reaction time
                 if j != n_events - 1:
-                    if not locations[j + 1] > RT_sample - 1:
+                    if not locations[j + 1] >= RT_sample:
                         samples_slice = slice(location, locations[j + 1])
                     else:
                         # End of stage is later than NaNs begin
                         continue
                 else:
-                    if not location > RT_sample - 1:
-                        samples_slice = slice(location, RT_sample - 1)
+                    if not location >= RT_sample:
+                        samples_slice = slice(location, RT_sample)
                     else:
                         # NaNs begin before beginning of stage, error in measurement, disregard stage
                         continue
