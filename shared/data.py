@@ -2,6 +2,7 @@ import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
 from pathlib import Path
+from shared.utilities import MASKING_VALUE, CHANNELS_2D
 
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",
@@ -121,6 +122,72 @@ def add_stage_dimension(
     print("Combining segments")
     combined_segments = xr.combine_by_coords(segments)
     return combined_segments
+
+
+def preprocess(
+    dataset: xr.Dataset,
+    shuffle: bool = True,
+    shape_topological: bool = False,
+    sequential: bool = False,
+) -> xr.Dataset:
+    # Preprocess data
+    # Stack dimensions into one MultiIndex dimension 'index'
+    stack_dims = ["participant", "epochs"]
+    if not sequential:
+        stack_dims.append("labels")
+    dataset = dataset.stack({"index": stack_dims})
+    # Reorder so index is in front and samples/channels are switched
+    dataset = dataset.transpose("index", "samples", "channels")
+    # Drop all indices for which all channels & samples are NaN, this happens in cases of
+    # measuring error or label does not occur under condition in dataset
+    dataset = (
+        dataset.dropna("index", how="all", subset=["data"])
+        if sequential
+        else dataset.dropna("index", how="all")
+    )
+    dataset = dataset.fillna(MASKING_VALUE)
+
+    if shape_topological:
+        dataset = reshape(dataset)
+    if shuffle:
+        np.random.seed(42)
+        n = len(dataset.index)
+        perm = np.random.permutation(n)
+        dataset = dataset.isel(index=perm)
+
+    return dataset
+
+
+def reshape(dataset: xr.Dataset) -> xr.Dataset:
+    # Create array full of 'empty' values (999)
+    sparse_height = CHANNELS_2D.shape[0]
+    sparse_width = CHANNELS_2D.shape[1]
+    reshaped_data = np.full(
+        (
+            len(dataset.index),
+            sparse_height,
+            sparse_width,
+            len(dataset.samples),
+        ),
+        MASKING_VALUE,
+        dtype=dataset.data.dtype,
+    )
+
+    for x in range(sparse_width):
+        for y in range(sparse_height):
+            if CHANNELS_2D[y, x] == "NA":
+                continue
+            # Set slice of reshaped data to be information from channel at position in CHANNELS_2D
+            reshaped_data[:, y, x, :] = dataset.sel(channels=CHANNELS_2D[y, x]).data
+
+    # Configure new dataset coordinates and assign the reshaped data
+    new_coords = (
+        dataset.coords.to_dataset()
+        .drop_vars("channels")
+        .assign_coords({"x": np.arange(sparse_height), "y": np.arange(sparse_width)})
+    )
+    dataset = new_coords.assign(data=(("index", "x", "y", "samples"), reshaped_data))
+    return dataset
 
 
 class StageFinder:
