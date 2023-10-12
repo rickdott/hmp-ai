@@ -86,6 +86,31 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
     plt.show()
 
 
+def plot_mean_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
+    f, ax = plt.subplots(nrows=1, ncols=len(SAT1_STAGES_ACCURACY), figsize=(6, 3))
+
+    for i, label in enumerate(SAT1_STAGES_ACCURACY):
+        subset = dataset.sel(labels=label)
+        n = len(subset.index)
+
+        mean_activation = subset.mean(["index", "samples"]).data
+        ax[i].set_title(f"{label}\n(n={n})", fontsize=10)
+        plot_topomap(
+            mean_activation,
+            positions,
+            axes=ax[i],
+            show=False,
+            cmap="Spectral_r",
+            vlim=(np.min(mean_activation), np.max(mean_activation)),
+            sensors=False,
+            contours=6
+        )
+    
+    plt.tight_layout()
+    plt.show()
+
+
+
 def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
     nan_index = np.isnan(sample.analysis.where(sample.analysis != 0)).argmax(
         dim=["samples", "channels"]
