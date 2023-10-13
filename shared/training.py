@@ -1,7 +1,12 @@
 from shared.generators import SAT1DataGenerator
 import random
 import datetime
-from shared.utilities import get_summary_str, earlyStopping_cb, LoggingTensorBoard
+from shared.utilities import (
+    get_summary_str,
+    earlyStopping_cb,
+    LoggingTensorBoard,
+    pretty_json,
+)
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
@@ -117,7 +122,7 @@ def train_and_evaluate(
     if write_log:
         run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         if additional_name is not None:
-            run_id = run_id + '_' + additional_name
+            run_id = run_id + "_" + additional_name
         path = logs_path / run_id
 
         to_write = {"Model summary": get_summary_str(model)}
@@ -174,17 +179,14 @@ def test_model(
             writer = tf.summary.create_file_writer(str(logs_path / "train"))
     predicted_classes = np.argmax(model.predict(test_gen), axis=1)
     predicted_classes = [test_gen.cat_labels[idx] for idx in list(predicted_classes)]
+
+    test_results = classification_report(
+        test_gen.full_labels, predicted_classes, output_dict=True
+    )
     if log_report:
-        test_results = classification_report(test_gen.full_labels, predicted_classes)
-        test_results_str = "    " + "\n    ".join(test_results.splitlines())
         with writer.as_default():
-            tf.summary.text("Test results", test_results_str, step=0)
-        return
-    else:
-        test_results = classification_report(
-            test_gen.full_labels, predicted_classes, output_dict=True
-        )
-        return test_results
+            tf.summary.text("Test results", pretty_json(test_results), step=0)
+    return test_results
 
 
 def k_fold_cross_validate(
@@ -196,6 +198,7 @@ def k_fold_cross_validate(
     workers: int = 8,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
     gen_kwargs: dict = None,
+    train_kwargs: dict = None,
 ) -> list[dict]:
     """Validate model performance using K-fold Cross Validation.
 
@@ -208,6 +211,7 @@ def k_fold_cross_validate(
         workers (int, optional): Number of workers used in multiprocessing. Defaults to 8.
         normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
         gen_kwargs (dict, optional): Optional arguments for the generator to pass on to train_and_evaluate.
+        train_kwargs (dict, optional): Optional arguments for the train_and_evaluate function
 
     Returns:
         list[dict]: List of dictionaries detailing model performance per-class and averag.
@@ -243,6 +247,7 @@ def k_fold_cross_validate(
             epochs=epochs,
             workers=workers,
             gen_kwargs=gen_kwargs,
+            **train_kwargs
         )
 
         # Add test results to list

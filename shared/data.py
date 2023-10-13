@@ -187,6 +187,7 @@ def reshape(dataset: xr.Dataset) -> xr.Dataset:
         .assign_coords({"x": np.arange(sparse_height), "y": np.arange(sparse_width)})
     )
     dataset = new_coords.assign(data=(("index", "x", "y", "samples"), reshaped_data))
+    dataset = dataset.transpose("index", "samples", "x", "y")
     return dataset
 
 

@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 from keras.callbacks import TensorBoard
-
+import json
 
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
     monitor="val_accuracy",
@@ -53,6 +53,24 @@ def get_summary_str(model: tf.keras.Model) -> str:
     lines = []
     model.summary(print_fn=lines.append)
     return "    " + "\n    ".join(lines)
+
+
+def pretty_json(data: dict) -> str:
+    # From https://www.tensorflow.org/tensorboard/text_summaries
+    json_data = json.dumps(data, indent=2)
+    return "".join(f"\t{line}" for line in json_data.splitlines(True))
+
+
+def print_results(results: dict) -> str:
+    # From a list of test results to an aggregated accuracy and F1-Score
+    accuracy = 0.0
+    f1 = 0.0
+    for result in results:
+        accuracy += result["accuracy"]
+        f1 += result["macro avg"]["f1-score"]
+
+    print(f'Average Accuracy: {accuracy / len(results)}')
+    print(f'Average F1-Score: {f1 / len(results)}')
 
 
 # Credits:
