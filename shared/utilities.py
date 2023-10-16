@@ -6,7 +6,7 @@ import json
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
     monitor="val_accuracy",
     min_delta=0,
-    patience=2,
+    patience=3,
     verbose=0,
     mode="auto",
     baseline=None,

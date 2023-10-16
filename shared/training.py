@@ -15,6 +15,7 @@ import xarray as xr
 from typing import Callable
 from shared.normalization import norm_0_to_1
 from copy import deepcopy
+from collections import Counter, defaultdict
 
 compile_kwargs = {
     "optimizer": tf.keras.optimizers.AdamW(),
@@ -72,6 +73,16 @@ def split_data_on_participants(
     return train_data, val_data, test_data
 
 
+def calculate_class_weights(generator: tf.keras.utils.Sequence) -> dict:
+    counter = Counter(generator.full_labels.to_numpy())
+    total = sum(counter.values())
+    weights = defaultdict(lambda: 0)
+    for k, v in counter.items():
+        idx = generator.cat_labels.index(k)
+        weights[idx] = total / v
+    return dict(weights)
+
+
 def train_and_evaluate(
     model: tf.keras.Model,
     train: xr.Dataset,
@@ -85,6 +96,7 @@ def train_and_evaluate(
     additional_name: str = None,
     generator: tf.keras.utils.Sequence = None,
     gen_kwargs: dict = None,
+    use_class_weights: bool = False,
 ) -> (tf.keras.callbacks.History, dict):
     """Trains and evaluates a given model on the given datasets.
     After training the model is tested on the test set, results are logged to Tensorboard.
@@ -102,6 +114,7 @@ def train_and_evaluate(
         additional_name (str, optional): Additional text to be added to the run name. Defaults to None.
         generator (tf.keras.utils.Sequence, optional): Which generator class to use. Defaults to SAT1DataGenerator
         gen_kwargs (dict, optional): Extra arguments for the generator. Defaults to None.
+        use_class_weights (bool, optional): Whether or not to calculate class weights and use these during training.
 
     Returns:
         tf.keras.History: History of model fitting, detailing loss/accuracy.
@@ -144,6 +157,7 @@ def train_and_evaluate(
         validation_data=val_gen,
         use_multiprocessing=use_multiprocessing,
         workers=workers,
+        class_weight=calculate_class_weights(train_gen)
     )
 
     # Test model and write test summary
@@ -200,7 +214,7 @@ def k_fold_cross_validate(
     model: tf.keras.Model,
     k: int,
     batch_size: int = 16,
-    epochs: int = 10,
+    epochs: int = 20,
     workers: int = 8,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
     gen_kwargs: dict = None,
@@ -217,10 +231,10 @@ def k_fold_cross_validate(
         workers (int, optional): Number of workers used in multiprocessing. Defaults to 8.
         normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
         gen_kwargs (dict, optional): Optional arguments for the generator to pass on to train_and_evaluate.
-        train_kwargs (dict, optional): Optional arguments for the train_and_evaluate function
+        train_kwargs (dict, optional): Optional arguments for the train_and_evaluate function.
 
     Returns:
-        list[dict]: List of dictionaries detailing model performance per-class and averag.
+        list[dict]: List of dictionaries detailing model performance per-class and average.
     """
 
     results = []
@@ -249,6 +263,7 @@ def k_fold_cross_validate(
             model,
             train_data,
             test_data,
+            val=test_data,
             batch_size=batch_size,
             epochs=epochs,
             workers=workers,

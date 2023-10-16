@@ -59,7 +59,7 @@ def add_stage_dimension(
         merge = True
         # Extrapolate bump locations from ratio between sampling frequencies
         ratio = round(merge_dataset.sfreq / stage_data.sfreq)
-    changes[2] += int(1 * ratio) if merge_dataset else 1
+    changes[2] += int(1 * ratio) if merge_dataset is not None else 1
     last_change = None
     last_epoch = None
 
@@ -90,6 +90,11 @@ def add_stage_dimension(
 
                     # Reset samples coordinate so it starts at zero
                     segment["samples"] = np.arange(0, len(segment["samples"]))
+                    if (
+                        merge
+                        and (len(segment["samples"]) / (change - last_change)) != ratio
+                    ):
+                        continue
                     segments.append(segment)
             last_change = change
         if last_epoch != epoch:
@@ -356,7 +361,10 @@ class StageFinder:
             )
 
         # Set up output datatypes
-        event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
+        # event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
+        event_locations = (
+            np.arange(model.eventprobs.shape[1]) @ model.eventprobs.to_numpy()
+        ).astype(int)
 
         # Remove channels dimension
         shape = list(self.epoch_data.data.shape)
@@ -384,9 +392,21 @@ class StageFinder:
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
             # Shift locations by one backwards
-            locations = locations.values - 1
+            # locations = locations.values - 1
+            # if locations[0] < 0:
+            # locations[0] = 0
+            # Skip epoch if bumps are predicted to be at the same time
+            unique, counts = np.unique(locations, return_counts=True)
+            if unique[counts > 1]:
+                print("hi")
+                continue
+            # Skip epoch if bump order is not sorted
+
             epoch = int(condition_epochs[data[1]])
             participant = participants.index(data[0])
+            if not np.all(locations[:-1] <= locations[1:]):
+                print(participant, epoch)
+                continue
             if participant != prev_participant:
                 print(f"Processing participant {data[0]}")
 
@@ -426,7 +446,7 @@ class StageFinder:
                         continue
                 if self.verbose:
                     print(
-                        f"Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
+                        f"j: {j}, Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
                     )
                 labels_array[participant, epoch, samples_slice] = labels[j + 1]
 
