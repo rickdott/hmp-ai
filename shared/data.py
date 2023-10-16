@@ -59,7 +59,7 @@ def add_stage_dimension(
         merge = True
         # Extrapolate bump locations from ratio between sampling frequencies
         ratio = round(merge_dataset.sfreq / stage_data.sfreq)
-    changes[2] += 1
+    changes[2] += int(1 * ratio) if merge_dataset else 1
     last_change = None
     last_epoch = None
 

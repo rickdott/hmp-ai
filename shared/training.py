@@ -16,6 +16,12 @@ from typing import Callable
 from shared.normalization import norm_0_to_1
 from copy import deepcopy
 
+compile_kwargs = {
+    "optimizer": tf.keras.optimizers.AdamW(),
+    "loss": tf.keras.losses.SparseCategoricalCrossentropy(),
+    "metrics": ["accuracy"],
+}
+
 
 def split_data_on_participants(
     data: xr.Dataset,
@@ -247,7 +253,7 @@ def k_fold_cross_validate(
             epochs=epochs,
             workers=workers,
             gen_kwargs=gen_kwargs,
-            **train_kwargs
+            **train_kwargs,
         )
 
         # Add test results to list
