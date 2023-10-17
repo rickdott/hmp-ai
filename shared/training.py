@@ -17,11 +17,13 @@ from shared.normalization import norm_0_to_1
 from copy import deepcopy
 from collections import Counter, defaultdict
 
-compile_kwargs = {
-    "optimizer": tf.keras.optimizers.AdamW(),
-    "loss": tf.keras.losses.SparseCategoricalCrossentropy(),
-    "metrics": ["accuracy"],
-}
+
+def get_compile_kwargs() -> dict:
+    return {
+        "optimizer": tf.keras.optimizers.Nadam(),
+        "loss": tf.keras.losses.SparseCategoricalCrossentropy(),
+        "metrics": ["accuracy"],
+    }
 
 
 def split_data_on_participants(
@@ -96,7 +98,7 @@ def train_and_evaluate(
     additional_name: str = None,
     generator: tf.keras.utils.Sequence = None,
     gen_kwargs: dict = None,
-    use_class_weights: bool = False,
+    use_class_weights: bool = True,
 ) -> (tf.keras.callbacks.History, dict):
     """Trains and evaluates a given model on the given datasets.
     After training the model is tested on the test set, results are logged to Tensorboard.
@@ -150,6 +152,9 @@ def train_and_evaluate(
         callbacks.append(LoggingTensorBoard(to_write, log_dir=path))
 
     use_multiprocessing = workers != 1
+    fit_args = {}
+    if use_class_weights:
+        fit_args["class_weight"] = calculate_class_weights(train_gen)
     fit = model.fit(
         train_gen,
         epochs=epochs,
@@ -157,7 +162,7 @@ def train_and_evaluate(
         validation_data=val_gen,
         use_multiprocessing=use_multiprocessing,
         workers=workers,
-        class_weight=calculate_class_weights(train_gen)
+        **fit_args
     )
 
     # Test model and write test summary

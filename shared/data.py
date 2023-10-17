@@ -361,10 +361,11 @@ class StageFinder:
             )
 
         # Set up output datatypes
-        # event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
-        event_locations = (
-            np.arange(model.eventprobs.shape[1]) @ model.eventprobs.to_numpy()
-        ).astype(int)
+        event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
+        # Weighted probability mean method
+        # event_locations = (
+        #     np.arange(model.eventprobs.shape[1]) @ model.eventprobs.to_numpy()
+        # ).astype(int)
 
         # Remove channels dimension
         shape = list(self.epoch_data.data.shape)
@@ -391,22 +392,22 @@ class StageFinder:
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
+            locations = locations.values
             # Shift locations by one backwards
-            # locations = locations.values - 1
-            # if locations[0] < 0:
-            # locations[0] = 0
+            locations = locations - 1
+            if locations[0] < 0:
+                locations[0] = 0
             # Skip epoch if bumps are predicted to be at the same time
             unique, counts = np.unique(locations, return_counts=True)
             if unique[counts > 1]:
-                print("hi")
                 continue
-            # Skip epoch if bump order is not sorted
-
+            # Skip epoch if bump order is not sorted, can occur if probability mass is greater after the max probability of an earlier bump
+            if not np.all(locations[:-1] <= locations[1:]):
+                print('hi')
+                continue
             epoch = int(condition_epochs[data[1]])
             participant = participants.index(data[0])
-            if not np.all(locations[:-1] <= locations[1:]):
-                print(participant, epoch)
-                continue
+
             if participant != prev_participant:
                 print(f"Processing participant {data[0]}")
 
