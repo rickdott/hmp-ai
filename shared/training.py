@@ -16,6 +16,7 @@ from typing import Callable
 from shared.normalization import norm_0_to_1
 from copy import deepcopy
 from collections import Counter, defaultdict
+import gc
 
 
 def get_compile_kwargs() -> dict:
@@ -244,8 +245,6 @@ def k_fold_cross_validate(
 
     results = []
     folds = get_folds(data, k)
-    # Get first initialization of weights to return to later and compare equally
-    weights = model.get_weights()
 
     for i in range(len(folds)):
         # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
@@ -262,7 +261,8 @@ def k_fold_cross_validate(
         train_max = train_data.max(skipna=True).data.item()
         train_data = normalization_fn(train_data, train_min, train_max)
         test_data = normalization_fn(test_data, train_min, train_max)
-
+        
+        model.compile(**get_compile_kwargs())
         # Train model and test
         result = train_and_evaluate(
             model,
@@ -279,7 +279,9 @@ def k_fold_cross_validate(
         # Add test results to list
         print(f"Fold {i + 1}: accuracy: {result[1]['accuracy']}")
         results.append(result[1])
-        model.set_weights(weights)
+        model = tf.keras.models.clone_model(model)
+        tf.keras.backend.clear_session()
+        gc.collect()
     return results
 
 

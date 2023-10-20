@@ -131,13 +131,8 @@ def SAT1Deep(n_channels, n_samples, n_classes):
 def SAT1LSTM(n_channels, n_samples, n_classes):
     input = Input(shape=(n_samples, n_channels))
     x = Masking(MASKING_VALUE)(input)
-    x = LSTM(128, return_sequences=True)(x)
-    x = LSTM(128)(x)
-    # x = Dropout(0.5)(x)
-    # x = LSTM(10, return_sequences=True)(x)
-    # x = LSTM(20)(x)
+    x = LSTM(256, dropout=0.25)(x)
     x = Dense(128)(x)
-    # x = Dropout(0.5)(x)
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
@@ -147,13 +142,8 @@ def SAT1LSTM(n_channels, n_samples, n_classes):
 def SAT1GRU(n_channels, n_samples, n_classes):
     input = Input(shape=(n_samples, n_channels))
     x = Masking(MASKING_VALUE)(input)
-    # x = GRU(128, return_sequences=True)(x)
-    x = GRU(256)(x)
-    # x = Dropout(0.5)(x)
-    # x = LSTM(10, return_sequences=True)(x)
-    # x = LSTM(20)(x)
+    x = GRU(256, dropout=0.25)(x)
     x = Dense(128)(x)
-    # x = Dropout(0.5)(x)
     x = Dense(n_classes, activation="softmax")(x)
 
     model = Model(inputs=input, outputs=x)
