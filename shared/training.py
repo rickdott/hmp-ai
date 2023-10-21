@@ -163,7 +163,8 @@ def train_and_evaluate(
         validation_data=val_gen,
         use_multiprocessing=use_multiprocessing,
         workers=workers,
-        **fit_args
+        shuffle=False,
+        **fit_args,
     )
 
     # Test model and write test summary
@@ -171,6 +172,12 @@ def train_and_evaluate(
     if write_log:
         test_args["logs_path"] = path
     test_results = test_model(model, test_gen, log_report=write_log, **test_args)
+
+    del train_gen
+    del val_gen
+    del test_gen
+    tf.keras.backend.clear_session()
+    gc.collect()
 
     return fit, test_results
 
@@ -225,6 +232,7 @@ def k_fold_cross_validate(
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
     gen_kwargs: dict = None,
     train_kwargs: dict = None,
+    fold_indices: list[int] = None,
 ) -> list[dict]:
     """Validate model performance using K-fold Cross Validation.
 
@@ -245,9 +253,10 @@ def k_fold_cross_validate(
 
     results = []
     folds = get_folds(data, k)
-
-    for i in range(len(folds)):
+    indices = fold_indices if fold_indices is not None else range(len(folds))
+    for i in indices:
         # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
+
         train_folds = deepcopy(folds)
         test_fold = train_folds.pop(i)
         train_fold = np.concatenate(train_folds, axis=0)
@@ -261,7 +270,7 @@ def k_fold_cross_validate(
         train_max = train_data.max(skipna=True).data.item()
         train_data = normalization_fn(train_data, train_min, train_max)
         test_data = normalization_fn(test_data, train_min, train_max)
-        
+
         model.compile(**get_compile_kwargs())
         # Train model and test
         result = train_and_evaluate(
@@ -274,11 +283,11 @@ def k_fold_cross_validate(
             workers=workers,
             gen_kwargs=gen_kwargs,
             **train_kwargs,
-        )
-
+        )[1]
         # Add test results to list
-        print(f"Fold {i + 1}: accuracy: {result[1]['accuracy']}")
-        results.append(result[1])
+        print(f"Fold {i + 1}: Accuracy: {result['accuracy']}")
+        print(f"Fold {i + 1}: F1-Score: {result['macro avg']['f1-score']}")
+        results.append(result)
         model = tf.keras.models.clone_model(model)
         tf.keras.backend.clear_session()
         gc.collect()
