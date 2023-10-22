@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import random
 from keras.callbacks import TensorBoard
 import json
 
@@ -71,6 +72,13 @@ def print_results(results: dict) -> str:
 
     print(f'Average Accuracy: {accuracy / len(results)}')
     print(f'Average F1-Score: {f1 / len(results)}')
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    tf.keras.utils.set_random_seed(seed)
 
 
 # Credits:

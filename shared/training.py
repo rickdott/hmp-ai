@@ -6,6 +6,7 @@ from shared.utilities import (
     earlyStopping_cb,
     LoggingTensorBoard,
     pretty_json,
+    set_global_seed
 )
 from pathlib import Path
 import numpy as np
@@ -44,7 +45,6 @@ def split_data_on_participants(
     Returns:
         (xr.Dataset, xr.Dataset, xr.Dataset): tuple of train, test, val datasets.
     """
-    random.seed(42)
     participants = data.participant.values.tolist()
     # In case of SAT1 experiment, 25 participants are used
     # Given train_percentage=60, remaining 40 percent will be split evenly between validation and test sets
@@ -123,6 +123,7 @@ def train_and_evaluate(
         tf.keras.History: History of model fitting, detailing loss/accuracy.
         dict: Result of test run, only given if logs_path is None
     """
+    set_global_seed(42)
     # Create generators
     if generator is None:
         generator = SAT1DataGenerator
@@ -252,11 +253,12 @@ def k_fold_cross_validate(
     """
 
     results = []
+    set_global_seed(42)
     folds = get_folds(data, k)
     indices = fold_indices if fold_indices is not None else range(len(folds))
     for i in indices:
+        tf.keras.backend.clear_session()
         # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
-
         train_folds = deepcopy(folds)
         test_fold = train_folds.pop(i)
         train_fold = np.concatenate(train_folds, axis=0)
@@ -289,7 +291,6 @@ def k_fold_cross_validate(
         print(f"Fold {i + 1}: F1-Score: {result['macro avg']['f1-score']}")
         results.append(result)
         model = tf.keras.models.clone_model(model)
-        tf.keras.backend.clear_session()
         gc.collect()
     return results
 
@@ -319,7 +320,6 @@ def get_folds(
 
     # Divide data into k folds
     participants = data.participant.values.copy()
-    np.random.seed(42)
     np.random.shuffle(participants)
     folds = np.array_split(participants, k)
     return folds

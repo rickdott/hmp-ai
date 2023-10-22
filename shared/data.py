@@ -30,6 +30,58 @@ AR_STAGES = [
 ]
 
 
+def add_stage_data_to_unprocessed(
+    data_path: str | Path, merge_dataset: xr.Dataset
+) -> xr.Dataset:
+    """Adds stage information from dataset at data_path to merge_dataset, used to label unprocessed data from processed HMP-labeled data
+
+    Args:
+        data_path (str | Path): Path to HMP data set with labels, output from 2_estimation_sat1.ipynb
+        merge_dataset (xr.Dataset): Dataset to add labels to
+
+    Returns:
+        xr.Dataset: Dataset with added labels
+    """
+    stage_data = xr.load_dataset(data_path)
+    ratio = round(merge_dataset.sfreq / stage_data.sfreq)
+    data_shape = stage_data.labels.shape
+    new_samples_length = len(merge_dataset.samples)
+    new_shape = (data_shape[0], data_shape[1], new_samples_length)
+
+    expanded_data = np.full(new_shape, "", dtype=object)
+
+    def calculate_start_indices(sequence):
+        # Count first index as a change
+        start_indices = [0]
+        current_element = sequence[0]
+        for i, element in enumerate(sequence):
+            if element != current_element:
+                start_indices.append(i)
+                current_element = element
+        return start_indices
+
+    for i in range(data_shape[0]):
+        for j in range(data_shape[1]):
+            sequence = stage_data.labels[i, j, :].to_numpy()
+            start_indices = calculate_start_indices(sequence)
+
+            for i_indices, index in enumerate(start_indices):
+                element = sequence[index]
+                if element == "":
+                    continue
+
+                new_start_pos = index * ratio
+                new_end_pos = start_indices[i_indices + 1] * ratio
+                if new_end_pos > new_samples_length:
+                    new_end_pos = new_samples_length
+                expanded_data[i, j, new_start_pos:new_end_pos] = element
+
+    merge_dataset = merge_dataset.assign(
+        labels=(["participant", "epochs", "samples"], expanded_data)
+    )
+    return merge_dataset
+
+
 def add_stage_dimension(
     data_path: str | Path, merge_dataset: xr.Dataset = None
 ) -> xr.Dataset:
@@ -155,7 +207,6 @@ def preprocess(
     if shape_topological:
         dataset = reshape(dataset)
     if shuffle:
-        np.random.seed(42)
         n = len(dataset.index)
         perm = np.random.permutation(n)
         dataset = dataset.isel(index=perm)
