@@ -12,7 +12,7 @@ class SAT1DataGenerator(tf.keras.utils.Sequence):
 
     def __init__(self, dataset: xr.Dataset, batch_size=16, shape_topological=False, do_preprocessing=True):
         # Alphabetical ordering of labels used for categorization of labels
-        self.cat_labels = [label.item() for label in dataset.labels]
+        self.cat_labels = SAT1_STAGES_ACCURACY
 
         self.batch_size = batch_size
 

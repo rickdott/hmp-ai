@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from shared.data import SAT1_STAGES_ACCURACY, preprocess
 import innvestigate
 from shared.generators import SAT1DataGenerator
+from shared.utilities import MASKING_VALUE
+import alibi
 
 
 def add_analysis(
@@ -23,6 +25,29 @@ def add_analysis(
             i * len(batch[1]) : (i + 1) * len(batch[1]), :, :
         ] = np.squeeze(batch_analysis)
     # TODO: Last few samples have all 0 as analysis since batch is not created for them
+    return test_set
+
+
+def add_gradient_analysis(
+    dataset: xr.Dataset, analyzer: alibi.api.interfaces.Explainer
+) -> xr.Dataset:
+    test_set = preprocess(dataset)
+    test_set = test_set.assign(
+        analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
+    )
+    test_gen = SAT1DataGenerator(test_set, do_preprocessing=False, batch_size=32)
+    batches = len(test_gen)
+
+    for i, batch in enumerate(test_gen):
+        print(f"Batch: {i}/{batches}")
+        batch_analysis = analyzer.explain(batch[0].data, target=list(batch[1]))
+        # batch_analysis = analyzer.analyze(np.expand_dims(batch[0].data, axis=3))
+        test_set.analysis[
+            i * len(batch[1]) : (i + 1) * len(batch[1]), :, :
+        ] = np.squeeze(batch_analysis.data["attributions"][0])
+    # TODO: Last few samples have all 0 as analysis since batch is not created for them
+    # nan_indices = np.isnan(test_set.data.where(test_set.data != MASKING_VALUE))
+    # test_set.analysis = test_set.analysis.where(~nan_indices, 0)
     return test_set
 
 
@@ -103,16 +128,15 @@ def plot_mean_activation_per_label(dataset: xr.Dataset, positions: Info) -> None
             cmap="Spectral_r",
             vlim=(np.min(mean_activation), np.max(mean_activation)),
             sensors=False,
-            contours=6
+            contours=6,
         )
-    
+
     plt.tight_layout()
     plt.show()
 
 
-
 def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
-    nan_index = np.isnan(sample.analysis.where(sample.analysis != 0)).argmax(
+    nan_index = np.isnan(sample.data.where(sample.data != 999)).argmax(
         dim=["samples", "channels"]
     )
     nan_index = nan_index["samples"].item()
@@ -135,7 +159,10 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
             axes=ax[0, i],
             show=False,
             cmap="Spectral_r",
-            vlim=(np.min(sample.data[0:nan_index, :]), np.max(sample.data[0:nan_index, :])),
+            vlim=(
+                np.min(sample.data[0:nan_index, :]),
+                np.max(sample.data[0:nan_index, :]),
+            ),
             sensors=False,
             contours=6,
         )
@@ -147,7 +174,10 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
             axes=ax[1, i],
             show=False,
             cmap="bwr",
-            vlim=(np.min(sample.analysis), np.max(sample.analysis)),
+            vlim=(
+                np.min(sample.analysis[0:nan_index, :]),
+                np.max(sample.analysis[0:nan_index, :]),
+            ),
             sensors=False,
             contours=6,
         )
