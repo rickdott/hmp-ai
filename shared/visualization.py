@@ -35,19 +35,20 @@ def add_gradient_analysis(
     test_set = test_set.assign(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
     )
-    test_gen = SAT1DataGenerator(test_set, do_preprocessing=False, batch_size=32)
+    test_gen = SAT1DataGenerator(test_set, do_preprocessing=False)
     batches = len(test_gen)
 
     for i, batch in enumerate(test_gen):
-        print(f"Batch: {i}/{batches}")
-        batch_analysis = analyzer.explain(batch[0].data, target=list(batch[1]))
-        # batch_analysis = analyzer.analyze(np.expand_dims(batch[0].data, axis=3))
+        print(f"Batch: {i + 1}/{batches}")
+        baselines = np.copy(batch[0].data)
+        baselines[np.where(batch[0].data != MASKING_VALUE)] = 0
+        batch_analysis = analyzer.explain(batch[0].data, baselines=baselines)
         test_set.analysis[
             i * len(batch[1]) : (i + 1) * len(batch[1]), :, :
         ] = np.squeeze(batch_analysis.data["attributions"][0])
     # TODO: Last few samples have all 0 as analysis since batch is not created for them
-    # nan_indices = np.isnan(test_set.data.where(test_set.data != MASKING_VALUE))
-    # test_set.analysis = test_set.analysis.where(~nan_indices, 0)
+    nan_indices = np.isnan(test_set.data.where(test_set.data != MASKING_VALUE))
+    test_set["analysis"] = test_set.analysis.where(~nan_indices, 0)
     return test_set
 
 
@@ -60,7 +61,7 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
         n = len(subset.index)
         # Get maximum activation averaged over channels
         # TODO: Mean channels or sum channels? Maybe something else, highest n values?
-        max_activation = subset.mean("channels").argmax("samples").analysis
+        max_activation = abs(subset.analysis).sum("channels").argmax("samples")
         max_samples = subset.sel(samples=max_activation)
         mean_max_samples = max_samples.mean("index")
 
@@ -84,19 +85,20 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
         )
 
         # Model activity
+        abs_mean_max_analysis = mean_max_samples.analysis
         plot_topomap(
-            mean_max_samples.analysis,
+            abs_mean_max_analysis,
             positions,
             axes=ax[1, i],
             show=False,
             cmap="bwr",
-            vlim=(np.min(mean_max_samples.analysis), np.max(mean_max_samples.analysis)),
+            vlim=(np.min(abs_mean_max_analysis), np.max(abs_mean_max_analysis)),
             sensors=False,
             contours=6,
         )
 
         # Combined
-        combined = mean_max_samples.data * mean_max_samples.analysis
+        combined = mean_max_samples.data * abs(abs_mean_max_analysis)
         plot_topomap(
             combined,
             positions,
