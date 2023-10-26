@@ -36,12 +36,13 @@ def add_stage_data_to_unprocessed(
     """Adds stage information from dataset at data_path to merge_dataset, used to label unprocessed data from processed HMP-labeled data
 
     Args:
-        data_path (str | Path): Path to HMP data set with labels, output from 2_estimation_sat1.ipynb
+        data_path (str | Path): Path to HMP data set with labels, output from Estimation notebook
         merge_dataset (xr.Dataset): Dataset to add labels to
 
     Returns:
         xr.Dataset: Dataset with added labels
     """
+    # Create variables to put new data in
     stage_data = xr.load_dataset(data_path)
     ratio = round(merge_dataset.sfreq / stage_data.sfreq)
     data_shape = stage_data.labels.shape
@@ -51,6 +52,7 @@ def add_stage_data_to_unprocessed(
     expanded_data = np.full(new_shape, "", dtype=object)
 
     def calculate_start_indices(sequence):
+        # Find indices where the processing stage changes
         # Count first index as a change
         start_indices = [0]
         current_element = sequence[0]
@@ -60,6 +62,8 @@ def add_stage_data_to_unprocessed(
                 current_element = element
         return start_indices
 
+    # For each epoch, find every sequence of processing stages,
+    # lengthen it by a factor of 5, and put it into the new dataset.
     for i in range(data_shape[0]):
         for j in range(data_shape[1]):
             sequence = stage_data.labels[i, j, :].to_numpy()
@@ -172,7 +176,6 @@ def add_stage_dimension(
                 # Reset samples coordinate so it starts at zero
                 segment["samples"] = np.arange(0, len(segment["samples"]))
                 segments.append(segment)
-        # print(epoch)
         last_epoch = epoch
 
     # Recombine into new segments dimension
@@ -187,6 +190,17 @@ def preprocess(
     shape_topological: bool = False,
     sequential: bool = False,
 ) -> xr.Dataset:
+    """Preprocess the dataset based on requirements
+
+    Args:
+        dataset (xr.Dataset): Input dataset
+        shuffle (bool, optional): Whether to shuffle the dataset at the end. Defaults to True.
+        shape_topological (bool, optional): Shape the data 3D. Defaults to False.
+        sequential (bool, optional): True if input data is sequential instead of split. Defaults to False.
+
+    Returns:
+        xr.Dataset: Preprocessed data.
+    """
     # Preprocess data
     # Stack dimensions into one MultiIndex dimension 'index'
     stack_dims = ["participant", "epochs"]

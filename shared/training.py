@@ -21,6 +21,11 @@ import gc
 
 
 def get_compile_kwargs() -> dict:
+    """Initializes the arguments used for model compilation.
+
+    Returns:
+        dict: Dictionary of arguments used to compile model.
+    """
     return {
         "optimizer": tf.keras.optimizers.Nadam(),
         "loss": tf.keras.losses.SparseCategoricalCrossentropy(),
@@ -33,14 +38,15 @@ def split_data_on_participants(
     train_percentage: int = 60,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
 ) -> (xr.Dataset, xr.Dataset, xr.Dataset):
-    """Splits dataset into three distinct set on participant, ensuring
-    that no participant occurs in more than one sets.
+    """Splits dataset into three distinct sets based on participant, ensuring
+    that no participant occurs in more than one set.
     Splits remainder of train percentage into two sets.
     Also normalizes data based on training set parameters to prevent information leakage.
 
     Args:
         data (xr.Dataset): Dataset to be split.
         train_percentage (int): Percentage of participants used in the training set. Defaults to 60.
+        normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
 
     Returns:
         (xr.Dataset, xr.Dataset, xr.Dataset): tuple of train, test, val datasets.
@@ -77,6 +83,14 @@ def split_data_on_participants(
 
 
 def calculate_class_weights(generator: tf.keras.utils.Sequence) -> dict:
+    """Calculate the class weights used by the loss function to attribute more value to lesser-occuring classes.
+
+    Args:
+        generator (tf.keras.utils.Sequence): Generator containing the dataset used for the class weights.
+
+    Returns:
+        dict: Dictionary of label: weights mappings.
+    """
     counter = Counter(generator.full_labels.to_numpy())
     total = sum(counter.values())
     weights = defaultdict(lambda: 0)
@@ -107,8 +121,8 @@ def train_and_evaluate(
     Args:
         model (tf.keras.Model): Model to be used in training.
         train (xr.Dataset): Training dataset.
-        val (xr.Dataset): Valuation dataset.
         test (xr.Dataset): Testing dataset.
+        val (xr.Dataset, optional): Valuation dataset.
         batch_size (int, optional): Batch size used when training the model. Defaults to 16.
         epochs (int, optional): How many epochs the model should train for. Defaults to 20.
         workers (int, optional): How many workers (CPU threads) should be used in training. Defaults to 8.
@@ -117,7 +131,7 @@ def train_and_evaluate(
         additional_name (str, optional): Additional text to be added to the run name. Defaults to None.
         generator (tf.keras.utils.Sequence, optional): Which generator class to use. Defaults to SAT1DataGenerator
         gen_kwargs (dict, optional): Extra arguments for the generator. Defaults to None.
-        use_class_weights (bool, optional): Whether or not to calculate class weights and use these during training.
+        use_class_weights (bool, optional): Whether or not to calculate class weights and use these during training. Defaults to True
 
     Returns:
         tf.keras.History: History of model fitting, detailing loss/accuracy.
@@ -188,7 +202,7 @@ def test_model(
     test_gen: tf.keras.utils.Sequence,
     logs_path: Path = None,
     log_report: bool = False,
-) -> dict | None:
+) -> dict:
     """Tests a given model, returning test report as dictionary if log_report is False,
     otherwise write test report to TensorBoard logs
 
@@ -202,7 +216,7 @@ def test_model(
         ValueError: If log_report is True, logs_path must be provided
 
     Returns:
-        dict | None: Returns dict if log_report is False, otherwise None
+        dict: Test results as dictionary
     """
     if log_report:
         if logs_path is None:
@@ -247,6 +261,7 @@ def k_fold_cross_validate(
         normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
         gen_kwargs (dict, optional): Optional arguments for the generator to pass on to train_and_evaluate.
         train_kwargs (dict, optional): Optional arguments for the train_and_evaluate function.
+        fold_indices: (list[int], optional): Optional indices for the folds to be validated, used for large datasets causing memory leaks.
 
     Returns:
         list[dict]: List of dictionaries detailing model performance per-class and average.

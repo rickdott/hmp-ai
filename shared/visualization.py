@@ -13,12 +13,22 @@ import alibi
 def add_analysis(
     dataset: xr.Dataset, analyzer: innvestigate.analyzer.base.AnalyzerBase
 ) -> xr.Dataset:
+    """Adds innvestigate analysis using the given analyzer to the dataset. New 'analysis' data dimension is created in the dataset.
+
+    Args:
+        dataset (xr.Dataset): Dataset to which analysis should be added.
+        analyzer (innvestigate.analyzer.base.AnalyzerBase): Analyzer that is used to analyze the data.
+
+    Returns:
+        xr.Dataset: Dataset with added analysis.
+    """
     test_set = preprocess(dataset)
     test_set = test_set.assign(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
     )
     test_gen = SAT1DataGenerator(test_set, do_preprocessing=False)
 
+    # Batch-wise analyzing of data and adding analysis to the dataset
     for i, batch in enumerate(test_gen):
         batch_analysis = analyzer.analyze(np.expand_dims(batch[0].data, axis=3))
         test_set.analysis[
@@ -31,6 +41,15 @@ def add_analysis(
 def add_gradient_analysis(
     dataset: xr.Dataset, analyzer: alibi.api.interfaces.Explainer
 ) -> xr.Dataset:
+    """Adds alibi analysis using the given analyzer to the dataset. New 'analysis' data dimension is created in the dataset.
+
+    Args:
+        dataset (xr.Dataset): Dataset to which analysis should be added.
+        analyzer (alibi.api.interfaces.Explainer): Analyzer that is used to analyze the data.
+
+    Returns:
+        xr.Dataset: Dataset with added analysis.
+    """
     test_set = preprocess(dataset)
     test_set = test_set.assign(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
@@ -38,6 +57,7 @@ def add_gradient_analysis(
     test_gen = SAT1DataGenerator(test_set, do_preprocessing=False)
     batches = len(test_gen)
 
+    # Batch-wise analyzing of data and adding analysis to the dataset
     for i, batch in enumerate(test_gen):
         print(f"Batch: {i + 1}/{batches}")
         baselines = np.copy(batch[0].data)

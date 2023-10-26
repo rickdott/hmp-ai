@@ -4,6 +4,7 @@ import random
 from keras.callbacks import TensorBoard
 import json
 
+# Stops training if validation loss has not decreased for 3 epochs in a row, restoring the weights of the best epoch
 earlyStopping_cb = tf.keras.callbacks.EarlyStopping(
     monitor="val_loss",
     min_delta=0,
@@ -75,6 +76,7 @@ def print_results(results: dict) -> str:
 
 
 def set_global_seed(seed: int) -> None:
+    # Sets all (hopefully) random states used, to get more consistent training runs
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
