@@ -2,7 +2,7 @@ import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
 from pathlib import Path
-from shared.utilities import MASKING_VALUE, CHANNELS_2D
+from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
 
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",

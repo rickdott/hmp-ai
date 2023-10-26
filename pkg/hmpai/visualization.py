@@ -3,10 +3,10 @@ from mne import Info
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from shared.data import SAT1_STAGES_ACCURACY, preprocess
+from data import SAT1_STAGES_ACCURACY, preprocess
 import innvestigate
-from shared.generators import SAT1DataGenerator
-from shared.utilities import MASKING_VALUE
+from generators import SAT1DataGenerator
+from utilities import MASKING_VALUE
 import alibi
 
 
