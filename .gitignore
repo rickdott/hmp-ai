@@ -12,6 +12,7 @@ preprocessing/sat1/behavior/*.csv
 
 data/*/*.npz
 data/*/*.nc
+data/*/*.mat
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

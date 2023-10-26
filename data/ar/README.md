@@ -1,0 +1,1 @@
+Put varForBumps135_100.mat here from http://www.ai.rug.nl/~jpborst/modelbasedneuro/analysis_data_model.zip
