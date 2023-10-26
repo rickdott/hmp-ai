@@ -2,8 +2,8 @@ import tensorflow as tf
 import numpy as np
 import xbatcher
 import xarray as xr
-from utilities import CHANNELS_2D, MASKING_VALUE
-from data import SAT1_STAGES_ACCURACY, preprocess
+from hmpai.utilities import CHANNELS_2D, MASKING_VALUE
+from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
 
 
 class SAT1DataGenerator(tf.keras.utils.Sequence):

@@ -1,7 +1,7 @@
-from generators import SAT1DataGenerator
+from hmpai.generators import SAT1DataGenerator
 import random
 import datetime
-from utilities import (
+from hmpai.utilities import (
     get_summary_str,
     earlyStopping_cb,
     LoggingTensorBoard,
@@ -14,7 +14,7 @@ import tensorflow as tf
 from sklearn.metrics import classification_report
 import xarray as xr
 from typing import Callable
-from normalization import norm_0_to_1
+from hmpai.normalization import norm_0_to_1
 from copy import deepcopy
 from collections import Counter, defaultdict
 import gc
