@@ -18,7 +18,7 @@ from tensorflow.keras.layers import (
     TimeDistributed,
 )
 from tensorflow.keras import Model
-from hmpai.utilities import MASKING_VALUE
+from pkg.hmpai.tensorflow.utilities import MASKING_VALUE
 
 
 def SAT1Base(n_channels, n_samples, n_classes):

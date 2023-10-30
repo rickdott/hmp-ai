@@ -5,8 +5,8 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
 import innvestigate
-from hmpai.generators import SAT1DataGenerator
-from hmpai.utilities import MASKING_VALUE
+from pkg.hmpai.tensorflow.generators import SAT1DataGenerator
+from pkg.hmpai.tensorflow.utilities import MASKING_VALUE
 import alibi
 
 

@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
 
+
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",
     "encoding",
