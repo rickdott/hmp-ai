@@ -5,17 +5,11 @@ from tensorflow.keras.layers import (
     Dense,
     Conv2D,
     Conv3D,
-    AveragePooling2D,
-    AvgPool2D,
-    BatchNormalization,
     MaxPooling2D,
     MaxPooling3D,
     Masking,
     LSTM,
-    SimpleRNN,
     GRU,
-    Bidirectional,
-    TimeDistributed,
 )
 from tensorflow.keras import Model
 from pkg.hmpai.tensorflow.utilities import MASKING_VALUE

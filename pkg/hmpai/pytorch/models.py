@@ -1,8 +1,6 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
-from torch import cuda
-from torch.autograd import Variable
 from hmpai.utilities import MASKING_VALUE
 
 
