@@ -4,22 +4,47 @@ import torch.nn.functional as F
 from hmpai.utilities import MASKING_VALUE
 
 
+class SAT1Mlp(nn.Module):
+    def __init__(self, n_channels, n_samples, n_classes):
+        super().__init__()
+        self.relu = nn.ReLU()
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.Linear(in_features=n_channels * n_samples, out_features=128)
+        self.linear2 = nn.Linear(in_features=128, out_features=64)
+        self.linear3 = nn.Linear(in_features=64, out_features=32)
+        self.linear_final = nn.Linear(in_features=32, out_features=n_classes)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        x = self.relu(x)
+        x = self.linear3(x)
+        x = self.relu(x)
+        x = self.linear_final(x)
+
+        return x
+
+
 class SAT1Base(nn.Module):
     def __init__(self, n_channels, n_samples, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
-        self.linear = nn.Linear(in_features=37632, out_features=128)
+        # 16 = left over samples after convolutions
+        self.linear = nn.Linear(in_features=256 * 16 * n_channels, out_features=128)
         self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
-        # Kernel order = (channels, samples)
-        self.maxpool = nn.MaxPool2d((1, 2))
-        self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(1, 5))
-        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(1, 3))
-        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(1, 3))
+        # Kernel order = (samples, channels)
+        self.maxpool = nn.MaxPool2d((2, 1))
+        self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(5, 1))
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(3, 1))
+        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(3, 1))
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        mask_in = torch.where(x == MASKING_VALUE, 0., 1.)
+        # Mask values that are not used from batch
+        mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)
         x = self.maxpool(x)
@@ -30,7 +55,6 @@ class SAT1Base(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
         x = self.flatten(x)
-        # print(x.shape)
         x = self.linear(x)
         x = self.relu(x)
         x = self.dropout(x)
