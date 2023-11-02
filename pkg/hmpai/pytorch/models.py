@@ -106,6 +106,26 @@ class SAT1Deep(nn.Module):
         return x
 
 
+class SAT1GRU(nn.Module):
+    def __init__(self, n_channels, n_samples, n_classes):
+        super().__init__()
+        self.relu = nn.ReLU()
+        self.gru = nn.GRU(input_size=30, hidden_size=256, batch_first=True)
+        self.linear = nn.Linear(in_features=256, out_features=128)
+        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+
+    def forward(self, x):
+        x = torch.squeeze(x)
+        mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
+        x, _ = self.gru(x)
+        x = self.relu(x)
+        x = x * mask_in[:, :, 0].unsqueeze(-1)
+        x = self.linear(x)
+        x = self.linear_final(x)
+
+        return x
+
+
 ###############################################################################
 # BSD 3-Clause License
 #
