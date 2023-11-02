@@ -11,6 +11,9 @@ import xarray as xr
 from datetime import datetime
 import numpy as np
 from sklearn.metrics import classification_report
+from typing import Callable
+from hmpai.normalization import norm_dummy
+from copy import deepcopy
 
 
 def train_and_test(
@@ -134,6 +137,61 @@ def train_and_test(
     return results
 
 
+def k_fold_cross_validate(
+    model: torch.nn.Module,
+    model_kwargs: dict,
+    data: xr.Dataset,
+    k: int,
+    batch_size: int = 16,
+    epochs: int = 20,
+    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
+    gen_kwargs: dict = None,
+    train_kwargs: dict = None,
+):
+    results = []
+    set_global_seed(42)
+    folds = get_folds(data, k)
+    for i_fold in range(len(folds)):
+        # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
+        train_folds = deepcopy(folds)
+        test_fold = train_folds.pop(i_fold)
+        train_fold = np.concatenate(train_folds, axis=0)
+        print(f"Fold {i_fold + 1}: test fold: {test_fold}")
+
+        train_data = data.sel(participant=train_fold)
+        test_data = data.sel(participant=test_fold)
+
+        # Normalize data
+        train_min = train_data.min(skipna=True).data.item()
+        train_max = train_data.max(skipna=True).data.item()
+        train_data = normalization_fn(train_data, train_min, train_max)
+        test_data = normalization_fn(test_data, train_min, train_max)
+
+        # Resets model every fold
+        model_instance = model(**model_kwargs).to(DEVICE)
+
+        # Train and test model
+        if train_kwargs["additional_name"]:
+            train_kwargs["additional_name"] = (
+                train_kwargs["additional_name"] + f"_fold{i_fold + 1}"
+            )
+        result = train_and_test(
+            model_instance,
+            train_data,
+            test_data,
+            val_set=test_data,
+            batch_size=batch_size,
+            epochs=epochs,
+            gen_kwargs=gen_kwargs,
+            **train_kwargs,
+        )
+        print(f"Fold {i_fold + 1}: Accuracy: {result['accuracy']}")
+        print(f"Fold {i_fold + 1}: F1-Score: {result['macro avg']['f1-score']}")
+        results.append(result)
+
+    return results
+
+
 def train(
     model: torch.nn.Module,
     train_loader: SAT1DataLoader,
@@ -153,7 +211,7 @@ def train(
     Returns:
         list[float]: List containing loss for each batch.
     """
-    model.train(True)
+    model.train()
 
     loss_per_batch = []
 
@@ -254,6 +312,36 @@ def calculate_class_weights(generator) -> torch.Tensor:
     for stage in SAT1_STAGES_ACCURACY:
         weights.append(total / counter[stage])
     return torch.FloatTensor(weights)
+
+
+def get_folds(
+    data: xr.Dataset,
+    k: int,
+) -> list[np.ndarray]:
+    """Divides dataset into folds
+
+    Args:
+        data (xr.Dataset): Dataset to be used
+        k (int): Amount of folds
+
+    Raises:
+        ValueError: Occurs when k does not divide number of participants
+
+    Returns:
+        list[np.ndarray]: List of folds
+    """
+    # Make sure #participants is divisible by k
+    n_participants = len(data.participant)
+    if n_participants % k != 0:
+        raise ValueError(
+            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
+        )
+
+    # Divide data into k folds
+    participants = data.participant.values.copy()
+    np.random.shuffle(participants)
+    folds = np.array_split(participants, k)
+    return folds
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
