@@ -1,10 +1,10 @@
 from hmpai.utilities import pretty_json
+from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 from hmpai.pytorch.utilities import DEVICE, set_global_seed, get_summary_str
-from hmpai.pytorch.generators import SAT1DataLoader
+from hmpai.pytorch.generators import SAT1Dataset
 import torch
 from hmpai.data import SAT1_STAGES_ACCURACY
-from collections import Counter
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 import xarray as xr
@@ -23,24 +23,26 @@ def train_and_test(
     val_set: xr.Dataset = None,
     batch_size: int = 16,
     epochs: int = 20,
+    workers: int = 4,
     logs_path: Path = None,
     additional_info: dict = None,
     additional_name: str = None,
-    loader: SAT1DataLoader = None,
     gen_kwargs: dict = None,
     use_class_weights: bool = True,
 ):
     set_global_seed(42)
     # Create loaders
-    if loader is None:
-        loader = SAT1DataLoader
     if gen_kwargs is None:
         gen_kwargs = dict()
 
-    train_loader = loader(train_set, batch_size, **gen_kwargs)
-    test_loader = loader(test_set, batch_size, **gen_kwargs)
+    train_set = SAT1Dataset(train_set, **gen_kwargs)
+    train_loader = DataLoader(train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True)
+    test_set = SAT1Dataset(test_set, **gen_kwargs)
+    # Do not shuffle test loader since testing should be the same always
+    test_loader = DataLoader(test_set, batch_size, shuffle=False, num_workers=workers, pin_memory=True)
     if val_set is not None:
-        val_loader = loader(val_set, batch_size, **gen_kwargs)
+        val_set = SAT1Dataset(val_set, **gen_kwargs)
+        val_loader = DataLoader(val_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
     # Set up logging
     write_log = logs_path is not None
@@ -58,8 +60,8 @@ def train_and_test(
                 (
                     batch_size,
                     1,
-                    train_loader.dataset.data.shape[1],
                     train_loader.dataset.data.shape[2],
+                    train_loader.dataset.data.shape[3],
                 ),
             )
         }
@@ -71,7 +73,7 @@ def train_and_test(
 
     # Set up optimizer and loss
     weight = (
-        calculate_class_weights(train_loader).to(DEVICE)
+        calculate_class_weights(train_set).to(DEVICE)
         if use_class_weights
         else torch.ones((len(SAT1_STAGES_ACCURACY),))
     )
@@ -86,9 +88,6 @@ def train_and_test(
 
             # Train on batches in train_loader
             batch_losses = train(model, train_loader, opt, loss, tepoch)
-
-            # Shuffle data before next epoch
-            train_loader.shuffle()
 
             # Validate model and communicate results
             val_losses, val_accuracy = validate(model, val_loader, loss)
@@ -194,7 +193,7 @@ def k_fold_cross_validate(
 
 def train(
     model: torch.nn.Module,
-    train_loader: SAT1DataLoader,
+    train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     loss_function: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
@@ -203,7 +202,7 @@ def train(
 
     Args:
         model (torch.nn.Module): Model to train.
-        train_loader (SAT1DataLoader): Loader that contains data used.
+        train_loader (DataLoader): Loader that contains data used.
         optimizer (torch.optim.Optimizer): Optimizer used.
         loss_function (torch.nn.modules.loss._Loss): Loss function used.
         progress (tqdm, optional): tqdm instance to write progress to, will not write if not provided. Defaults to None.
@@ -241,14 +240,14 @@ def train(
 
 def validate(
     model: torch.nn.Module,
-    validation_loader: SAT1DataLoader,
+    validation_loader: DataLoader,
     loss_function: torch.nn.modules.loss._Loss,
 ) -> (list[float], float):
     """Validate model.
 
     Args:
         model (torch.nn.Module): Model to validate.
-        validation_loader (SAT1DataLoader): Loader containing validation data.
+        validation_loader (DataLoader): Loader containing validation data.
         loss_function (torch.nn.modules.loss._Loss): Loss function used.
 
     Returns:
@@ -280,24 +279,24 @@ def validate(
 
 
 def test(
-    model: torch.nn.Module, test_loader: SAT1DataLoader, writer: SummaryWriter
+    model: torch.nn.Module, test_loader: DataLoader, writer: SummaryWriter
 ) -> dict:
     model.eval()
     outputs = []
+    true_labels = []
     with torch.no_grad():
         for batch in test_loader:
-            data = batch[0].to(DEVICE)
+            data, labels = batch[0].to(DEVICE), batch[1]
 
             predictions = model(data)
             predicted_labels = torch.argmax(predictions, dim=1)
             outputs.append(predicted_labels)
+            true_labels.append(labels)
 
-    predicted_classes = [
-        test_loader.cat_labels[idx] for idx in torch.cat(outputs, dim=0)
-    ]
-
+    predicted_classes = torch.cat(outputs, dim=0)
+    true_classes = torch.cat(true_labels, dim=0)
     test_results = classification_report(
-        test_loader.full_labels, predicted_classes, output_dict=True
+        true_classes, predicted_classes.cpu(), output_dict=True
     )
 
     writer.add_text("Test results", pretty_json(test_results), global_step=0)
@@ -305,13 +304,10 @@ def test(
     return test_results
 
 
-def calculate_class_weights(generator) -> torch.Tensor:
-    counter = Counter(generator.full_labels.to_numpy())
-    total = sum(counter.values())
-    weights = []
-    for stage in SAT1_STAGES_ACCURACY:
-        weights.append(total / counter[stage])
-    return torch.FloatTensor(weights)
+def calculate_class_weights(set: torch.utils.data.Dataset) -> torch.Tensor:
+    occurrences = set.labels.unique(return_counts=True)
+    weights = sum(occurrences[1]) / occurrences[1]
+    return weights
 
 
 def get_folds(

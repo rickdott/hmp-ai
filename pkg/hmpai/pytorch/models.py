@@ -63,6 +63,49 @@ class SAT1Base(nn.Module):
         return x
 
 
+class SAT1Deep(nn.Module):
+    def __init__(self, n_channels, n_samples, n_classes):
+        super().__init__()
+        self.relu = nn.ReLU()
+        self.flatten = nn.Flatten()
+        # 17 = left over samples after convolutions
+        self.linear = nn.Linear(in_features=1024 * 17 * n_channels, out_features=512)
+        self.linear_final = nn.Linear(in_features=512, out_features=n_classes)
+        # Kernel order = (samples, channels)
+        self.maxpool = nn.MaxPool2d((2, 1))
+        self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(25, 1))
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(17, 1))
+        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(11, 1))
+        self.conv4 = nn.Conv2d(in_channels=256, out_channels=512, kernel_size=(5, 1))
+        self.conv5 = nn.Conv2d(in_channels=512, out_channels=1024, kernel_size=(3, 1))
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
+        x = self.conv1(x, mask_in=mask_in)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv4(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.conv5(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.flatten(x)
+        x = self.linear(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        x = self.linear_final(x)
+
+        return x
+
+
 ###############################################################################
 # BSD 3-Clause License
 #

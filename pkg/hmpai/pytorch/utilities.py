@@ -14,7 +14,6 @@ DEVICE = (
 
 def get_summary_str(model: torch.nn.Module, input_shape: tuple[int, ...]) -> str:
     # Converts model summary to string, to log to Tensorboard
-
     stats = str(summary(model, input_size=input_shape))
     stats = stats.replace('\n', '<br/>')
     return str(stats)
