@@ -15,9 +15,9 @@ from sklearn.metrics import classification_report
 
 def train_and_test(
     model: torch.nn.Module,
-    train: xr.Dataset,
-    test: xr.Dataset,
-    val: xr.Dataset = None,
+    train_set: xr.Dataset,
+    test_set: xr.Dataset,
+    val_set: xr.Dataset = None,
     batch_size: int = 16,
     epochs: int = 20,
     logs_path: Path = None,
@@ -34,10 +34,10 @@ def train_and_test(
     if gen_kwargs is None:
         gen_kwargs = dict()
 
-    train_loader = loader(train, batch_size, **gen_kwargs)
-    test_loader = loader(test, batch_size, **gen_kwargs)
-    if val is not None:
-        val_loader = loader(val, batch_size, **gen_kwargs)
+    train_loader = loader(train_set, batch_size, **gen_kwargs)
+    test_loader = loader(test_set, batch_size, **gen_kwargs)
+    if val_set is not None:
+        val_loader = loader(val_set, batch_size, **gen_kwargs)
 
     # Set up logging
     write_log = logs_path is not None
@@ -76,27 +76,37 @@ def train_and_test(
     stopper = EarlyStopper()
 
     for epoch in range(epochs):
-        batch_losses = train(model, train_loader, opt, loss)
+        with tqdm(total=len(train_loader), unit=" batch") as tepoch:
+            tepoch.set_description(f"Epoch {epoch + 1}")
 
-        # Shuffle data before next epoch
-        train_loader.shuffle()
+            batch_losses = train(model, train_loader, opt, loss, tepoch)
+            # Shuffle data before next epoch
+            train_loader.shuffle()
 
-        val_losses, val_accuracy = validate(model, val_loader, loss)
+            val_losses, val_accuracy = validate(model, val_loader, loss)
+            tepoch.set_postfix(
+                {
+                    "loss": np.mean(batch_losses),
+                    "val_loss": np.mean(val_losses),
+                    "val_accuracy": val_accuracy,
+                }
+            )
+            mean_train_loss = np.mean(batch_losses)
+            mean_val_loss = np.mean(val_losses)
 
-        mean_train_loss = np.mean(batch_losses)
-        mean_val_loss = np.mean(val_losses)
+            writer.add_scalar("loss", mean_train_loss, global_step=epoch)
+            writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
+            writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
+            writer.flush()
 
-        writer.add_scalar("train_loss", mean_train_loss)
-        writer.add_scalar("val_loss", mean_val_loss)
-        writer.add_scalar("val_accuracy", val_accuracy)
+            # Stop training if validation loss has not improved sufficiently
+            if stopper.check_stop(mean_val_loss):
+                break
 
-        print(
-            f"Epoch {epoch}, loss: {mean_train_loss}, val_loss: {mean_val_loss}, val_accuracy: {val_accuracy}"
-        )
-
-        # Stop training if validation loss has not improved sufficiently
-        if stopper.check_stop(mean_val_loss):
-            break
+    # Get best performing model
+    # Test model
+    results = test(model, test_loader, writer)
+    return results
 
 
 def train(
@@ -104,6 +114,7 @@ def train(
     train_loader: SAT1DataLoader,
     optimizer: torch.optim.Optimizer,
     loss_function: torch.nn.modules.loss._Loss,
+    progress: tqdm = None,
 ) -> list[float]:
     """Train model for all batches, one epoch.
 
@@ -112,6 +123,7 @@ def train(
         train_loader (SAT1DataLoader): Loader that contains data used.
         optimizer (torch.optim.Optimizer): Optimizer used.
         loss_function (torch.nn.modules.loss._Loss): Loss function used.
+        progress (tqdm, optional): tqdm instance to write progress to, will not write if not provided. Defaults to None.
 
     Returns:
         list[float]: List containing loss for each batch.
@@ -120,7 +132,7 @@ def train(
 
     loss_per_batch = []
 
-    for batch in tqdm(train_loader):
+    for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
 
@@ -130,6 +142,12 @@ def train(
 
         loss = loss_function(predictions, labels)
         loss_per_batch.append(loss.item())
+
+        # Update loss shown every 5 batches, otherwise it is illegible
+        if progress is not None:
+            progress.update(1)
+            if i % 5 == 0:
+                progress.set_postfix({'loss': round(np.mean(loss_per_batch), 5)})
 
         loss.backward()
 
@@ -161,7 +179,7 @@ def validate(
     total_instances = 0
 
     with torch.no_grad():
-        for batch in tqdm(validation_loader):
+        for batch in validation_loader:
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
 
@@ -181,9 +199,10 @@ def validate(
 def test(
     model: torch.nn.Module, test_loader: SAT1DataLoader, writer: SummaryWriter
 ) -> dict:
+    model.eval()
     outputs = []
     with torch.no_grad():
-        for batch in tqdm(test_loader):
+        for batch in test_loader:
             data = batch[0].to(DEVICE)
 
             predictions = model(data)
@@ -227,6 +246,6 @@ class EarlyStopper:
             self.counter = 0
         elif validation_loss > (self.min_validation_loss + self.min_delta):
             self.counter += 1
-            if self.counter >= self.patience:
+            if self.counter >= self.tolerance:
                 return True
         return False

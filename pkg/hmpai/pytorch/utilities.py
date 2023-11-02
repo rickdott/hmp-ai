@@ -16,7 +16,7 @@ def get_summary_str(model: torch.nn.Module, input_shape: tuple[int, ...]) -> str
     # Converts model summary to string, to log to Tensorboard
     lines = []
     stats = summary(model, input_size=input_shape)
-    return stats
+    return str(stats)
 
 
 def set_global_seed(seed: int) -> None:
