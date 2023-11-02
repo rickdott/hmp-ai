@@ -48,6 +48,7 @@ def train_and_test(
         path = logs_path / run_id
         writer = SummaryWriter(path)
 
+        # Log model summary
         to_write = {
             "Model summary": get_summary_str(
                 model,
@@ -75,14 +76,18 @@ def train_and_test(
     opt = torch.optim.NAdam(model.parameters())
     stopper = EarlyStopper()
 
+    lowest_mean_val_loss = np.inf
     for epoch in range(epochs):
         with tqdm(total=len(train_loader), unit=" batch") as tepoch:
             tepoch.set_description(f"Epoch {epoch + 1}")
 
+            # Train on batches in train_loader
             batch_losses = train(model, train_loader, opt, loss, tepoch)
+
             # Shuffle data before next epoch
             train_loader.shuffle()
 
+            # Validate model and communicate results
             val_losses, val_accuracy = validate(model, val_loader, loss)
             tepoch.set_postfix(
                 {
@@ -94,6 +99,19 @@ def train_and_test(
             mean_train_loss = np.mean(batch_losses)
             mean_val_loss = np.mean(val_losses)
 
+            # Save model checkpoint if validation loss is the lowest yet
+            if mean_val_loss < lowest_mean_val_loss:
+                lowest_mean_val_loss = mean_val_loss
+                if write_log:
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": opt.state_dict(),
+                            "loss": loss,
+                        },
+                        path / "checkpoint.pt",
+                    )
             writer.add_scalar("loss", mean_train_loss, global_step=epoch)
             writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
             writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
@@ -103,7 +121,14 @@ def train_and_test(
             if stopper.check_stop(mean_val_loss):
                 break
 
-    # Get best performing model
+    # Re-load best performing model
+    if write_log:
+        best_checkpoint = torch.load(path / "checkpoint.pt")
+        model.load_state_dict(best_checkpoint["model_state_dict"])
+        opt.load_state_dict(best_checkpoint["optimizer_state_dict"])
+        epoch = best_checkpoint["epoch"]
+        loss = best_checkpoint["loss"]
+
     # Test model
     results = test(model, test_loader, writer)
     return results
@@ -147,7 +172,7 @@ def train(
         if progress is not None:
             progress.update(1)
             if i % 5 == 0:
-                progress.set_postfix({'loss': round(np.mean(loss_per_batch), 5)})
+                progress.set_postfix({"loss": round(np.mean(loss_per_batch), 5)})
 
         loss.backward()
 

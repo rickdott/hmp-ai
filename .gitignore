@@ -7,6 +7,9 @@ data/*/*/*.fif
 models/*
 !models/README.md
 
+# Ignore model checkpoints
+*.pt
+
 !preprocessing/sat1/sat1_template.ipynb
 preprocessing/sat1/behavior/*.csv
 
