@@ -1,5 +1,5 @@
 from hmpai.utilities import pretty_json
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
 from hmpai.pytorch.utilities import DEVICE, set_global_seed, get_summary_str
 from hmpai.pytorch.generators import SAT1Dataset
@@ -18,31 +18,31 @@ from copy import deepcopy
 
 def train_and_test(
     model: torch.nn.Module,
-    train_set: xr.Dataset,
-    test_set: xr.Dataset,
-    val_set: xr.Dataset = None,
-    batch_size: int = 16,
+    train_set: Dataset,
+    test_set: Dataset,
+    val_set: Dataset = None,
+    batch_size: int = 128,
     epochs: int = 20,
     workers: int = 4,
     logs_path: Path = None,
     additional_info: dict = None,
     additional_name: str = None,
-    gen_kwargs: dict = None,
     use_class_weights: bool = True,
 ):
     set_global_seed(42)
-    # Create loaders
-    if gen_kwargs is None:
-        gen_kwargs = dict()
 
-    train_set = SAT1Dataset(train_set, **gen_kwargs)
-    train_loader = DataLoader(train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True)
-    test_set = SAT1Dataset(test_set, **gen_kwargs)
+    # Create loaders
+    train_loader = DataLoader(
+        train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
+    )
     # Do not shuffle test loader since testing should be the same always
-    test_loader = DataLoader(test_set, batch_size, shuffle=False, num_workers=workers, pin_memory=True)
+    test_loader = DataLoader(
+        test_set, batch_size, shuffle=False, num_workers=workers, pin_memory=True
+    )
     if val_set is not None:
-        val_set = SAT1Dataset(val_set, **gen_kwargs)
-        val_loader = DataLoader(val_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True)
+        val_loader = DataLoader(
+            val_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
+        )
 
     # Set up logging
     write_log = logs_path is not None
@@ -54,17 +54,9 @@ def train_and_test(
         writer = SummaryWriter(path)
 
         # Log model summary
-        to_write = {
-            "Model summary": get_summary_str(
-                model,
-                (
-                    batch_size,
-                    1,
-                    train_loader.dataset.data.shape[2],
-                    train_loader.dataset.data.shape[3],
-                ),
-            )
-        }
+        shape = list(train_loader.dataset.data.shape)
+        shape[0] = batch_size
+        to_write = {"Model summary": get_summary_str(model, shape)}
         if additional_info:
             to_write.update(additional_info)
 
@@ -141,12 +133,14 @@ def k_fold_cross_validate(
     model_kwargs: dict,
     data: xr.Dataset,
     k: int,
-    batch_size: int = 16,
+    batch_size: int = 128,
     epochs: int = 20,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
     gen_kwargs: dict = None,
     train_kwargs: dict = None,
 ):
+    if gen_kwargs is None:
+        gen_kwargs = dict()
     results = []
     set_global_seed(42)
     folds = get_folds(data, k)
@@ -166,6 +160,9 @@ def k_fold_cross_validate(
         train_data = normalization_fn(train_data, train_min, train_max)
         test_data = normalization_fn(test_data, train_min, train_max)
 
+        train_dataset = SAT1Dataset(train_data, **gen_kwargs)
+        test_dataset = SAT1Dataset(test_data, **gen_kwargs)
+
         # Resets model every fold
         model_instance = model(**model_kwargs).to(DEVICE)
 
@@ -176,12 +173,11 @@ def k_fold_cross_validate(
             )
         result = train_and_test(
             model_instance,
-            train_data,
-            test_data,
-            val_set=test_data,
+            train_dataset,
+            test_dataset,
+            val_set=test_dataset,
             batch_size=batch_size,
             epochs=epochs,
-            gen_kwargs=gen_kwargs,
             **train_kwargs,
         )
         print(f"Fold {i_fold + 1}: Accuracy: {result['accuracy']}")
