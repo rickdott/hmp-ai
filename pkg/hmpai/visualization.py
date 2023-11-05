@@ -4,6 +4,43 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
+import captum
+from hmpai.pytorch.generators import SAT1Dataset
+from hmpai.pytorch.utilities import DEVICE
+from torch.utils.data import DataLoader
+import torch
+from hmpai.utilities import MASKING_VALUE
+
+
+def add_attribution(
+    dataset: xr.Dataset, analyzer: captum.attr.Attribution
+) -> xr.Dataset:
+    test_set = preprocess(dataset)
+    test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
+    test_set = test_set.assign(
+        analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
+    )
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    batches = len(test_loader)
+
+    # Batch-wise analyzing of data and adding analysis to the dataset
+    for i, batch in enumerate(test_loader):
+        print(f"Batch: {i + 1}/{batches}")
+        batch_data = batch[0].to(DEVICE)
+        baselines = torch.clone(batch_data)
+        mask = baselines != MASKING_VALUE
+        baselines[mask] = 0
+        batch_analysis = analyzer.attribute(
+            batch_data,
+            baselines=baselines,
+            n_steps=50,
+            method="riemann_trapezoid",
+            target=batch[1].to(DEVICE),
+            internal_batch_size=128,
+        )
+        test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
+            batch_analysis
+        )
 
 
 # def add_analysis(
