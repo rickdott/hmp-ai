@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 import xarray as xr
 import torch
+import numpy as np
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
 
 
@@ -9,7 +10,7 @@ class SAT1Dataset(Dataset):
         self, dataset: xr.Dataset, shape_topological=False, do_preprocessing=True
     ):
         # Alphabetical ordering of labels used for categorization of labels
-        self.cat_labels = SAT1_STAGES_ACCURACY
+        label_lookup = {label: idx for idx, label in enumerate(SAT1_STAGES_ACCURACY)}
 
         # Preprocess data
         if do_preprocessing:
@@ -19,9 +20,9 @@ class SAT1Dataset(Dataset):
         self.data = torch.as_tensor(dataset.data.to_numpy(), dtype=torch.float32)[
             :, None, :, :
         ]
-        self.labels = torch.as_tensor(
-            [self.cat_labels.index(label) for label in dataset.labels]
-        )
+        vectorized_label_to_index = np.vectorize(lambda x: label_lookup.get(x, -1))
+        indices = xr.apply_ufunc(vectorized_label_to_index, dataset.labels)
+        self.labels = torch.as_tensor(indices.values, dtype=torch.long)
 
     def __len__(self):
         return len(self.data)

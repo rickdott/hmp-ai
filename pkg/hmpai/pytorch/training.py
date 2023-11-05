@@ -1,7 +1,13 @@
 from hmpai.utilities import pretty_json
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
-from hmpai.pytorch.utilities import DEVICE, set_global_seed, get_summary_str
+from hmpai.pytorch.utilities import (
+    DEVICE,
+    set_global_seed,
+    get_summary_str,
+    save_model,
+    load_model,
+)
 from hmpai.pytorch.generators import SAT1Dataset
 import torch
 from hmpai.data import SAT1_STAGES_ACCURACY
@@ -97,14 +103,12 @@ def train_and_test(
             if mean_val_loss < lowest_mean_val_loss:
                 lowest_mean_val_loss = mean_val_loss
                 if write_log:
-                    torch.save(
-                        {
-                            "epoch": epoch,
-                            "model_state_dict": model.state_dict(),
-                            "optimizer_state_dict": opt.state_dict(),
-                            "loss": loss,
-                        },
+                    save_model(
                         path / "checkpoint.pt",
+                        epoch,
+                        model.state_dict(),
+                        opt.state_dict(),
+                        loss,
                     )
             writer.add_scalar("loss", mean_train_loss, global_step=epoch)
             writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
@@ -117,7 +121,7 @@ def train_and_test(
 
     # Re-load best performing model
     if write_log:
-        best_checkpoint = torch.load(path / "checkpoint.pt")
+        best_checkpoint = load_model(path / "checkpoint.pt")
         model.load_state_dict(best_checkpoint["model_state_dict"])
         opt.load_state_dict(best_checkpoint["optimizer_state_dict"])
         epoch = best_checkpoint["epoch"]
@@ -166,11 +170,16 @@ def k_fold_cross_validate(
         # Resets model every fold
         model_instance = model(**model_kwargs).to(DEVICE)
 
-        # Train and test model
+        # Add fold info to name to compare conditions across folds
         if train_kwargs["additional_name"]:
-            train_kwargs["additional_name"] = (
-                train_kwargs["additional_name"] + f"_fold{i_fold + 1}"
-            )
+            additional_name = train_kwargs["additional_name"]
+            if "fold" in additional_name:
+                additional_name = additional_name[:-1] + str(i_fold + 1)
+            else:
+                additional_name = additional_name + f"_fold{i_fold + 1}"
+            train_kwargs["additional_name"] = additional_name
+
+        # Train and test model
         result = train_and_test(
             model_instance,
             train_dataset,
