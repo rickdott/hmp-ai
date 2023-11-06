@@ -10,10 +10,11 @@ from hmpai.pytorch.utilities import DEVICE
 from torch.utils.data import DataLoader
 import torch
 from hmpai.utilities import MASKING_VALUE
+from tqdm.notebook import tqdm
 
 
 def add_attribution(
-    dataset: xr.Dataset, analyzer: captum.attr.Attribution
+    dataset: xr.Dataset, analyzer: captum.attr.Attribution, model: torch.nn.Module
 ) -> xr.Dataset:
     test_set = preprocess(dataset)
     test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
@@ -21,88 +22,30 @@ def add_attribution(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
     )
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-    batches = len(test_loader)
 
     # Batch-wise analyzing of data and adding analysis to the dataset
-    for i, batch in enumerate(test_loader):
-        print(f"Batch: {i + 1}/{batches}")
+    for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
+        # print(f"Batch: {i + 1}/{batches}")
         batch_data = batch[0].to(DEVICE)
         baselines = torch.clone(batch_data)
         mask = baselines != MASKING_VALUE
         baselines[mask] = 0
+        baselines = baselines.to(DEVICE)
+        target = torch.argmax(model(batch_data), dim=1)
         batch_analysis = analyzer.attribute(
             batch_data,
             baselines=baselines,
-            n_steps=50,
+            n_steps=100,
             method="riemann_trapezoid",
-            target=batch[1].to(DEVICE),
-            internal_batch_size=128,
+            # Change to batch[1] if true values should be used instead of model predictions
+            target=target,
+            internal_batch_size=512,
         )
         test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
-            batch_analysis
+            batch_analysis.cpu()
         )
 
-
-# def add_analysis(
-#     dataset: xr.Dataset, analyzer: innvestigate.analyzer.base.AnalyzerBase
-# ) -> xr.Dataset:
-#     """Adds innvestigate analysis using the given analyzer to the dataset. New 'analysis' data dimension is created in the dataset.
-
-#     Args:
-#         dataset (xr.Dataset): Dataset to which analysis should be added.
-#         analyzer (innvestigate.analyzer.base.AnalyzerBase): Analyzer that is used to analyze the data.
-
-#     Returns:
-#         xr.Dataset: Dataset with added analysis.
-#     """
-#     test_set = preprocess(dataset)
-#     test_set = test_set.assign(
-#         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
-#     )
-#     test_gen = SAT1DataGenerator(test_set, do_preprocessing=False)
-
-#     # Batch-wise analyzing of data and adding analysis to the dataset
-#     for i, batch in enumerate(test_gen):
-#         batch_analysis = analyzer.analyze(np.expand_dims(batch[0].data, axis=3))
-#         test_set.analysis[
-#             i * len(batch[1]) : (i + 1) * len(batch[1]), :, :
-#         ] = np.squeeze(batch_analysis)
-#     # TODO: Last few samples have all 0 as analysis since batch is not created for them
-#     return test_set
-
-
-# def add_gradient_analysis(
-#     dataset: xr.Dataset, analyzer: alibi.api.interfaces.Explainer
-# ) -> xr.Dataset:
-#     """Adds alibi analysis using the given analyzer to the dataset. New 'analysis' data dimension is created in the dataset.
-
-#     Args:
-#         dataset (xr.Dataset): Dataset to which analysis should be added.
-#         analyzer (alibi.api.interfaces.Explainer): Analyzer that is used to analyze the data.
-
-#     Returns:
-#         xr.Dataset: Dataset with added analysis.
-#     """
-#     test_set = preprocess(dataset)
-#     test_set = test_set.assign(
-#         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
-#     )
-#     test_gen = SAT1DataGenerator(test_set, do_preprocessing=False)
-#     batches = len(test_gen)
-
-#     # Batch-wise analyzing of data and adding analysis to the dataset
-#     for i, batch in enumerate(test_gen):
-#         print(f"Batch: {i + 1}/{batches}")
-#         baselines = np.copy(batch[0].data)
-#         baselines[np.where(batch[0].data != MASKING_VALUE)] = 0
-#         batch_analysis = analyzer.explain(batch[0].data, baselines=baselines)
-#         test_set.analysis[
-#             i * len(batch[1]) : (i + 1) * len(batch[1]), :, :
-#         ] = np.squeeze(batch_analysis.data["attributions"][0])
-#     # TODO: Last few samples have all 0 as analysis since batch is not created for them
-#     nan_indices = np.isnan(test_set.data.where(test_set.data != MASKING_VALUE))
-#     test_set["analysis"] = test_set.analysis.where(~nan_indices, 0)
-#     return test_set
+    return test_set
 
 
 def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
@@ -248,5 +191,34 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
             sensors=False,
             contours=6,
         )
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
+    f, ax = plt.subplots(
+        nrows=1, ncols=len(SAT1_STAGES_ACCURACY), figsize=(12, 3), sharey=True, sharex=True
+    )
+
+    time_points = np.linspace(0, 100, 100)
+    for i, label in enumerate(SAT1_STAGES_ACCURACY):
+        subset = dataset.sel(labels=label)
+        nan_indices = np.isnan(subset.data.where(subset.data != MASKING_VALUE)).argmax(
+            dim=["samples", "channels"]
+        )
+        interpolated = []
+        for sample, nan_index in zip(subset.analysis, nan_indices["samples"]):
+            sequence = sample.mean(dim="channels")[0 : nan_index.item()]
+            if len(sequence) == 0:
+                continue
+            origin_time_points = np.linspace(0, 100, num=len(sequence))
+            interpolated_sequence = np.interp(time_points, origin_time_points, sequence)
+            interpolated.append(abs(interpolated_sequence))
+        ax[i].plot(np.mean(interpolated, axis=0))
+        ax[i].set_title(f"{label}", fontsize=10)
+        ax[i].set_yticks(np.arange(0.0, 0.1, 0.02))
+    # ax[2].text(0, -0.005, 'Linear interpolation\nof stage length', va='bottom', ha='center')
+    ax[0].set_ylabel("Model Attention")
+    ax[2].set_xlabel("Stage duration (%)")
     plt.tight_layout()
     plt.show()
