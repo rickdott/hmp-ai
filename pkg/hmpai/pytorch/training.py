@@ -35,7 +35,26 @@ def train_and_test(
     additional_info: dict = None,
     additional_name: str = None,
     use_class_weights: bool = True,
-):
+) -> dict:
+    """
+    Trains and tests a PyTorch model on the given datasets.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to train and test.
+        train_set (Dataset): The training dataset.
+        test_set (Dataset): The testing dataset.
+        val_set (Dataset, optional): The validation dataset. Defaults to None.
+        batch_size (int, optional): The batch size to use for training and testing. Defaults to 128.
+        epochs (int, optional): The number of epochs to train for. Defaults to 20.
+        workers (int, optional): The number of worker threads to use for loading data. Defaults to 4.
+        logs_path (Path, optional): The path to save logs to. Defaults to None.
+        additional_info (dict, optional): Additional information to log. Defaults to None.
+        additional_name (str, optional): Additional name to append to the log directory. Defaults to None.
+        use_class_weights (bool, optional): Whether to use class weights for the loss function. Defaults to True.
+
+    Returns:
+        dict: A dictionary containing the test results.
+    """
     set_global_seed(42)
 
     # Create loaders
@@ -143,7 +162,25 @@ def k_fold_cross_validate(
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
     gen_kwargs: dict = None,
     train_kwargs: dict = None,
-):
+) -> list[dict]:
+    """
+    Performs k-fold cross-validation on a given PyTorch model using the provided data.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to train and test.
+        model_kwargs (dict): The keyword arguments to pass to the model constructor.
+        data (xr.Dataset): The dataset to use for training and testing.
+        k (int): The number of folds to use for cross-validation.
+        batch_size (int, optional): The batch size to use for training and testing. Defaults to 128.
+        epochs (int, optional): The number of epochs to train the model for. Defaults to 20.
+        normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional):
+            The function to use for normalizing the data. Defaults to norm_dummy.
+        gen_kwargs (dict, optional): The keyword arguments to pass to the SAT1Dataset constructor. Defaults to None.
+        train_kwargs (dict, optional): The keyword arguments to pass to the train_and_test function. Defaults to None.
+
+    Returns:
+        list[dict]: A list of dictionaries containing the results of each fold.
+    """
     if gen_kwargs is None:
         gen_kwargs = dict()
     results = []
@@ -289,6 +326,17 @@ def validate(
 def test(
     model: torch.nn.Module, test_loader: DataLoader, writer: SummaryWriter
 ) -> dict:
+    """
+    Test the PyTorch model on the given test data and return the classification report.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to test.
+        test_loader (DataLoader): The DataLoader containing the test data.
+        writer (SummaryWriter): The SummaryWriter to use for logging.
+
+    Returns:
+        dict: The classification report as a dictionary.
+    """
     model.eval()
     outputs = []
     true_labels = []
@@ -313,6 +361,15 @@ def test(
 
 
 def calculate_class_weights(set: torch.utils.data.Dataset) -> torch.Tensor:
+    """
+    Calculates class weights for a given dataset.
+
+    Args:
+        set (torch.utils.data.Dataset): The dataset to calculate class weights for.
+
+    Returns:
+        torch.Tensor: The calculated class weights.
+    """
     occurrences = set.labels.unique(return_counts=True)
     weights = sum(occurrences[1]) / occurrences[1]
     return weights

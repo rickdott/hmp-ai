@@ -230,6 +230,19 @@ def preprocess(
 
 
 def reshape(dataset: xr.Dataset) -> xr.Dataset:
+    """
+    Reshape the input dataset to a 4D array with dimensions (index, x, y, samples).
+
+    Parameters:
+    -----------
+    dataset : xr.Dataset
+        Input dataset to be reshaped.
+
+    Returns:
+    --------
+    xr.Dataset
+        Reshaped dataset with dimensions (index, x, y, samples).
+    """
     # Create array full of 'empty' values (999)
     sparse_height = CHANNELS_2D.shape[0]
     sparse_width = CHANNELS_2D.shape[1]
@@ -263,6 +276,46 @@ def reshape(dataset: xr.Dataset) -> xr.Dataset:
 
 
 class StageFinder:
+    """
+    A class used to fit and label a HMP model on epoched EEG data.
+
+    Attributes
+    ----------
+    epoch_data : xarray.Dataset
+        The epoched EEG data.
+    verbose : bool
+        Whether to print verbose output.
+    labels : list of str
+        The labels for each stage.
+    conditions : list of dict
+        The conditions for each stage.
+    condition_variable : str
+        The variable used to determine the condition.
+    cpus : int
+        The number of CPUs to use for fitting the model.
+    fit_function : str
+        The name of the function used to fit the model.
+    fit_args : dict
+        The arguments used to fit the model.
+    n_comp : int
+        The number of principal components to use for transforming the data.
+    models : list of hmp.models.hmp
+        The HMP models fitted for each condition.
+    fits : list of hmp.models.fitted
+        The fitted HMP models for each condition.
+    hmp_data : list of np.ndarray
+        The transformed data for each condition.
+
+    Methods
+    -------
+    fit_model()
+        Fits the HMP model on the dataset.
+    label_model()
+        Labels the dataset using the fitted HMP model.
+    visualize_model(positions)
+        Visualizes the HMP model.
+    """
+
     def __init__(
         self,
         epoched_data_path,

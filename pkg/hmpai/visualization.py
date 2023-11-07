@@ -16,6 +16,18 @@ from tqdm.notebook import tqdm
 def add_attribution(
     dataset: xr.Dataset, analyzer: captum.attr.Attribution, model: torch.nn.Module
 ) -> xr.Dataset:
+    """
+    Analyzes the given dataset using the provided attribution method and model, and adds the analysis
+    results to the dataset.
+
+    Args:
+        dataset (xr.Dataset): The dataset to analyze.
+        analyzer (captum.attr.Attribution): The attribution method to use for analysis.
+        model (torch.nn.Module): The model to use for analysis.
+
+    Returns:
+        xr.Dataset: The analyzed dataset with the analysis results added.
+    """
     test_set = preprocess(dataset)
     test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
     test_set = test_set.assign(
@@ -49,6 +61,16 @@ def add_attribution(
 
 
 def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
+    """
+    Plots the maximum activation per label for a given dataset.
+
+    Args:
+        dataset (xr.Dataset): The dataset to plot.
+        positions (Info): The positions of the sensors.
+
+    Returns:
+        None
+    """
     f, ax = plt.subplots(nrows=3, ncols=len(SAT1_STAGES_ACCURACY), figsize=(6, 3))
 
     for i, label in enumerate(SAT1_STAGES_ACCURACY):
@@ -110,6 +132,20 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
 
 
 def plot_mean_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
+    """
+    Plots the mean activation per label.
+
+    Parameters:
+    -----------
+    dataset : xr.Dataset
+        The dataset containing the activations.
+    positions : dict
+        The positions of the sensors.
+
+    Returns:
+    --------
+    None
+    """
     f, ax = plt.subplots(nrows=1, ncols=len(SAT1_STAGES_ACCURACY), figsize=(6, 3))
 
     for i, label in enumerate(SAT1_STAGES_ACCURACY):
@@ -134,6 +170,16 @@ def plot_mean_activation_per_label(dataset: xr.Dataset, positions: Info) -> None
 
 
 def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
+    """
+    Plots the raw EEG activation, model attention, and combined activation for a single trial.
+
+    Args:
+        sample (xr.Dataset): The EEG data for a single trial.
+        positions (Info): The positions of the EEG sensors.
+
+    Returns:
+        None
+    """
     nan_index = np.isnan(sample.data.where(sample.data != 999)).argmax(
         dim=["samples", "channels"]
     )
@@ -196,6 +242,15 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
 
 
 def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
+    """
+    Plots the model attention over stage duration for the given dataset.
+
+    Parameters:
+    dataset (xr.Dataset): The dataset containing the data to be plotted.
+
+    Returns:
+    None
+    """
     f, ax = plt.subplots(
         nrows=1, ncols=len(SAT1_STAGES_ACCURACY), figsize=(12, 3), sharey=True, sharex=True
     )

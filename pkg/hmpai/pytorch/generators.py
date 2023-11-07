@@ -6,6 +6,19 @@ from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
 
 
 class SAT1Dataset(Dataset):
+    """
+    PyTorch dataset for the SAT-1 dataset.
+
+    Args:
+        dataset (xr.Dataset): The input dataset.
+        shape_topological (bool): Whether to shape the data topologically.
+        do_preprocessing (bool): Whether to preprocess the data.
+
+    Attributes:
+        data (torch.Tensor): The preprocessed data.
+        labels (torch.Tensor): The labels for the data.
+    """
+
     def __init__(
         self, dataset: xr.Dataset, shape_topological=False, do_preprocessing=True
     ):
