@@ -9,9 +9,10 @@ class SAT1Mlp(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
-        self.linear1 = nn.Linear(in_features=n_channels * n_samples, out_features=128)
-        self.linear2 = nn.Linear(in_features=128, out_features=64)
-        self.linear3 = nn.Linear(in_features=64, out_features=32)
+        self.linear1 = nn.LazyLinear(out_features=128)
+        self.linear2 = nn.LazyLinear(out_features=64)
+        self.linear3 = nn.LazyLinear(out_features=32)
+
         self.linear_final = nn.Linear(in_features=32, out_features=n_classes)
 
     def forward(self, x):
@@ -33,8 +34,9 @@ class SAT1Base(nn.Module):
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
         # 16 = left over samples after convolutions
-        self.linear = nn.Linear(in_features=256 * 16 * n_channels, out_features=128)
-        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=128)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
+
         # Kernel order = (samples, channels)
         self.maxpool = nn.MaxPool2d((2, 1))
         self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(5, 1))
@@ -69,8 +71,8 @@ class SAT1Topological(nn.Module):
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
         # 16 = left over samples after convolutions
-        self.linear = nn.Linear(in_features=256 * 16 * n_x * n_y, out_features=128)
-        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=128)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
         # Kernel order = (samples, x, y)
         self.maxpool = nn.MaxPool3d((2, 1, 1))
         self.conv1 = PartialConv3d(
@@ -107,8 +109,8 @@ class SAT1TopologicalConv(nn.Module):
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
         # 16, 4, 1 = left over dimensions after convolutions
-        self.linear = nn.Linear(in_features=256 * 16 * 4 * 1, out_features=128)
-        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=128)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
         # Kernel order = (samples, x, y)
         self.maxpool = nn.MaxPool3d((2, 1, 1))
         self.conv1 = PartialConv3d(
@@ -145,13 +147,13 @@ class SAT1Deep(nn.Module):
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
         # 19 = left over samples after convolutions
-        self.linear = nn.Linear(in_features=1024 * 19 * n_channels, out_features=512)
-        self.linear_final = nn.Linear(in_features=512, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=512)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
         # Kernel order = (samples, channels)
         self.maxpool = nn.MaxPool2d((2, 1))
-        self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(25, 1))
-        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(17, 1))
-        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(11, 1))
+        self.conv1 = PartialConv2d(in_channels=1, out_channels=64, kernel_size=(25, 5))
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(17, 3))
+        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(11, 3))
         self.conv4 = nn.Conv2d(in_channels=256, out_channels=512, kernel_size=(5, 1))
         self.conv5 = nn.Conv2d(in_channels=512, out_channels=1024, kernel_size=(3, 1))
         self.dropout = nn.Dropout(0.5)
@@ -188,8 +190,8 @@ class SAT1GRU(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
-        self.linear = nn.Linear(in_features=256, out_features=128)
-        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=128)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
 
     def forward(self, x):
         x = torch.squeeze(x)
@@ -224,8 +226,8 @@ class SAT1LSTM(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         self.gru = nn.LSTM(input_size=n_channels, hidden_size=256, batch_first=True)
-        self.linear = nn.Linear(in_features=256, out_features=128)
-        self.linear_final = nn.Linear(in_features=128, out_features=n_classes)
+        self.linear = nn.LazyLinear(out_features=128)
+        self.linear_final = nn.LazyLinear(out_features=n_classes)
 
     def forward(self, x):
         x = torch.squeeze(x)
