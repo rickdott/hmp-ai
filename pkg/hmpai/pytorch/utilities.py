@@ -30,7 +30,6 @@ def set_global_seed(seed: int) -> None:
 def save_model(
     path: Path,
     epoch: int,
-    model: torch.nn.Module,
     model_state_dict: dict,
     optimizer_state_dict: dict,
     loss: torch.nn.modules.loss._Loss,

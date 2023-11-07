@@ -20,6 +20,7 @@ from sklearn.metrics import classification_report
 from typing import Callable
 from hmpai.normalization import norm_dummy
 from copy import deepcopy
+import re
 
 
 def train_and_test(
@@ -176,7 +177,9 @@ def k_fold_cross_validate(
             if "fold" in additional_name:
                 additional_name = additional_name[:-1] + str(i_fold + 1)
             else:
-                additional_name = additional_name + f"_fold{i_fold + 1}"
+                additional_name = re.sub(
+                    "_fold[0-9]*", f"_fold{i_fold + 1}", additional_name
+                )
             train_kwargs["additional_name"] = additional_name
 
         # Train and test model

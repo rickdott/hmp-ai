@@ -144,8 +144,8 @@ class SAT1Deep(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
-        # 17 = left over samples after convolutions
-        self.linear = nn.Linear(in_features=1024 * 17 * n_channels, out_features=512)
+        # 19 = left over samples after convolutions
+        self.linear = nn.Linear(in_features=1024 * 19 * n_channels, out_features=512)
         self.linear_final = nn.Linear(in_features=512, out_features=n_classes)
         # Kernel order = (samples, channels)
         self.maxpool = nn.MaxPool2d((2, 1))
@@ -173,6 +173,7 @@ class SAT1Deep(nn.Module):
         x = self.conv5(x)
         x = self.relu(x)
         x = self.maxpool(x)
+        # Check shape of x here to determine # samples
         x = self.flatten(x)
         x = self.linear(x)
         x = self.relu(x)
