@@ -194,12 +194,14 @@ class SAT1GRU(nn.Module):
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 
     def forward(self, x):
-        x = torch.squeeze(x)
+        # Shape = [batch_size, 1, samples, channels]
+        x = torch.squeeze(x, dim=1)
         samples = x.shape[1]
         # Find lengths of sequences
         values, lengths = torch.max((x == MASKING_VALUE).int(), dim=1)
         lengths = lengths * values - (1 - values)
         lengths = lengths.masked_fill_(values == 0, samples)
+        # Goes wrong when dims is 1? When does this happen
         lengths = lengths[:, 0]
         x = nn.utils.rnn.pack_padded_sequence(
             x, lengths.cpu(), enforce_sorted=False, batch_first=True
