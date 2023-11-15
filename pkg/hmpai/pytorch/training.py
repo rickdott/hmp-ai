@@ -35,6 +35,7 @@ def train_and_test(
     additional_info: dict = None,
     additional_name: str = None,
     use_class_weights: bool = True,
+    seed: int = 42,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -51,11 +52,12 @@ def train_and_test(
         additional_info (dict, optional): Additional information to log. Defaults to None.
         additional_name (str, optional): Additional name to append to the log directory. Defaults to None.
         use_class_weights (bool, optional): Whether to use class weights for the loss function. Defaults to True.
+        seed (int, optional): The seed to use for reproducibility. Defaults to 42.
 
     Returns:
         dict: A dictionary containing the test results.
     """
-    set_global_seed(42)
+    set_global_seed(seed)
 
     # Create loaders
     train_loader = DataLoader(
@@ -162,6 +164,7 @@ def k_fold_cross_validate(
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
     gen_kwargs: dict = None,
     train_kwargs: dict = None,
+    seed: int = 42,
 ) -> list[dict]:
     """
     Performs k-fold cross-validation on a given PyTorch model using the provided data.
@@ -177,6 +180,7 @@ def k_fold_cross_validate(
             The function to use for normalizing the data. Defaults to norm_dummy.
         gen_kwargs (dict, optional): The keyword arguments to pass to the SAT1Dataset constructor. Defaults to None.
         train_kwargs (dict, optional): The keyword arguments to pass to the train_and_test function. Defaults to None.
+        seed (int, optional): The seed to use for reproducibility. Defaults to 42.
 
     Returns:
         list[dict]: A list of dictionaries containing the results of each fold.
@@ -184,7 +188,7 @@ def k_fold_cross_validate(
     if gen_kwargs is None:
         gen_kwargs = dict()
     results = []
-    set_global_seed(42)
+    set_global_seed(seed)
     folds = get_folds(data, k)
     for i_fold in range(len(folds)):
         # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used

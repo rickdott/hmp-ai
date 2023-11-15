@@ -438,7 +438,7 @@ class StageFinder:
                 positions,
                 condition[1],
                 times_to_display=np.mean(condition[1].ends - condition[1].starts),
-                max_time=100,
+                max_time=int(max([len(fit.samples) for fit in self.fits]) / 2),
                 figsize=(10, 1),
                 ylabels={"Condition": [condition[3]]},
             )
