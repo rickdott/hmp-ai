@@ -402,6 +402,10 @@ class StageFinder:
 
         else:
             print("Fitting HMP model")
+            # Determine amount of expected events from number of supplied labels
+            # Subtract 1 since pre-attentive stage does not have a peak
+            if self.fit_function == "fit_single":
+                self.fit_args["n_events"] = len(self.labels) - 1
             fit = self.__fit_model__(hmp_data)
             self.fits.append(fit)
             self.hmp_data.append(hmp_data)
