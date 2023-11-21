@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 import torch
 from hmpai.utilities import MASKING_VALUE
 from tqdm.notebook import tqdm
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 
 def add_attribution(
@@ -252,7 +254,11 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
     None
     """
     f, ax = plt.subplots(
-        nrows=1, ncols=len(SAT1_STAGES_ACCURACY), figsize=(12, 3), sharey=True, sharex=True
+        nrows=1,
+        ncols=len(SAT1_STAGES_ACCURACY),
+        figsize=(12, 3),
+        sharey=True,
+        sharex=True,
     )
 
     time_points = np.linspace(0, 100, 100)
@@ -276,4 +282,15 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
     ax[0].set_ylabel("Model Attention")
     ax[2].set_xlabel("Stage duration (%)")
     plt.tight_layout()
+    plt.show()
+
+
+def plot_confusion_matrix(true: torch.Tensor, pred: torch.Tensor, labels: list) -> None:
+    cm = confusion_matrix(true, pred)
+    plt.figure(figsize=(5, 5))
+    sns.heatmap(cm, annot=True, fmt="d")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.xticks(ticks=np.arange(0.5, len(labels) + 0.5), labels=labels, rotation=90)
+    plt.yticks(ticks=np.arange(0.5, len(labels) + 0.5), labels=labels, rotation=0)
     plt.show()

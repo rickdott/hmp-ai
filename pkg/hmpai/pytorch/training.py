@@ -151,7 +151,7 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    results = test(model, test_loader, writer)
+    results, _, _ = test(model, test_loader, writer)
     return results
 
 
@@ -341,6 +341,8 @@ def test(
 
     Returns:
         dict: The classification report as a dictionary.
+        torch.Tensor: The predicted classes.
+        torch.Tensor: The true classes.
     """
     model.eval()
     outputs = []
@@ -362,7 +364,7 @@ def test(
     if writer is not None:
         writer.add_text("Test results", pretty_json(test_results), global_step=0)
 
-    return test_results
+    return test_results, predicted_classes, true_classes
 
 
 def calculate_class_weights(set: torch.utils.data.Dataset) -> torch.Tensor:
