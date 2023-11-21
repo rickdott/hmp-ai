@@ -10,7 +10,7 @@ from hmpai.pytorch.utilities import (
 )
 from hmpai.pytorch.generators import SAT1Dataset
 import torch
-from hmpai.data import SAT1_STAGES_ACCURACY
+from hmpai.data import SAT1_STAGES_ACCURACY, AR_STAGES
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 import xarray as xr
@@ -93,10 +93,11 @@ def train_and_test(
 
     # Set up optimizer and loss
     weight = (
-        calculate_class_weights(train_set).to(DEVICE)
+        calculate_class_weights(train_set)
         if use_class_weights
-        else torch.ones((len(SAT1_STAGES_ACCURACY),))
+        else torch.ones((len(AR_STAGES),))
     )
+    weight = weight.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight)
     opt = torch.optim.NAdam(model.parameters())
     stopper = EarlyStopper()
@@ -328,7 +329,7 @@ def validate(
 
 
 def test(
-    model: torch.nn.Module, test_loader: DataLoader, writer: SummaryWriter
+    model: torch.nn.Module, test_loader: DataLoader, writer: SummaryWriter = None
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -358,8 +359,8 @@ def test(
     test_results = classification_report(
         true_classes, predicted_classes.cpu(), output_dict=True
     )
-
-    writer.add_text("Test results", pretty_json(test_results), global_step=0)
+    if writer is not None:
+        writer.add_text("Test results", pretty_json(test_results), global_step=0)
 
     return test_results
 

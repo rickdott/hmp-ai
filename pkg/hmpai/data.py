@@ -375,7 +375,7 @@ class StageFinder:
         # will ask in a pop-up how many components to keep
         # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
         print("Transforming epoched data to principal component (PC) space")
-        hmp_data = hmp.utils.transform_data(self.epoch_data, n_comp=4)
+        hmp_data = hmp.utils.transform_data(self.epoch_data)
 
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
@@ -476,6 +476,8 @@ class StageFinder:
 
     def __label_model__(self, model, condition=None):
         n_events = len(model.event)
+        if condition == 'No condition':
+            condition = None
         labels = self.labels if condition is None else self.labels[condition]
 
         if len(labels) - 1 != n_events:
@@ -522,7 +524,7 @@ class StageFinder:
                 locations[0] = 0
             # Skip epoch if bumps are predicted to be at the same time
             unique, counts = np.unique(locations, return_counts=True)
-            if unique[counts > 1]:
+            if np.any(counts > 1):
                 continue
             # Skip epoch if bump order is not sorted, can occur if probability mass is greater after the max probability of an earlier bump
             if not np.all(locations[:-1] <= locations[1:]):
@@ -537,7 +539,7 @@ class StageFinder:
             # Find first sample from the end for combination of participant + epoch where the value is NaN
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
-                participant=data[0], epochs=epoch, channels="Fp1"
+                participant=data[0], epochs=epoch, channels=self.epoch_data.channels[0]
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
             RT_sample = (

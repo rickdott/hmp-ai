@@ -17,6 +17,42 @@ CHANNELS_2D = np.array(
     dtype=str,
 )
 
+# Channel order of AR experiment electrodes, re-ordered to be as similar as possible to SAT1
+REINDEX_CHANNELS_AR = [
+    "FP1",
+    "FP2",
+    "FPZ",
+    "F7",
+    "F3",
+    "FZ",
+    "F4",
+    "F8",
+    "T7",
+    "C3",
+    "CZ",
+    "C4",
+    "T8",
+    "P7",
+    "P3",
+    "PZ",
+    "P4",
+    "P8",
+    "O1",
+    "O2",
+    "FC3",
+    "FCZ",
+    "FC4",
+    "FT7",
+    "FT8",
+    "TP7",
+    "CP3",
+    "CPZ",
+    "CP4",
+    "TP8",
+    "trash1",
+    "trash2",
+]
+
 # Value that means data should not be used in training
 MASKING_VALUE = 999
 

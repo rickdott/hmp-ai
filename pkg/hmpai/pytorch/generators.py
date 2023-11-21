@@ -2,7 +2,7 @@ from torch.utils.data import Dataset
 import xarray as xr
 import torch
 import numpy as np
-from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
+from hmpai.data import SAT1_STAGES_ACCURACY, preprocess, AR_STAGES
 
 
 class SAT1Dataset(Dataset):
