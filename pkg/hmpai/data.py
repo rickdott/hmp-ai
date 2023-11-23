@@ -26,6 +26,7 @@ AR_STAGES = [
     "encoding",
     "familiarity",
     "memory",
+    "test",
     "decision",
     "response",
 ]

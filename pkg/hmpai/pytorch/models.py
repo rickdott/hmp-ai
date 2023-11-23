@@ -2,30 +2,49 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from hmpai.utilities import MASKING_VALUE
+import math
+from hmpai.pytorch.utilities import DEVICE
 
 
-class SAT1Mlp(nn.Module):
-    def __init__(self, n_channels, n_samples, n_classes):
+class TransformerModel(nn.Module):
+    def __init__(self, ninp, nhead, nhid, nlayers, nclasses):
         super().__init__()
-        self.relu = nn.ReLU()
-        self.flatten = nn.Flatten()
-        self.linear1 = nn.LazyLinear(out_features=128)
-        self.linear2 = nn.LazyLinear(out_features=64)
-        self.linear3 = nn.LazyLinear(out_features=32)
-
-        self.linear_final = nn.Linear(in_features=32, out_features=n_classes)
+        self.pos_encoder = PositionalEncoding(ninp)
+        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)
+        self.ninp = ninp
+        self.decoder = nn.Linear(ninp, nclasses)
 
     def forward(self, x):
-        x = self.flatten(x)
-        x = self.linear1(x)
-        x = self.relu(x)
-        x = self.linear2(x)
-        x = self.relu(x)
-        x = self.linear3(x)
-        x = self.relu(x)
-        x = self.linear_final(x)
-
+        # Calculate mask before?
+        # Why times sqrt(ninp)?
+        x = torch.squeeze(x, dim=1)
+        mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
+        x = x * math.sqrt(self.ninp)
+        x = self.pos_encoder(x)
+        x = self.transformer_encoder(x, mask_in)
+        x = self.decoder(x)
         return x
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=200):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1).to(DEVICE)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        x = x + self.pe[: x.size(0), :].to(DEVICE)
+        return self.dropout(x)
 
 
 class SAT1Base(nn.Module):
@@ -122,6 +141,7 @@ class SAT1TopologicalConv(nn.Module):
 
     def forward(self, x):
         # Mask values that are not used from batch
+        x = torch.squeeze(x, dim=1)
         mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)

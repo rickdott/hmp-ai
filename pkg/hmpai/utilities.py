@@ -53,6 +53,30 @@ REINDEX_CHANNELS_AR = [
     "trash2",
 ]
 
+AR_SAT1_CHANNELS = [
+    "T7",
+    "CPZ",
+    "O2",
+    "FCZ",
+    "O1",
+    "P8",
+    "P4",
+    "T8",
+    "F4",
+    "C4",
+    "FP1",
+    "C3",
+    "FP2",
+    "P3",
+    "F8",
+    "P7",
+    "F3",
+    "F7",
+    "PZ",
+    "FZ",
+    "CZ",
+]
+
 # Value that means data should not be used in training
 MASKING_VALUE = 999
 

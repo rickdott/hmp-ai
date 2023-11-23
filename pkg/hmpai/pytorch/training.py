@@ -84,7 +84,8 @@ def train_and_test(
         # Log model summary
         shape = list(train_loader.dataset.data.shape)
         shape[0] = batch_size
-        to_write = {"Model summary": get_summary_str(model, shape)}
+        # to_write = {"Model summary": get_summary_str(model, shape)}
+        to_write = {}
         if additional_info:
             to_write.update(additional_info)
 
@@ -95,6 +96,7 @@ def train_and_test(
     weight = (
         calculate_class_weights(train_set)
         if use_class_weights
+        # TODO: Replace AR_STAGES with dynamic calculation based on dataset
         else torch.ones((len(AR_STAGES),))
     )
     weight = weight.to(DEVICE)
