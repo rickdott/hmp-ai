@@ -220,6 +220,8 @@ def preprocess(
     )
     dataset = dataset.fillna(MASKING_VALUE)
 
+    # Calculate ICA components
+
     if shape_topological:
         dataset = reshape(dataset)
     if shuffle:
