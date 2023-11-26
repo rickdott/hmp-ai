@@ -100,6 +100,7 @@ def train_and_test(
         else torch.ones((len(AR_STAGES),))
     )
     weight = weight.to(DEVICE)
+    model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight)
     opt = torch.optim.NAdam(model.parameters())
     stopper = EarlyStopper()

@@ -17,6 +17,7 @@ data/*/*.npz
 data/*/*.nc
 data/*/*/*.nc
 data/*/*.mat
+data/*/*.fif
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

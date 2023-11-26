@@ -210,7 +210,8 @@ def preprocess(
         stack_dims.append("labels")
     dataset = dataset.stack({"index": stack_dims})
     # Reorder so index is in front and samples/channels are switched
-    dataset = dataset.transpose("index", "samples", "channels")
+    channel_dim = "channels" if "channels" in dataset.dims else "components"
+    dataset = dataset.transpose("index", "samples", channel_dim)
     # Drop all indices for which all channels & samples are NaN, this happens in cases of
     # measuring error or label does not occur under condition in dataset
     dataset = (
@@ -219,8 +220,6 @@ def preprocess(
         else dataset.dropna("index", how="all")
     )
     dataset = dataset.fillna(MASKING_VALUE)
-
-    # Calculate ICA components
 
     if shape_topological:
         dataset = reshape(dataset)
@@ -479,7 +478,7 @@ class StageFinder:
 
     def __label_model__(self, model, condition=None):
         n_events = len(model.event)
-        if condition == 'No condition':
+        if condition == "No condition":
             condition = None
         labels = self.labels if condition is None else self.labels[condition]
 
