@@ -7,23 +7,25 @@ from hmpai.pytorch.utilities import DEVICE
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, ninp, nhead, nhid, nlayers, nclasses):
+    def __init__(self, n_features, n_heads, ff_dim, n_layers, n_classes):
         super().__init__()
-        self.pos_encoder = PositionalEncoding(ninp)
-        encoder_layers = nn.TransformerEncoderLayer(ninp, nhead, nhid)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)
-        self.ninp = ninp
-        self.decoder = nn.Linear(ninp, nclasses)
+        self.pos_encoder = PositionalEncoding(n_features)
+        encoder_layers = nn.TransformerEncoderLayer(n_features, n_heads, ff_dim)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, n_layers)
+        self.n_features = n_features
+        self.decoder = nn.Linear(n_features, n_classes)
 
     def forward(self, x):
         # Calculate mask before?
         # Why times sqrt(ninp)?
-        x = torch.squeeze(x, dim=1)
-        mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
-        x = x * math.sqrt(self.ninp)
+        # x = torch.squeeze(x, dim=1)
+        x = torch.where(x == MASKING_VALUE, 0.0, 1.0)
+        x = x * math.sqrt(self.n_features)
         x = self.pos_encoder(x)
-        x = self.transformer_encoder(x, mask_in)
+        x = self.transformer_encoder(x)
+        x = x.mean(dim=1)
         x = self.decoder(x)
+
         return x
 
 
@@ -65,6 +67,7 @@ class SAT1Base(nn.Module):
 
     def forward(self, x):
         # Mask values that are not used from batch
+        x = x[:, None, :, :]
         mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)
@@ -179,6 +182,7 @@ class SAT1Deep(nn.Module):
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
+        x = x[:, None, :, :]
         mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)
@@ -209,7 +213,7 @@ class SAT1GRU(nn.Module):
     def __init__(self, n_channels, n_samples, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
-        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
+        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True, dropout=0.25)
         self.linear = nn.LazyLinear(out_features=128)
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 

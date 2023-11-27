@@ -1,10 +1,8 @@
-from hmpai.ica import ICA
 from torch.utils.data import Dataset
 import xarray as xr
 import torch
 import numpy as np
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess, AR_STAGES
-from pathlib import Path
 
 
 class SAT1Dataset(Dataset):

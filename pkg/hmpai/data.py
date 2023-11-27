@@ -191,6 +191,7 @@ def preprocess(
     shuffle: bool = True,
     shape_topological: bool = False,
     sequential: bool = False,
+    for_ica: bool = False,
 ) -> xr.Dataset:
     """Preprocess the dataset based on requirements
 
@@ -199,18 +200,21 @@ def preprocess(
         shuffle (bool, optional): Whether to shuffle the dataset at the end. Defaults to True.
         shape_topological (bool, optional): Shape the data 3D. Defaults to False.
         sequential (bool, optional): True if input data is sequential instead of split. Defaults to False.
+        for_ica (bool, optional): True if input data is for ICA. Defaults to False.
 
     Returns:
         xr.Dataset: Preprocessed data.
     """
     # Preprocess data
     # Stack dimensions into one MultiIndex dimension 'index'
-    stack_dims = ["participant", "epochs"]
+    stack_dims = ["epochs"]
     if not sequential:
         stack_dims.append("labels")
+    if not for_ica:
+        stack_dims = ["participant"] + stack_dims
     dataset = dataset.stack({"index": stack_dims})
-    # Reorder so index is in front and samples/channels are switched
-    channel_dim = "channels" if "channels" in dataset.dims else "components"
+    # Reorder so index is in front and samples/channels are switched, components is used when preprocessing for ICA
+    channel_dim = "channels" if "channels" in dataset.dims else "components1"
     dataset = dataset.transpose("index", "samples", channel_dim)
     # Drop all indices for which all channels & samples are NaN, this happens in cases of
     # measuring error or label does not occur under condition in dataset

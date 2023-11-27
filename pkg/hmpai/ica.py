@@ -8,9 +8,6 @@ from hmpai.utilities import MASKING_VALUE
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from concurrent.futures import ProcessPoolExecutor
-import concurrent
-import multiprocessing as mp
 
 
 class ICA:
@@ -29,7 +26,7 @@ class ICA:
             else:
                 self.info = read_info(info_path)
                 # Calculate ICA from dataset
-                self.ica = self.calculate_ica(dataset)
+                # self.ica = self.calculate_ica(dataset)
                 # Re-order dataset using self.ica
         else:
             self.ica = mne.preprocessing.read_ica(ica_path)
@@ -39,7 +36,11 @@ class ICA:
     def calculate_ica(self, dataset: xr.Dataset, info: mne.Info = None):
         # Somehow works better when preprocessed?
         dataset = preprocess(
-            dataset, shuffle=False, shape_topological=False, sequential=True
+            dataset,
+            shuffle=False,
+            shape_topological=False,
+            sequential=True,
+            for_ica=True,
         )
         n_comp = len(dataset.channels)
         ica = mne.preprocessing.ICA(n_components=n_comp, random_state=42)
@@ -66,7 +67,7 @@ class ICA:
         # If info is None, use self.info
         info = self.info if info is None else info
         # Reorder dataset to match ICA components of original dataset
-        corrs, ica2 = self.correlation(dataset, info)
+        corrs, ica2 = self.correlation_new_data(dataset, info)
         x, y = self.match_components(corrs)
 
         ica2.unmixing_matrix_ = ica2.unmixing_matrix_[y, :]
@@ -78,32 +79,104 @@ class ICA:
         self,
         dataset: xr.Dataset,
         info: mne.Info = None,
-        ica: mne.preprocessing.ICA = None,
     ):
+        """
+        Reorders the dataset by performing Independent Component Analysis (ICA) on each participant's data,
+        and reordering the components based on their correlation with the mean components.
+
+        Args:
+            dataset (xr.Dataset): The dataset containing the participant data.
+            info (mne.Info, optional): The MNE info object containing information about the data. Defaults to None.
+
+        Returns:
+            xr.Dataset: The reordered dataset with additional arrays for unmixing matrices, mixing matrices, and components.
+        """
         print("Reordering dataset")
-        # Use given ica if provided, otherwise use own ica
-        ica = self.ica if ica is None else ica
         # If info is None, use self.info
         info = self.info if info is None else info
 
-        # (index, samples, channels) > (index, samples, components)
+        # Assume n_components == n_channels
+        # (participant, components, components)
+        mixing_matrices = np.zeros(
+            (len(dataset.participant), len(dataset.channels), len(dataset.channels))
+        )
+        # (participant, components, components)
+        unmixing_matrices = np.zeros(
+            (len(dataset.participant), len(dataset.channels), len(dataset.channels))
+        )
+        # (participant, channels, components)
+        components = np.full(
+            (len(dataset.participant), len(dataset.channels), len(dataset.channels)),
+            np.nan,
+        )
+
+        # For every participant, calculate ICA, if not the first participant, match with mean ICA. When a new components is added, its sign is flipped if it is negatively correlated with the mean component.
         for participant in range(len(dataset.participant)):
+            print(f"Participant: {participant}")
+            p_data = dataset.isel(participant=participant)
+            p_ica = self.calculate_ica(p_data, info)
+            p_comp = p_ica.get_components()
+            mean_comp = np.nanmean(components, axis=0)
+
+            if not np.isnan(mean_comp).any():
+                corrs = self.correlation(p_comp, mean_comp)
+                x_comps, y_comps = self.match_components(corrs)
+                for x, y in zip(x_comps, y_comps):
+                    if corrs[x, y] < 0:
+                        p_comp[:, x] = -p_comp[:, x]
+                p_ica.unmixing_matrix_ = p_ica.unmixing_matrix_[y_comps, :]
+                p_ica.mixing_matrix_ = p_ica.mixing_matrix_[:, y_comps]
+
+            unmixing_matrices[participant, :, :] = p_ica.unmixing_matrix_
+            mixing_matrices[participant, :, :] = p_ica.mixing_matrix_
+            components[participant, :, :] = p_comp
+
             for epoch in range(len(dataset.epochs)):
-                epoch_data = dataset.data[participant, epoch, :, :]
-                epoch_data = self.reorder_slice(epoch_data, ica, info)
+                epoch_data = p_data.data[epoch, :, :]
+                epoch_data = self.reorder_slice(epoch_data, p_ica, info)
                 dataset.data[participant, epoch, :, :] = epoch_data
 
-        new_data_array = xr.DataArray(
+        # Add unmixing matrices, mixing matrices, and components to dataset to allow for re-calculating original data
+        dataset["unmixing_matrices"] = xr.DataArray(
+            data=unmixing_matrices,
+            dims=["participant", "components1", "components2"],
+            coords={
+                "participant": dataset.participant,
+                "components1": np.arange(p_ica.n_components),
+                "components2": np.arange(p_ica.n_components),
+            },
+        )
+        dataset["mixing_matrices"] = xr.DataArray(
+            data=mixing_matrices,
+            dims=["participant", "components1", "components2"],
+            coords={
+                "participant": dataset.participant,
+                "components1": np.arange(p_ica.n_components),
+                "components2": np.arange(p_ica.n_components),
+            },
+        )
+        dataset["components"] = xr.DataArray(
+            data=components,
+            dims=["participant", "components1", "components2"],
+            coords={
+                "participant": dataset.participant,
+                "components1": np.arange(p_ica.n_components),
+                "components2": np.arange(p_ica.n_components),
+            },
+        )
+
+        # Re-coordinate data variable to components1 dimension
+        dataset["data"] = xr.DataArray(
             data=dataset.data,
-            dims=["participant", "epochs", "components", "samples"],
+            dims=["participant", "epochs", "components1", "samples"],
             coords={
                 "participant": dataset.participant,
                 "epochs": dataset.epochs,
-                "components": np.arange(self.ica.n_components),
+                "components1": dataset.components1,
                 "samples": dataset.samples,
-            }
+            },
         )
-        dataset['data'] = new_data_array
+
         return dataset
 
     def plot_ica(self):
@@ -113,7 +186,17 @@ class ICA:
     def save(self, path: Path | str):
         self.ica.save(path)
 
-    def correlation(self, dataset: xr.Dataset, info: mne.Info):
+    def correlation(self, components1: np.array, components2: np.array):
+        # Input two ndarrays of shape (channels, components)
+        corrs = np.empty((components1.shape[1], components2.shape[1]))
+        for i, comp1 in enumerate(components1.T):
+            for j, comp2 in enumerate(components2.T):
+                corr = np.corrcoef(comp1, comp2)[0, 1]
+                corrs[i, j] = corr
+
+        return corrs
+
+    def correlation_new_data(self, dataset: xr.Dataset, info: mne.Info):
         # Calculate correlation between self.ICA components and ICA components calculated from new dataset
         ica2 = self.calculate_ica(dataset, info)
 
@@ -121,7 +204,7 @@ class ICA:
         for i, comp1 in enumerate(self.ica.get_components().T):
             for j, comp2 in enumerate(ica2.get_components().T):
                 corr = np.corrcoef(comp1, comp2)[0, 1]
-                corrs[i, j] = abs(corr)
+                corrs[i, j] = corr
 
         return corrs, ica2
 
@@ -135,6 +218,7 @@ class ICA:
         plt.show()
 
     def match_components(self, corrs):
+        corrs = abs(corrs)
         x, y = linear_sum_assignment(-corrs)
         print("Mean correlation: ", corrs[x, y].mean())
 

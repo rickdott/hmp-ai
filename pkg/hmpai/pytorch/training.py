@@ -67,10 +67,29 @@ def train_and_test(
     test_loader = DataLoader(
         test_set, batch_size, shuffle=False, num_workers=workers, pin_memory=True
     )
+    val_loaders = []
     if val_set is not None:
-        val_loader = DataLoader(
-            val_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
-        )
+        if type(val_set) is list:
+            for val in val_set:
+                val_loaders.append(
+                    DataLoader(
+                        val,
+                        batch_size,
+                        shuffle=True,
+                        num_workers=workers,
+                        pin_memory=True,
+                    )
+                )
+        else:
+            val_loaders.append(
+                DataLoader(
+                    val_set,
+                    batch_size,
+                    shuffle=True,
+                    num_workers=workers,
+                    pin_memory=True,
+                )
+            )
 
     # Set up logging
     write_log = logs_path is not None
@@ -97,12 +116,12 @@ def train_and_test(
         calculate_class_weights(train_set)
         if use_class_weights
         # TODO: Replace AR_STAGES with dynamic calculation based on dataset
-        else torch.ones((len(AR_STAGES),))
+        else torch.ones((len(SAT1_STAGES_ACCURACY),))
     )
     weight = weight.to(DEVICE)
     model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight)
-    opt = torch.optim.NAdam(model.parameters())
+    opt = torch.optim.NAdam(model.parameters(), lr=0.00002)
     stopper = EarlyStopper()
 
     lowest_mean_val_loss = np.inf
@@ -114,13 +133,17 @@ def train_and_test(
             batch_losses = train(model, train_loader, opt, loss, tepoch)
 
             # Validate model and communicate results
-            val_losses, val_accuracy = validate(model, val_loader, loss)
+            val_loss_list = []
+            val_acc_list = []
+            postfix_dict = {"loss": np.mean(batch_losses)}
+            for i, val_loader in enumerate(val_loaders):
+                val_losses, val_accuracy = validate(model, val_loader, loss)
+                val_loss_list.append(val_losses)
+                val_acc_list.append(val_accuracy)
+                postfix_dict[f"val_loss_{i}"] = np.mean(val_losses)
+                postfix_dict[f"val_accuracy_{i}"] = val_accuracy
             tepoch.set_postfix(
-                {
-                    "loss": np.mean(batch_losses),
-                    "val_loss": np.mean(val_losses),
-                    "val_accuracy": val_accuracy,
-                }
+                postfix_dict
             )
             mean_train_loss = np.mean(batch_losses)
             mean_val_loss = np.mean(val_losses)
