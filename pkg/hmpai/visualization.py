@@ -243,7 +243,7 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
     plt.show()
 
 
-def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
+def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[str] = SAT1_STAGES_ACCURACY) -> None:
     """
     Plots the model attention over stage duration for the given dataset.
 
@@ -255,14 +255,14 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
     """
     f, ax = plt.subplots(
         nrows=1,
-        ncols=len(SAT1_STAGES_ACCURACY),
+        ncols=len(labels),
         figsize=(12, 3),
         sharey=True,
         sharex=True,
     )
 
     time_points = np.linspace(0, 100, 100)
-    for i, label in enumerate(SAT1_STAGES_ACCURACY):
+    for i, label in enumerate(labels):
         subset = dataset.sel(labels=label)
         nan_indices = np.isnan(subset.data.where(subset.data != MASKING_VALUE)).argmax(
             dim=["samples", "channels"]
