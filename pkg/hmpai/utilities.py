@@ -55,7 +55,7 @@ REINDEX_CHANNELS_AR = [
 
 AR_SAT1_CHANNELS = [
     "T7",
-    "CPZ",
+    # "CPZ",
     "O2",
     "FCZ",
     "O1",

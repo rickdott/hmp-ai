@@ -30,7 +30,7 @@ class TransformerModel(nn.Module):
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=200):
+    def __init__(self, d_model, dropout=0.1, max_len=250):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 

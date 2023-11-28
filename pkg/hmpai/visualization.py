@@ -62,7 +62,7 @@ def add_attribution(
     return test_set
 
 
-def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
+def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: list[str] = SAT1_STAGES_ACCURACY) -> None:
     """
     Plots the maximum activation per label for a given dataset.
 
@@ -73,9 +73,9 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
     Returns:
         None
     """
-    f, ax = plt.subplots(nrows=3, ncols=len(SAT1_STAGES_ACCURACY), figsize=(6, 3))
+    f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(6, 3))
 
-    for i, label in enumerate(SAT1_STAGES_ACCURACY):
+    for i, label in enumerate(labels):
         # Get subset for label
         subset = dataset.sel(labels=label)
         n = len(subset.index)
@@ -286,9 +286,9 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset) -> None:
 
 
 def plot_confusion_matrix(true: torch.Tensor, pred: torch.Tensor, labels: list) -> None:
-    cm = confusion_matrix(true, pred)
+    cm = confusion_matrix(true, pred, normalize='true')
     plt.figure(figsize=(5, 5))
-    sns.heatmap(cm, annot=True, fmt="d")
+    sns.heatmap(cm, annot=True, fmt=".2f")
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.xticks(ticks=np.arange(0.5, len(labels) + 0.5), labels=labels, rotation=90)

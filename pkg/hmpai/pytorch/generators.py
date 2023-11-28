@@ -24,13 +24,14 @@ class SAT1Dataset(Dataset):
         dataset: xr.Dataset,
         shape_topological=False,
         do_preprocessing=True,
+        labels: list[str] = SAT1_STAGES_ACCURACY,
         # ica: ICA = None,
         # info_path: Path | str = None,
     ):
         # if do_preprocessing and info_path is None:
         #     raise ValueError("If do_preprocessing is True, info_path must be provided")
         # Alphabetical ordering of labels used for categorization of labels
-        label_lookup = {label: idx for idx, label in enumerate(SAT1_STAGES_ACCURACY)}
+        label_lookup = {label: idx for idx, label in enumerate(labels)}
 
         # Preprocess data
         if do_preprocessing:
