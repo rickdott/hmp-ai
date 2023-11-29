@@ -122,6 +122,7 @@ def train_and_test(
     model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight)
     opt = torch.optim.NAdam(model.parameters())
+    # opt = torch.optim.NAdam(model.parameters(), weight_decay=0.001)
     stopper = EarlyStopper()
 
     lowest_mean_val_loss = np.inf

@@ -213,7 +213,7 @@ class SAT1GRU(nn.Module):
     def __init__(self, n_channels, n_samples, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
-        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True, dropout=0.25)
+        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
         self.linear = nn.LazyLinear(out_features=128)
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 

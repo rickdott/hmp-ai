@@ -287,7 +287,7 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[s
 
 def plot_confusion_matrix(true: torch.Tensor, pred: torch.Tensor, labels: list) -> None:
     cm = confusion_matrix(true, pred, normalize='true')
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(8, 8))
     sns.heatmap(cm, annot=True, fmt=".2f")
     plt.xlabel("Predicted")
     plt.ylabel("True")
