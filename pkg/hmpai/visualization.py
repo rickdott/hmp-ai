@@ -73,7 +73,7 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: 
     Returns:
         None
     """
-    f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(6, 3))
+    f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(14, 4))
 
     for i, label in enumerate(labels):
         # Get subset for label
@@ -100,7 +100,7 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: 
             show=False,
             cmap="Spectral_r",
             vlim=(np.min(mean_max_samples.data), np.max(mean_max_samples.data)),
-            sensors=False,
+            sensors=True,
             contours=6,
         )
 
@@ -256,7 +256,7 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[s
     f, ax = plt.subplots(
         nrows=1,
         ncols=len(labels),
-        figsize=(12, 3),
+        figsize=(16, 3),
         sharey=True,
         sharex=True,
     )
@@ -277,7 +277,7 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[s
             interpolated.append(abs(interpolated_sequence))
         ax[i].plot(np.mean(interpolated, axis=0))
         ax[i].set_title(f"{label}", fontsize=10)
-        ax[i].set_yticks(np.arange(0.0, 0.1, 0.02))
+        ax[i].set_yticks(np.arange(0.0, 0.6, 0.05))
     # ax[2].text(0, -0.005, 'Linear interpolation\nof stage length', va='bottom', ha='center')
     ax[0].set_ylabel("Model Attention")
     ax[2].set_xlabel("Stage duration (%)")
