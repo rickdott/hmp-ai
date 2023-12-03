@@ -33,10 +33,12 @@ class SAT1Dataset(Dataset):
         # Alphabetical ordering of labels used for categorization of labels
         label_lookup = {label: idx for idx, label in enumerate(labels)}
 
+        # If labels is a data variable, the data is sequential instead of split
+        sequential = dataset.data_vars.__contains__("labels")
         # Preprocess data
         if do_preprocessing:
             dataset = preprocess(
-                dataset, shuffle=True, shape_topological=shape_topological
+                dataset, shuffle=True, shape_topological=shape_topological, sequential=sequential
             )
 
         # self.data = torch.as_tensor(dataset.data.to_numpy(), dtype=torch.float32)[

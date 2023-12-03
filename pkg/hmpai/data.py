@@ -30,6 +30,16 @@ AR_STAGES = [
     "response",
 ]
 
+COMMON_STAGES = [
+    "pre-attentive",
+    "encoding",
+    "decision",
+    "response",
+    "confirmation",
+    "familiarity",
+    "memory",
+]
+
 
 def add_stage_data_to_unprocessed(
     data_path: str | Path, merge_dataset: xr.Dataset
