@@ -23,8 +23,10 @@ class TransformerModel(nn.Module):
         x = x * math.sqrt(self.n_features)
         x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
-        x = x.mean(dim=1)
+        # x = x.mean(dim=1)
         x = self.decoder(x)
+        # Should be (128, 5, 199)
+        # x = x.transpose(1, 2)
 
         return x
 
@@ -214,8 +216,8 @@ class SAT1GRU(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         # self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True, dropout=0.25)
-        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
-        self.linear = nn.LazyLinear(out_features=128)
+        self.gru = nn.GRU(input_size=n_channels, hidden_size=128, batch_first=True, dropout=0.25)
+        self.linear = nn.LazyLinear(out_features=64)
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 
     def forward(self, x):
