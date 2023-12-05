@@ -35,6 +35,7 @@ def train_and_test(
     additional_info: dict = None,
     additional_name: str = None,
     use_class_weights: bool = True,
+    labels: list[str] = None,
     seed: int = 42,
 ) -> dict:
     """
@@ -52,6 +53,7 @@ def train_and_test(
         additional_info (dict, optional): Additional information to log. Defaults to None.
         additional_name (str, optional): Additional name to append to the log directory. Defaults to None.
         use_class_weights (bool, optional): Whether to use class weights for the loss function. Defaults to True.
+        labels (list[str], optional): The labels to use for classification. Defaults to None.
         seed (int, optional): The seed to use for reproducibility. Defaults to 42.
 
     Returns:
@@ -113,7 +115,7 @@ def train_and_test(
 
     # Set up optimizer and loss
     weight = (
-        calculate_class_weights(train_set)
+        calculate_class_weights(train_set, labels)
         if use_class_weights
         # TODO: Replace AR_STAGES with dynamic calculation based on dataset
         else torch.ones((len(SAT1_STAGES_ACCURACY),))
@@ -394,7 +396,7 @@ def test(
     return test_results, predicted_classes, true_classes
 
 
-def calculate_class_weights(set: torch.utils.data.Dataset) -> torch.Tensor:
+def calculate_class_weights(set: torch.utils.data.Dataset, labels: list[str]) -> torch.Tensor:
     """
     Calculates class weights for a given dataset.
 
@@ -405,8 +407,13 @@ def calculate_class_weights(set: torch.utils.data.Dataset) -> torch.Tensor:
         torch.Tensor: The calculated class weights.
     """
     occurrences = set.labels.unique(return_counts=True)
-    weights = sum(occurrences[1]) / occurrences[1]
-    return weights
+    weights = []
+    for i in range(len(labels)):
+        if i in occurrences[0]:
+            weights.append((sum(occurrences[1]) / occurrences[1][(occurrences[0] == i).nonzero()[0]]).item())
+        else:
+            weights.append(1)
+    return torch.Tensor(weights)
 
 
 def get_folds(
