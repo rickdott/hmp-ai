@@ -401,6 +401,7 @@ class StageFinder:
                     self.epoch_data,
                     condition,
                     variable=self.condition_variable,
+                    method='contains',
                 )
 
                 # Determine amount of expected events from number of supplied labels
