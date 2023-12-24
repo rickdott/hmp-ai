@@ -376,34 +376,50 @@ def plot_performance(
     )
     set_seaborn_style()
 
-    fig, axes = plt.subplots(1, 2, figsize=(8, 4), gridspec_kw={"width_ratios": [1.75, 1]})
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]})
     # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     sns.violinplot(
         data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
     )
     axes[0].set_ylabel("Metric value")
     axes[0].set_xlabel(cat_name)
+    axes[0].set_ylim((0.75, 1.0))
     sns.move_legend(axes[0], "lower right", bbox_to_anchor=(1.0, 0.0), title="Metric")
     sns.despine()
 
     means = df.groupby(["category", "metric"], sort=False).mean().reset_index()
+    print(means)
     acc_means = means[means.metric == "Accuracy"].value.to_numpy()
     f1_means = means[means.metric == "F1-score"].value.to_numpy()
-    acc_diffs = abs(acc_means[:, np.newaxis] - acc_means) * 100
-    f1_diffs = abs(f1_means[:, np.newaxis] - f1_means) * 100
+    # TODO: To abs or not to abs
+    acc_diffs = (acc_means[:, np.newaxis] - acc_means) * 100
+    f1_diffs = -(f1_means[:, np.newaxis] - f1_means) * 100
 
     mask = np.tril(np.ones_like(acc_diffs), k=-1)
     mask_upper = np.tril(np.ones_like(acc_diffs), k=0)
-    # acc_diffs[mask == 0] = f1_diffs[mask == 0]
     acc_diffs[mask == 0] = np.nan
     f1_diffs[mask_upper != 0] = np.nan
-    sns.heatmap(acc_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=sns.light_palette(color=sns.color_palette()[0], as_cmap=True), cbar=False, ax=axes[1])
 
-    sns.heatmap(f1_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=sns.light_palette(color=sns.color_palette()[1], as_cmap=True), cbar=False, ax=axes[1])
+    # Remove values that are not interesting to compare
+    if cat_name == "Model-Sampling Frequency":
+        f1_diffs[0, 3] = np.nan
+        f1_diffs[1, 2] = np.nan
+        acc_diffs[3, 0] = np.nan
+        acc_diffs[2, 1] = np.nan
+    blue_palette = sns.light_palette(color=sns.color_palette()[0], as_cmap=True)
+    orange_palette = sns.light_palette(color=sns.color_palette()[1], as_cmap=True)
+    # If only one value occurs, it is seen as 'low', reverse this to make colors show up
+    if len(categories) == 2:
+        blue_palette = blue_palette.reversed()
+        orange_palette = orange_palette.reversed()
+    sns.heatmap(acc_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=blue_palette, cbar=False, ax=axes[1], vmin=-0, vmax=5)
 
+    sns.heatmap(f1_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=orange_palette, cbar=False, ax=axes[1], vmin=-0, vmax=5)
+
+    # axes[1].set_ylabel("From")
     # axes[0].set_title("Distribution of folds")
     # axes[1].set_title("Differences in performance")
-    axes[1].set_xlabel("Performance differences (%)")
+    axes[1].set_xlabel("Improvement (%)")
     plt.tight_layout()
     plt.savefig(f"img/{cat_name}.png")
     plt.show()
