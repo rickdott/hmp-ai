@@ -1,7 +1,7 @@
 import random
 import xarray as xr
 from typing import Callable
-from hmpai.normalization import norm_0_to_1
+from hmpai.normalization import get_norm_vars, norm_0_to_1
 
 
 def split_data_on_participants(
@@ -43,11 +43,10 @@ def split_data_on_participants(
     test_data = data.sel(participant=test_participants)
 
     # Normalize data
-    train_min = train_data.min(skipna=True).data.item()
-    train_max = train_data.max(skipna=True).data.item()
+    norm_var1, norm_var2 = get_norm_vars(train_data, normalization_fn)
 
-    train_data = normalization_fn(train_data, train_min, train_max)
-    val_data = normalization_fn(val_data, train_min, train_max)
-    test_data = normalization_fn(test_data, train_min, train_max)
+    train_data = normalization_fn(train_data, norm_var1, norm_var2)
+    val_data = normalization_fn(val_data, norm_var1, norm_var2)
+    test_data = normalization_fn(test_data, norm_var1, norm_var2)
 
     return train_data, val_data, test_data

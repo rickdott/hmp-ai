@@ -13,6 +13,9 @@ from hmpai.utilities import MASKING_VALUE
 from tqdm.notebook import tqdm
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
+import pandas as pd
+from scipy.stats import ttest_rel
+from typing import List, Optional
 
 
 def add_attribution(
@@ -62,18 +65,27 @@ def add_attribution(
     return test_set
 
 
-def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: list[str] = SAT1_STAGES_ACCURACY) -> None:
+def plot_max_activation_per_label(
+    dataset: xr.Dataset,
+    positions: Info,
+    labels: list[str] = SAT1_STAGES_ACCURACY,
+    save: bool = False,
+) -> None:
     """
     Plots the maximum activation per label for a given dataset.
 
     Args:
         dataset (xr.Dataset): The dataset to plot.
         positions (Info): The positions of the sensors.
+        labels (list[str], optional): The labels to plot. Defaults to SAT1_STAGES_ACCURACY.
+        save (bool, optional): Whether to save the plot. Defaults to False.
 
     Returns:
         None
     """
-    f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(14, 4))
+    sns.set_style("ticks")
+    sns.set_context("paper")
+    f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(8, 4))
 
     for i, label in enumerate(labels):
         # Get subset for label
@@ -88,9 +100,9 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: 
         ax[0, i].set_title(f"{label}\n(n={n})", fontsize=10)
         # Row titles
         if i == 0:
-            ax[0, i].text(-0.35, 0, "EEG\nActivity", va="center", ha="left")
-            ax[1, i].text(-0.35, 0, "Model\nAttention", va="center", ha="left")
-            ax[2, i].text(-0.35, 0, "Combined", va="center", ha="left")
+            ax[0, i].text(-0.30, 0, "EEG\nActivity", va="center", ha="left")
+            ax[1, i].text(-0.30, 0, "Model\nAttention", va="center", ha="left")
+            ax[2, i].text(-0.30, 0, "Combined", va="center", ha="left")
 
         # Raw EEG Activation
         plot_topomap(
@@ -100,7 +112,7 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: 
             show=False,
             cmap="Spectral_r",
             vlim=(np.min(mean_max_samples.data), np.max(mean_max_samples.data)),
-            sensors=True,
+            sensors=False,
             contours=6,
         )
 
@@ -130,7 +142,10 @@ def plot_max_activation_per_label(dataset: xr.Dataset, positions: Info, labels: 
             contours=6,
         )
     plt.tight_layout()
-    plt.show()
+    if save:
+        plt.savefig("img/max_activation_per_label.png", transparent=True)
+    else:
+        plt.show()
 
 
 def plot_mean_activation_per_label(dataset: xr.Dataset, positions: Info) -> None:
@@ -243,20 +258,26 @@ def plot_single_trial_activation(sample: xr.Dataset, positions: Info) -> None:
     plt.show()
 
 
-def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[str] = SAT1_STAGES_ACCURACY) -> None:
+def plot_model_attention_over_stage_duration(
+    dataset: xr.Dataset, labels: list[str] = SAT1_STAGES_ACCURACY, save: bool = False
+) -> None:
     """
     Plots the model attention over stage duration for the given dataset.
 
     Parameters:
     dataset (xr.Dataset): The dataset containing the data to be plotted.
+    labels (list[str], optional): The labels to plot. Defaults to SAT1_STAGES_ACCURACY.
+    save (bool, optional): Whether to save the plot. Defaults to False.
 
     Returns:
     None
     """
+    sns.set_style("ticks")
+    sns.set_context("paper")
     f, ax = plt.subplots(
         nrows=1,
         ncols=len(labels),
-        figsize=(16, 3),
+        figsize=(8, 3),
         sharey=True,
         sharex=True,
     )
@@ -276,21 +297,233 @@ def plot_model_attention_over_stage_duration(dataset: xr.Dataset, labels: list[s
             interpolated_sequence = np.interp(time_points, origin_time_points, sequence)
             interpolated.append(abs(interpolated_sequence))
         ax[i].plot(np.mean(interpolated, axis=0))
+        ax[i].set_facecolor("white")
         ax[i].set_title(f"{label}", fontsize=10)
-        ax[i].set_yticks(np.arange(0.0, 0.6, 0.05))
+        ax[i].set_yticks(np.arange(0.0, 0.2, 0.05))
     # ax[2].text(0, -0.005, 'Linear interpolation\nof stage length', va='bottom', ha='center')
     ax[0].set_ylabel("Model Attention")
     ax[2].set_xlabel("Stage duration (%)")
     plt.tight_layout()
-    plt.show()
+    if save:
+        plt.savefig("img/model_attention_over_stage_duration.png", transparent=True)
+    else:
+        plt.show()
 
 
-def plot_confusion_matrix(true: torch.Tensor, pred: torch.Tensor, labels: list) -> None:
-    cm = confusion_matrix(true, pred, normalize='true')
-    plt.figure(figsize=(8, 8))
-    sns.heatmap(cm, annot=True, fmt=".2f")
+def plot_confusion_matrix(
+    true: torch.Tensor, pred: torch.Tensor, labels: list, save: bool = False
+) -> None:
+    sns.set_style("ticks")
+    sns.set_context("paper")
+    cm = confusion_matrix(true, pred, normalize="true")
+    plt.figure(figsize=(4, 4))
+    sns.heatmap(cm, annot=True, fmt=".2f", cmap="OrRd")
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.xticks(ticks=np.arange(0.5, len(labels) + 0.5), labels=labels, rotation=90)
     plt.yticks(ticks=np.arange(0.5, len(labels) + 0.5), labels=labels, rotation=0)
+    if save:
+        plt.savefig("img/confusion_matrix.png", transparent=True, bbox_inches="tight")
+    else:
+        plt.show()
+
+
+def p_to_asterisk(pvalue: float):
+    """
+    Converts a p-value to an asterisk representation based on significance levels.
+
+    Args:
+        pvalue (float): The p-value to convert.
+
+    Returns:
+        str: The asterisk representation based on the significance level of the p-value.
+            - "****" for p-value <= 0.0001
+            - "***" for p-value <= 0.001
+            - "**" for p-value <= 0.01
+            - "*" for p-value <= 0.05
+            - "ns" for p-value > 0.05
+    """
+    if pvalue <= 0.0001:
+        return "****"
+    elif pvalue <= 0.001:
+        return "***"
+    elif pvalue <= 0.01:
+        return "**"
+    elif pvalue <= 0.05:
+        return "*"
+    return "ns"
+
+
+def plot_performance(
+    accs: List[List[float]],
+    f1s: List[List[float]],
+    categories: List[str],
+    cat_name: str,
+):
+    n_obs = len(accs[0])
+    df = pd.DataFrame(
+        {
+            "Accuracy": [acc for sublist in accs for acc in sublist],
+            "F1-score": [f1 for sublist in f1s for f1 in sublist],
+            "category": [category for category in categories for _ in range(n_obs)],
+        }
+    )
+    df = df.melt(
+        id_vars="category",
+        value_vars=("Accuracy", "F1-score"),
+        var_name="metric",
+        value_name="value",
+    )
+    set_seaborn_style()
+
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4), gridspec_kw={"width_ratios": [1.75, 1]})
+    # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    sns.violinplot(
+        data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
+    )
+    axes[0].set_ylabel("Metric value")
+    axes[0].set_xlabel(cat_name)
+    sns.move_legend(axes[0], "lower right", bbox_to_anchor=(1.0, 0.0), title="Metric")
+    sns.despine()
+
+    means = df.groupby(["category", "metric"], sort=False).mean().reset_index()
+    acc_means = means[means.metric == "Accuracy"].value.to_numpy()
+    f1_means = means[means.metric == "F1-score"].value.to_numpy()
+    acc_diffs = abs(acc_means[:, np.newaxis] - acc_means) * 100
+    f1_diffs = abs(f1_means[:, np.newaxis] - f1_means) * 100
+
+    mask = np.tril(np.ones_like(acc_diffs), k=-1)
+    mask_upper = np.tril(np.ones_like(acc_diffs), k=0)
+    # acc_diffs[mask == 0] = f1_diffs[mask == 0]
+    acc_diffs[mask == 0] = np.nan
+    f1_diffs[mask_upper != 0] = np.nan
+    sns.heatmap(acc_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=sns.light_palette(color=sns.color_palette()[0], as_cmap=True), cbar=False, ax=axes[1])
+
+    sns.heatmap(f1_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=sns.light_palette(color=sns.color_palette()[1], as_cmap=True), cbar=False, ax=axes[1])
+
+    # axes[0].set_title("Distribution of folds")
+    # axes[1].set_title("Differences in performance")
+    axes[1].set_xlabel("Performance differences (%)")
+    plt.tight_layout()
+    plt.savefig(f"img/{cat_name}.png")
     plt.show()
+
+
+def plot_performance_ttest(
+    accs: List[List[float]],
+    f1s: List[List[float]],
+    categories: List[str],
+    cat_name: str,
+    ttest_origins: Optional[List[Optional[int]]] = None,
+) -> None:
+    """
+    Plots the performance metrics (accuracy and F1-score) for different categories.
+
+    Args:
+        accs (List[List[float]]): List of lists containing accuracy values for each category.
+        f1s (List[List[float]]): List of lists containing F1-score values for each category.
+        categories (List[str]): List of category names.
+        cat_name (str): Name of the category variable.
+        ttest_origins (Optional[List[Optional[int]]], optional): List of indices of categories that are compared.
+            The length should be len(categories) - 1. If a value in ttest_origins equals None, then it is skipped.
+            Defaults to None.
+
+    Returns:
+        None
+    """
+    n_obs = len(accs[0])
+
+    df = pd.DataFrame(
+        {
+            "Accuracy": [acc for sublist in accs for acc in sublist],
+            "F1-score": [f1 for sublist in f1s for f1 in sublist],
+            "category": [category for category in categories for _ in range(n_obs)],
+        }
+    )
+    df = df.melt(
+        id_vars="category",
+        value_vars=("Accuracy", "F1-score"),
+        var_name="metric",
+        value_name="value",
+    )
+    set_seaborn_style()
+    # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    grid = sns.catplot(
+        data=df, x="category", y="value", hue="metric", kind="violin", split=True
+    )
+    grid.set(ylim=(0.8, 1.05))
+    # grid.axes[0][0].set_title("Accuracy")
+    grid.axes[0][0].set_ylabel("Metric value")
+    # grid.axes[0][1].set_title("f1-score")
+    grid.set(xlabel=cat_name, yticks=np.arange(0.8, 1.05, 0.05))
+    # grid._legend.remove()
+    sns.move_legend(grid, "lower right", bbox_to_anchor=(1.0, 0.1), title="Metric")
+    # sns.barplot(df, x="category", y="acc", ax=axes[0], hue="category")
+    # axes[0].set_ylim((0.84, 1.0))
+    # axes[0].set_ylabel("Accuracy")
+    # axes[0].set_xlabel(cat_name)
+
+    # sns.catplot(data=df, x="category", y="f1", ax=axes[1], hue="category")
+    # # sns.barplot(df, x="category", y="f1", ax=axes[1], hue="category")
+    # axes[1].set_ylim((0.84, 1.0))
+    # axes[1].set_ylabel("f1-score")
+    # axes[1].set_xlabel(cat_name)
+
+    # for i, ax in enumerate(grid.axes[0]):
+    #     for j, cat in enumerate(categories):
+    #         if j == 0:
+    #             continue
+    #         x1, x2 = 0, j
+    #         y, h, col = ax.get_ylim()[1] - (0.06 - 0.015 * j), 0.005, "k"
+    #         ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1.5, c=col)
+    #         if i == 0:
+    #             significance = ttest_rel(accs[j], accs[0])
+    #         else:
+    #             significance = ttest_rel(f1s[j], f1s[0])
+    #         print(f"{ax.get_title()}, category {cat} vs {categories[0]}")
+    #         print(significance)
+    #         ax.text(
+    #             (x1 + x2) * 0.5,
+    #             y + h,
+    #             p_to_asterisk(significance[1]),
+    #             ha="center",
+    #             va="bottom",
+    #             color=col,
+    #         )
+    for j, cat in enumerate(categories):
+        if j == 0:
+            continue
+        if ttest_origins is not None:
+            if ttest_origins[j - 1] is None:
+                continue
+            x1, x2 = ttest_origins[j - 1], j
+        else:
+            x1, x2 = 0, j
+        y, h, col = grid.axes[0][0].get_ylim()[1] - (0.06 - 0.015 * j), 0.005, "k"
+        grid.axes[0][0].plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1.5, c=col)
+        acc_significance = ttest_rel(accs[j], accs[x1])
+        f1_significance = ttest_rel(f1s[j], f1s[x1])
+        print(f"Accuracy, category {cat} vs {categories[x1]}")
+        print(acc_significance)
+        print(f"F1-score, category {cat} vs {categories[x1]}")
+        print(f1_significance)
+
+        grid.axes[0][0].text(
+            (x1 + x2) * 0.5,
+            y + h,
+            f"{p_to_asterisk(acc_significance[1])}  {p_to_asterisk(f1_significance[1])}",
+            ha="center",
+            va="bottom",
+            color=col,
+        )
+    plt.tight_layout()
+    plt.show()
+    # sns.despine()
+
+
+def set_seaborn_style():
+    sns.set_style("ticks")
+    sns.set_context("paper")
+    sns.set_palette("tab10")
+    # Dutch field
+    # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))

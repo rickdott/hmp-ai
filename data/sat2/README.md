@@ -1,0 +1,1 @@
+Place `*.nc` data files in this folder for SAT2 experiment

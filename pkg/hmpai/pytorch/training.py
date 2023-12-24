@@ -18,7 +18,7 @@ from datetime import datetime
 import numpy as np
 from sklearn.metrics import classification_report
 from typing import Callable
-from hmpai.normalization import norm_dummy
+from hmpai.normalization import get_norm_vars, norm_dummy
 from copy import deepcopy
 import re
 
@@ -123,7 +123,7 @@ def train_and_test(
     weight = weight.to(DEVICE)
     model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight)
-    opt = torch.optim.NAdam(model.parameters(), weight_decay=0.00005)
+    opt = torch.optim.NAdam(model.parameters())
     # opt = torch.optim.NAdam(model.parameters())
     stopper = EarlyStopper()
 
@@ -231,10 +231,9 @@ def k_fold_cross_validate(
         test_data = data.sel(participant=test_fold)
 
         # Normalize data
-        train_min = train_data.min(skipna=True).data.item()
-        train_max = train_data.max(skipna=True).data.item()
-        train_data = normalization_fn(train_data, train_min, train_max)
-        test_data = normalization_fn(test_data, train_min, train_max)
+        norm_var1, norm_var2 = get_norm_vars(train_data, normalization_fn)
+        train_data = normalization_fn(train_data, norm_var1, norm_var2)
+        test_data = normalization_fn(test_data, norm_var1, norm_var2)
 
         train_dataset = SAT1Dataset(train_data, **gen_kwargs)
         test_dataset = SAT1Dataset(test_data, **gen_kwargs)

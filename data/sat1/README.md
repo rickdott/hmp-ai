@@ -1,1 +1,1 @@
-Place `*.nc` data files in this folder
+Place `*.nc` data files in this folder for SAT1 experiment

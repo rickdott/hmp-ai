@@ -104,11 +104,14 @@ def pretty_json(data: dict) -> str:
 
 def print_results(results: dict) -> str:
     # From a list of test results to an aggregated accuracy and F1-Score
-    accuracy = 0.0
-    f1 = 0.0
+    accuracies = []
+    f1s = []
     for result in results:
-        accuracy += result["accuracy"]
-        f1 += result["macro avg"]["f1-score"]
-
-    print(f"Average Accuracy: {accuracy / len(results)}")
-    print(f"Average F1-Score: {f1 / len(results)}")
+        accuracies.append(result["accuracy"])
+        f1s.append(result["macro avg"]["f1-score"])
+    print('Accuracies')
+    print(accuracies)
+    print('F1-Scores')
+    print(f1s)
+    print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
+    print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")

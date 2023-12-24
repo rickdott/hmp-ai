@@ -52,7 +52,7 @@ class PositionalEncoding(nn.Module):
 
 
 class SAT1Base(nn.Module):
-    def __init__(self, n_channels, n_samples, n_classes):
+    def __init__(self, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
@@ -90,7 +90,7 @@ class SAT1Base(nn.Module):
 
 
 class SAT1Topological(nn.Module):
-    def __init__(self, n_x, n_y, n_samples, n_classes):
+    def __init__(self, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
@@ -108,6 +108,7 @@ class SAT1Topological(nn.Module):
 
     def forward(self, x):
         # Mask values that are not used from batch
+        x = x[:, None, :, :]
         mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)
@@ -128,7 +129,7 @@ class SAT1Topological(nn.Module):
 
 
 class SAT1TopologicalConv(nn.Module):
-    def __init__(self, n_x, n_y, n_samples, n_classes):
+    def __init__(self, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
@@ -146,7 +147,8 @@ class SAT1TopologicalConv(nn.Module):
 
     def forward(self, x):
         # Mask values that are not used from batch
-        x = torch.squeeze(x, dim=1)
+        # x = torch.squeeze(x, dim=1)
+        x = x[:, None, :, :]
         mask_in = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         x = self.conv1(x, mask_in=mask_in)
         x = self.relu(x)
@@ -167,7 +169,7 @@ class SAT1TopologicalConv(nn.Module):
 
 
 class SAT1Deep(nn.Module):
-    def __init__(self, n_channels, n_samples, n_classes):
+    def __init__(self, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         self.flatten = nn.Flatten()
@@ -215,9 +217,9 @@ class SAT1GRU(nn.Module):
     def __init__(self, n_channels, n_samples, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
-        # self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True, dropout=0.25)
-        self.gru = nn.GRU(input_size=n_channels, hidden_size=128, batch_first=True, dropout=0.25)
-        self.linear = nn.LazyLinear(out_features=64)
+        # self.gru = nn.GRU(input_size=n_channels, hidden_size=16, batch_first=True, dropout=0.25)
+        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
+        self.linear = nn.LazyLinear(out_features=128)
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 
     def forward(self, x):
