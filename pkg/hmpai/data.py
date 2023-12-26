@@ -306,6 +306,8 @@ class StageFinder:
         The conditions for each stage.
     condition_variable : str
         The variable used to determine the condition.
+    condition_method : str
+        The method used to check condition equality. ['equals', 'contains']
     cpus : int
         The number of CPUs to use for fitting the model.
     fit_function : str
@@ -337,6 +339,7 @@ class StageFinder:
         labels,
         conditions=[],
         condition_variable="cue",
+        condition_method="equals",
         cpus=1,
         fit_function="fit",
         fit_args=dict(),
@@ -366,6 +369,7 @@ class StageFinder:
         self.labels = labels
         self.conditions = conditions
         self.condition_variable = condition_variable
+        self.condition_method = condition_method
         self.cpus = cpus
         self.fit_function = fit_function
         self.fit_args = fit_args
@@ -401,7 +405,7 @@ class StageFinder:
                     self.epoch_data,
                     condition,
                     variable=self.condition_variable,
-                    method='contains',
+                    method=self.condition_method,
                 )
 
                 # Determine amount of expected events from number of supplied labels
@@ -519,13 +523,19 @@ class StageFinder:
         prev_participant = None
 
         # Mapping from trial_x_participant epoch numbers to dataset epoch numbers
-        condition_epochs = (
-            self.epoch_data.epochs
-            if condition is None
-            else self.epoch_data.where(
-                self.epoch_data[self.condition_variable] == condition, drop=True
+        if condition is None:
+            condition_epochs = self.epoch_data.epochs
+        elif self.condition_method == 'equals':
+            condition_epochs = self.epoch_data.where(
+                condition == self.epoch_data[self.condition_variable], drop=True
             ).epochs
-        )
+        elif self.condition_method == 'contains':
+            condition_epochs = self.epoch_data.where(
+                self.epoch_data[self.condition_variable].str.contains(condition), drop=True
+            ).epochs
+        else:
+            raise ValueError(f"Condition method {self.condition_method} not supported")
+        
         if self.verbose:
             print("Epochs used for current condition (if applicable):")
             print(condition_epochs)
@@ -538,24 +548,40 @@ class StageFinder:
             locations = locations - 1
             if locations[0] < 0:
                 locations[0] = 0
+            
+            # Handle participant change
+            participant = participants.index(data[0])
+            if participant != prev_participant:
+                print(f"Processing participant {data[0]}")
+                # Set up condition_epochs, must be done in loop since for SAT2, particicipant + epoch + condition is not unique, in SAT1 each epoch had the same condition across participatns
+                participant_data = self.epoch_data.sel(participant=data[0])
+                if condition is None:
+                    condition_epochs = self.epoch_data.epochs
+                elif self.condition_method == 'equals':
+                    condition_epochs = participant_data.where(
+                        condition == participant_data[self.condition_variable], drop=True
+                    ).epochs
+                elif self.condition_method == 'contains':
+                    condition_epochs = participant_data.where(
+                        participant_data[self.condition_variable].str.contains(condition), drop=True
+                    ).epochs
+                condition_epochs = condition_epochs.to_numpy().tolist()
+
             # Skip epoch if bumps are predicted to be at the same time
             unique, counts = np.unique(locations, return_counts=True)
             if np.any(counts > 1):
                 continue
+
             # Skip epoch if bump order is not sorted, can occur if probability mass is greater after the max probability of an earlier bump
             if not np.all(locations[:-1] <= locations[1:]):
                 continue
-            epoch = int(condition_epochs[data[1]])
-            participant = participants.index(data[0])
-
-            if participant != prev_participant:
-                print(f"Processing participant {data[0]}")
+            epoch = int(condition_epochs.index(data[1]))
 
             # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
             # Find first sample from the end for combination of participant + epoch where the value is NaN
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
-                participant=data[0], epochs=epoch, channels=self.epoch_data.channels[0]
+                participant=data[0], epochs=data[1], channels=self.epoch_data.channels[0]
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
             RT_sample = (
