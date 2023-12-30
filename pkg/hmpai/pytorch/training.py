@@ -35,6 +35,9 @@ def train_and_test(
     additional_info: dict = None,
     additional_name: str = None,
     use_class_weights: bool = True,
+    label_smoothing: float = 0.0,
+    weight_decay: float = 0.0,
+    do_spectral_decoupling: bool = False,
     labels: list[str] = None,
     seed: int = 42,
 ) -> dict:
@@ -53,6 +56,9 @@ def train_and_test(
         additional_info (dict, optional): Additional information to log. Defaults to None.
         additional_name (str, optional): Additional name to append to the log directory. Defaults to None.
         use_class_weights (bool, optional): Whether to use class weights for the loss function. Defaults to True.
+        label_smoothing (float, optional): The amount of label smoothing to use. Defaults to 0.0.
+        weight_decay (float, optional): The amount of weight decay to use. Defaults to 0.0.
+        do_spectral_decoupling (bool, optional): Whether to apply spectral decoupling to the loss function. Defaults to False.
         labels (list[str], optional): The labels to use for classification. Defaults to None.
         seed (int, optional): The seed to use for reproducibility. Defaults to 42.
 
@@ -122,9 +128,8 @@ def train_and_test(
     )
     weight = weight.to(DEVICE)
     model = model.to(DEVICE)
-    loss = torch.nn.CrossEntropyLoss(weight=weight)
-    opt = torch.optim.NAdam(model.parameters())
-    # opt = torch.optim.NAdam(model.parameters())
+    loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
+    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay)
     stopper = EarlyStopper()
 
     lowest_mean_val_loss = np.inf
@@ -133,7 +138,14 @@ def train_and_test(
             tepoch.set_description(f"Epoch {epoch + 1}")
 
             # Train on batches in train_loader
-            batch_losses = train(model, train_loader, opt, loss, tepoch)
+            batch_losses = train(
+                model,
+                train_loader,
+                opt,
+                loss,
+                tepoch,
+                do_spectral_decoupling=do_spectral_decoupling,
+            )
 
             # Validate model and communicate results
             val_loss_list = []
@@ -141,15 +153,15 @@ def train_and_test(
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 val_losses, val_accuracy = validate(model, val_loader, loss)
-                val_loss_list.append(val_losses)
-                val_acc_list.append(val_accuracy)
+                # Only count val_loss for first validation set
+                if i == 0:
+                    val_loss_list.append(val_losses)
+                    val_acc_list.append(val_accuracy)
                 postfix_dict[f"val_loss_{i}"] = np.mean(val_losses)
                 postfix_dict[f"val_accuracy_{i}"] = val_accuracy
-            tepoch.set_postfix(
-                postfix_dict
-            )
+            tepoch.set_postfix(postfix_dict)
             mean_train_loss = np.mean(batch_losses)
-            mean_val_loss = np.mean(val_losses)
+            mean_val_loss = np.mean(val_loss_list[-1])
 
             # Save model checkpoint if validation loss is the lowest yet
             if mean_val_loss < lowest_mean_val_loss:
@@ -275,6 +287,7 @@ def train(
     optimizer: torch.optim.Optimizer,
     loss_function: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
+    do_spectral_decoupling: bool = False,
 ) -> list[float]:
     """Train model for all batches, one epoch.
 
@@ -284,6 +297,7 @@ def train(
         optimizer (torch.optim.Optimizer): Optimizer used.
         loss_function (torch.nn.modules.loss._Loss): Loss function used.
         progress (tqdm, optional): tqdm instance to write progress to, will not write if not provided. Defaults to None.
+        do_spectral_decoupling (bool, optional): Whether to apply spectral decoupling to loss. Defaults to False.
 
     Returns:
         list[float]: List containing loss for each batch.
@@ -301,6 +315,8 @@ def train(
         predictions = model(data)
 
         loss = loss_function(predictions, labels)
+        if do_spectral_decoupling:
+            loss += 0.1 / 2 * (predictions**2).mean()
         loss_per_batch.append(loss.item())
 
         # Update loss shown every 5 batches, otherwise it is illegible
@@ -395,7 +411,9 @@ def test(
     return test_results, predicted_classes, true_classes
 
 
-def calculate_class_weights(set: torch.utils.data.Dataset, labels: list[str]) -> torch.Tensor:
+def calculate_class_weights(
+    set: torch.utils.data.Dataset, labels: list[str]
+) -> torch.Tensor:
     """
     Calculates class weights for a given dataset.
 
@@ -409,7 +427,12 @@ def calculate_class_weights(set: torch.utils.data.Dataset, labels: list[str]) ->
     weights = []
     for i in range(len(labels)):
         if i in occurrences[0]:
-            weights.append((sum(occurrences[1]) / occurrences[1][(occurrences[0] == i).nonzero()[0]]).item())
+            weights.append(
+                (
+                    sum(occurrences[1])
+                    / occurrences[1][(occurrences[0] == i).nonzero()[0]]
+                ).item()
+            )
         else:
             weights.append(1)
     return torch.Tensor(weights)

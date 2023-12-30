@@ -1,8 +1,10 @@
+from collections import defaultdict
 import xarray as xr
 import hsmm_mvpy as hmp
 import numpy as np
 from pathlib import Path
 from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
+from tqdm.notebook import tqdm
 
 
 SAT1_STAGES_ACCURACY = [
@@ -127,67 +129,47 @@ def add_stage_dimension(
         # Extrapolate bump locations from ratio between sampling frequencies
         ratio = round(merge_dataset.sfreq / stage_data.sfreq)
     changes[2] += 1
-    last_change = None
-    last_epoch = None
 
-    for participant, epoch, change in zip(changes[0], changes[1], changes[2]):
-        if last_change is None:
-            last_change = change
-        else:
-            # Dont take segment ending at one epoch and beginning in the next
-            if last_change < change:
-                segment = stage_data.isel(
-                    participant=[participant],  # List to retain dimension in segment
-                    epochs=[epoch],  # List to retain dimension in segment
-                    samples=slice(last_change, change),
-                )
-                if merge:
-                    merge_segment = merge_dataset.isel(
-                        participant=[participant],
-                        epochs=[epoch],
-                        samples=slice(last_change * ratio, change * ratio),
-                    )
-                # Ignore start/end segments containing only empty strings
-                if np.any(segment.labels != ""):
-                    label = segment.labels[0, 0, 0].item()
-                    segment = merge_segment["data"] if merge else segment["data"]
-                    segment = segment.expand_dims({"labels": 1}, axis=2).assign_coords(
-                        labels=[label]
-                    )
+    print("Starting segmentation")
+    change_list = list(zip(changes[0], changes[1], changes[2]))
+    grouped_changes = defaultdict(list)
+    for participant, epoch, change in change_list:
+        grouped_changes[(participant, epoch)].append(change)
 
-                    # Reset samples coordinate so it starts at zero
-                    segment["samples"] = np.arange(0, len(segment["samples"]))
-                    if (
-                        merge
-                        and (len(segment["samples"]) / (change - last_change)) != ratio
-                    ):
-                        continue
-                    segments.append(segment)
-            last_change = change
-        if last_epoch != epoch:
+    for (participant, epoch), change_indices in tqdm(grouped_changes.items()):
+        for i, change_idx in enumerate(change_indices):
+            # Determine whether to get slice from beginning of epoch or from last change
+            sample_slice = (
+                slice(0, change_idx)
+                if i == 0
+                else slice(change_indices[i - 1], change_idx)
+            )
             segment = stage_data.isel(
                 participant=[participant],  # List to retain dimension in segment
                 epochs=[epoch],  # List to retain dimension in segment
-                samples=slice(0, change),
+                samples=sample_slice,
             )
             if merge:
+                merge_slice = slice(
+                    sample_slice.start * ratio, sample_slice.stop * ratio
+                )
                 merge_segment = merge_dataset.isel(
-                    participant=[participant],  # List to retain dimension in segment
-                    epochs=[epoch],  # List to retain dimension in segment
-                    samples=slice(0, change * ratio),
+                    participant=[participant],
+                    epochs=[epoch],
+                    samples=merge_slice,
                 )
-            # Ignore start/end segments containing only empty strings
-            if np.any(segment.labels != ""):
-                label = segment.labels[0, 0, 0].item()
-                segment = merge_segment["data"] if merge else segment["data"]
-                segment = segment.expand_dims({"labels": 1}, axis=2).assign_coords(
-                    labels=[label]
-                )
-
-                # Reset samples coordinate so it starts at zero
-                segment["samples"] = np.arange(0, len(segment["samples"]))
-                segments.append(segment)
-        last_epoch = epoch
+            if not np.any(segment.labels != ""):
+                continue
+            label = label_data[participant, epoch, change_idx - 1]
+            segment = merge_segment["data"] if merge else segment["data"]
+            segment = segment.expand_dims({"labels": 1}, axis=2).assign_coords(
+                labels=[label]
+            )
+            n_samples = len(segment["samples"])
+            segment["samples"] = np.arange(0, n_samples)
+            if merge and n_samples / change_idx - change_indices[i - 1] != ratio:
+                continue  # Skip segment if it does not match the ratio
+            segments.append(segment)
 
     # Recombine into new segments dimension
     print("Combining segments")
@@ -308,6 +290,8 @@ class StageFinder:
         The variable used to determine the condition.
     condition_method : str
         The method used to check condition equality. ['equals', 'contains']
+    duration: int
+        The amount of samples that will be included from the start of the stage
     cpus : int
         The number of CPUs to use for fitting the model.
     fit_function : str
@@ -339,7 +323,8 @@ class StageFinder:
         labels,
         conditions=[],
         condition_variable="cue",
-        condition_method="equals",
+        condition_method="equal",
+        duration=0,
         cpus=1,
         fit_function="fit",
         fit_args=dict(),
@@ -370,6 +355,7 @@ class StageFinder:
         self.conditions = conditions
         self.condition_variable = condition_variable
         self.condition_method = condition_method
+        self.duration = duration
         self.cpus = cpus
         self.fit_function = fit_function
         self.fit_args = fit_args
@@ -525,17 +511,18 @@ class StageFinder:
         # Mapping from trial_x_participant epoch numbers to dataset epoch numbers
         if condition is None:
             condition_epochs = self.epoch_data.epochs
-        elif self.condition_method == 'equals':
+        elif self.condition_method == "equal":
             condition_epochs = self.epoch_data.where(
                 condition == self.epoch_data[self.condition_variable], drop=True
             ).epochs
-        elif self.condition_method == 'contains':
+        elif self.condition_method == "contains":
             condition_epochs = self.epoch_data.where(
-                self.epoch_data[self.condition_variable].str.contains(condition), drop=True
+                self.epoch_data[self.condition_variable].str.contains(condition),
+                drop=True,
             ).epochs
         else:
             raise ValueError(f"Condition method {self.condition_method} not supported")
-        
+
         if self.verbose:
             print("Epochs used for current condition (if applicable):")
             print(condition_epochs)
@@ -548,7 +535,7 @@ class StageFinder:
             locations = locations - 1
             if locations[0] < 0:
                 locations[0] = 0
-            
+
             # Handle participant change
             participant = participants.index(data[0])
             if participant != prev_participant:
@@ -557,13 +544,17 @@ class StageFinder:
                 participant_data = self.epoch_data.sel(participant=data[0])
                 if condition is None:
                     condition_epochs = self.epoch_data.epochs
-                elif self.condition_method == 'equals':
+                elif self.condition_method == "equal":
                     condition_epochs = participant_data.where(
-                        condition == participant_data[self.condition_variable], drop=True
+                        participant_data[self.condition_variable] == condition,
+                        drop=True,
                     ).epochs
-                elif self.condition_method == 'contains':
+                elif self.condition_method == "contains":
                     condition_epochs = participant_data.where(
-                        participant_data[self.condition_variable].str.contains(condition), drop=True
+                        participant_data[self.condition_variable].str.contains(
+                            condition
+                        ),
+                        drop=True,
                     ).epochs
                 condition_epochs = condition_epochs.to_numpy().tolist()
 
@@ -575,13 +566,17 @@ class StageFinder:
             # Skip epoch if bump order is not sorted, can occur if probability mass is greater after the max probability of an earlier bump
             if not np.all(locations[:-1] <= locations[1:]):
                 continue
-            epoch = int(condition_epochs.index(data[1]))
+
+            epoch = data[1]
+            # epoch = int(condition_epochs[data[1]])
 
             # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
             # Find first sample from the end for combination of participant + epoch where the value is NaN
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
-                participant=data[0], epochs=data[1], channels=self.epoch_data.channels[0]
+                participant=data[0],
+                epochs=data[1],
+                channels=self.epoch_data.channels[0],
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
             RT_sample = (
@@ -596,18 +591,27 @@ class StageFinder:
             for j, location in enumerate(locations):
                 # Record labels for pre-attentive stage (from stimulus onset to first peak)
                 if j == 0:
-                    labels_array[participant, epoch, slice(0, location)] = labels[0]
+                    initial_slice = slice(0, location) if self.duration == 0 else slice(0, self.duration)
+                    labels_array[participant, epoch, initial_slice] = labels[0]
                 # Slice from known event location n to known event location n + 1
                 # unless it is the last event, then slice from known event location n to reaction time
                 if j != n_events - 1:
+
                     if not locations[j + 1] >= RT_sample:
-                        samples_slice = slice(location, locations[j + 1])
+                        # Dont slice 10 if +10 is later than next event
+                        if self.duration == 0 or locations[j + 1] - location < self.duration:
+                            samples_slice = slice(location, locations[j + 1])
+                        else:
+                            samples_slice = slice(location, location + self.duration)
                     else:
                         # End of stage is later than NaNs begin
                         continue
                 else:
                     if not location >= RT_sample:
-                        samples_slice = slice(location, RT_sample)
+                        if self.duration == 0 or RT_sample - location < self.duration:
+                            samples_slice = slice(location, RT_sample)
+                        else:
+                            samples_slice = slice(location, location + self.duration)
                     else:
                         # NaNs begin before beginning of stage, error in measurement, disregard stage
                         continue

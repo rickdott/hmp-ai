@@ -315,6 +315,7 @@ def plot_confusion_matrix(
 ) -> None:
     sns.set_style("ticks")
     sns.set_context("paper")
+    print(sum(true == pred).item() / len(pred))
     cm = confusion_matrix(true, pred, normalize="true")
     plt.figure(figsize=(4, 4))
     sns.heatmap(cm, annot=True, fmt=".2f", cmap="OrRd")

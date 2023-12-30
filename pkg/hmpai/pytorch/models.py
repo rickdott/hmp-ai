@@ -7,9 +7,12 @@ from hmpai.pytorch.utilities import DEVICE
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, n_features, n_heads, ff_dim, n_layers, n_classes):
+    def __init__(self, n_features, n_heads, ff_dim, n_layers, n_samples, n_classes):
         super().__init__()
-        self.pos_encoder = PositionalEncoding(n_features)
+        self.pos_encoder = tAPE(n_features, max_len=n_samples)
+        self.linear = nn.Linear(n_features, n_features)
+        # self.pos_encoder = LearnablePositionalEncoding(n_features, max_len=10)
+        # self.pos_encoder = PositionalEncoding(n_features)
         encoder_layers = nn.TransformerEncoderLayer(n_features, n_heads, ff_dim)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, n_layers)
         self.n_features = n_features
@@ -17,18 +20,106 @@ class TransformerModel(nn.Module):
 
     def forward(self, x):
         # Calculate mask before?
+        # values, lengths = torch.max((x == MASKING_VALUE).int(), dim=1)
+        # lengths = lengths * values - (1 - values)
         # Why times sqrt(ninp)?
         # x = torch.squeeze(x, dim=1)
-        x = torch.where(x == MASKING_VALUE, 0.0, 1.0)
-        x = x * math.sqrt(self.n_features)
-        x = self.pos_encoder(x)
-        x = self.transformer_encoder(x)
-        # x = x.mean(dim=1)
-        x = self.decoder(x)
-        # Should be (128, 5, 199)
-        # x = x.transpose(1, 2)
+        # mask = torch.where(x == MASKING_VALUE, 0.0, 1.0)
+        # x = x * math.sqrt(self.n_features)
+        mask = (x == MASKING_VALUE).all(dim=2).t()
+        x = self.linear(x)
+        pos_enc = self.pos_encoder(x)
+        # mask = (x == MASKING_VALUE).bool()[:, :, 0].transpose(0, 1)
+        x = self.transformer_encoder(pos_enc, src_key_padding_mask=mask)
 
+        inverse_mask = ~mask
+        inverse_mask = inverse_mask.float().t().unsqueeze(-1)
+        x = x * inverse_mask
+
+        sum_emb = x.sum(dim=1)
+        sum_mask = inverse_mask.squeeze(-1).sum(dim=1, keepdim=True)
+        mean_pooled = sum_emb / sum_mask.clamp(min=1)
+
+        # x = x * mask
+        # x = x.mean(dim=1)
+        # mean_pooled = sum_embeddings / sum_mask.clamp(min=1)
+        x = self.decoder(mean_pooled)
         return x
+
+
+class LearnablePositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=1024):
+        super(LearnablePositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        # Each position gets its own embedding
+        # Since indices are always 0 ... max_len, we don't have to do a look-up
+        self.pe = nn.Parameter(
+            torch.empty(max_len, d_model)
+        )  # requires_grad automatically set to True
+        nn.init.uniform_(self.pe, -0.02, 0.02)
+
+        # distance = torch.matmul(self.pe, self.pe[10])
+        # import matplotlib.pyplot as plt
+
+        # plt.plot(distance.detach().numpy())
+        # plt.show()
+
+    def forward(self, x):
+        r"""Inputs of forward function
+        Args:
+            x: the sequence fed to the positional encoder model (required).
+        Shape:
+            x: [sequence length, batch size, embed dim]
+            output: [sequence length, batch size, embed dim]
+        """
+
+        x = x + self.pe
+        # x = x + self.pe[: x.size(0), :].to(DEVICE)
+        return self.dropout(x)
+
+
+class tAPE(nn.Module):
+    r"""Inject some information about the relative or absolute position of the tokens
+        in the sequence. The positional encodings have the same dimension as
+        the embeddings, so that the two can be summed. Here, we use sine and cosine
+        functions of different frequencies.
+    .. math::
+        \text{PosEncoder}(pos, 2i) = sin(pos/10000^(2i/d_model))
+        \text{PosEncoder}(pos, 2i+1) = cos(pos/10000^(2i/d_model))
+        \text{where pos is the word position and i is the embed idx)
+    Args:
+        d_model: the embed dim (required).
+        dropout: the dropout value (default=0.1).
+        max_len: the max. length of the incoming sequence (default=1024).
+    """
+
+    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
+        super(tAPE, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)  # positional encoding
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+
+        pe[:, 0::2] = torch.sin((position * div_term) * (d_model / max_len))
+        pe[:, 1::2] = torch.cos((position * div_term) * (d_model / max_len))
+        pe = scale_factor * pe.unsqueeze(0)
+        self.register_buffer(
+            "pe", pe
+        )  # this stores the variable in the state_dict (used for non-trainable variables)
+
+    def forward(self, x):
+        r"""Inputs of forward function
+        Args:
+            x: the sequence fed to the positional encoder model (required).
+        Shape:
+            x: [sequence length, batch size, embed dim]
+            output: [sequence length, batch size, embed dim]
+        """
+        x = x + self.pe[: x.size(0), :].to(DEVICE)
+        # x = x + self.pe
+        return self.dropout(x)
 
 
 class PositionalEncoding(nn.Module):
@@ -218,7 +309,11 @@ class SAT1GRU(nn.Module):
         super().__init__()
         self.relu = nn.ReLU()
         # self.gru = nn.GRU(input_size=n_channels, hidden_size=16, batch_first=True, dropout=0.25)
-        self.gru = nn.GRU(input_size=n_channels, hidden_size=256, batch_first=True)
+        self.gru = nn.GRU(
+            input_size=n_channels,
+            hidden_size=256,
+            batch_first=True,
+        )
         self.linear = nn.LazyLinear(out_features=128)
         self.linear_final = nn.LazyLinear(out_features=n_classes)
 
