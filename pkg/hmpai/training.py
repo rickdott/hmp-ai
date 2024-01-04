@@ -8,6 +8,7 @@ def split_data_on_participants(
     data: xr.Dataset,
     train_percentage: int = 60,
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
+    truncate_sample: int = None,
 ) -> (xr.Dataset, xr.Dataset, xr.Dataset):
     """Splits dataset into three distinct sets based on participant, ensuring
     that no participant occurs in more than one set.
@@ -18,6 +19,7 @@ def split_data_on_participants(
         data (xr.Dataset): Dataset to be split.
         train_percentage (int): Percentage of participants used in the training set. Defaults to 60.
         normalization_fn (Callable[[xr.Dataset, float, float], xr.Dataset], optional): Normalization function to use. Defaults to norm_0_to_1.
+        truncate_sample (int, optional): Number of samples to truncate to. Defaults to None.
 
     Returns:
         (xr.Dataset, xr.Dataset, xr.Dataset): tuple of train, test, val datasets.
@@ -38,9 +40,20 @@ def split_data_on_participants(
     test_participants = testval_participants[testval_n // 2 :]
 
     # Select subsets from data
-    train_data = data.sel(participant=train_participants)
-    val_data = data.sel(participant=val_participants)
-    test_data = data.sel(participant=test_participants)
+    if truncate_sample is not None:
+        train_data = data.sel(
+            participant=train_participants, samples=slice(0, truncate_sample - 1)
+        )
+        val_data = data.sel(
+            participant=val_participants, samples=slice(0, truncate_sample - 1)
+        )
+        test_data = data.sel(
+            participant=test_participants, samples=slice(0, truncate_sample - 1)
+        )
+    else:
+        train_data = data.sel(participant=train_participants)
+        val_data = data.sel(participant=val_participants)
+        test_data = data.sel(participant=test_participants)
 
     # Normalize data
     norm_var1, norm_var2 = get_norm_vars(train_data, normalization_fn)

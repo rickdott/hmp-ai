@@ -1,16 +1,16 @@
+from collections import defaultdict
 from hmpai.utilities import pretty_json
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
 from hmpai.pytorch.utilities import (
     DEVICE,
     set_global_seed,
-    get_summary_str,
     save_model,
     load_model,
 )
 from hmpai.pytorch.generators import SAT1Dataset
 import torch
-from hmpai.data import SAT1_STAGES_ACCURACY, AR_STAGES
+from hmpai.data import SAT1_STAGES_ACCURACY
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 import xarray as xr
@@ -26,7 +26,7 @@ import re
 def train_and_test(
     model: torch.nn.Module,
     train_set: Dataset,
-    test_set: Dataset,
+    test_set: Dataset | list[Dataset],
     val_set: Dataset = None,
     batch_size: int = 128,
     epochs: int = 20,
@@ -72,9 +72,31 @@ def train_and_test(
         train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
     )
     # Do not shuffle test loader since testing should be the same always
-    test_loader = DataLoader(
-        test_set, batch_size, shuffle=False, num_workers=workers, pin_memory=True
-    )
+    test_loaders = []
+    if type(test_set) is list:
+        test_loaders = []
+        for test_data in test_set:
+            test_loaders.append(
+                DataLoader(
+                    test_data,
+                    batch_size,
+                    shuffle=False,
+                    num_workers=workers,
+                    pin_memory=False,
+                )
+            )
+    else:
+        # Assume type of test_set is Dataset
+        test_loaders.append(
+            DataLoader(
+                test_set,
+                batch_size,
+                shuffle=False,
+                num_workers=workers,
+                pin_memory=False,
+            )
+        )
+
     val_loaders = []
     if val_set is not None:
         if type(val_set) is list:
@@ -85,7 +107,7 @@ def train_and_test(
                         batch_size,
                         shuffle=True,
                         num_workers=workers,
-                        pin_memory=True,
+                        pin_memory=False,
                     )
                 )
         else:
@@ -95,7 +117,7 @@ def train_and_test(
                     batch_size,
                     shuffle=True,
                     num_workers=workers,
-                    pin_memory=True,
+                    pin_memory=False,
                 )
             )
 
@@ -192,7 +214,7 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    results, _, _ = test(model, test_loader, writer)
+    results, _, _ = test(model, test_loaders, writer)
     return results
 
 
@@ -206,6 +228,7 @@ def k_fold_cross_validate(
     normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
     gen_kwargs: dict = None,
     train_kwargs: dict = None,
+    additional_test_data: list[Dataset] = None,
     seed: int = 42,
 ) -> list[dict]:
     """
@@ -222,15 +245,17 @@ def k_fold_cross_validate(
             The function to use for normalizing the data. Defaults to norm_dummy.
         gen_kwargs (dict, optional): The keyword arguments to pass to the SAT1Dataset constructor. Defaults to None.
         train_kwargs (dict, optional): The keyword arguments to pass to the train_and_test function. Defaults to None.
+        additional_test_data (list[Dataset], optional): Additional test data to use for testing generalization. Defaults to None.
         seed (int, optional): The seed to use for reproducibility. Defaults to 42.
 
     Returns:
-        list[dict]: A list of dictionaries containing the results of each fold.
+        dict[list]: A dictionary of lists of dictionaries, each dict (first-level) resembles a test set, each list resembles a fold, each dict (second-level) resembles the classification report.
     """
     if gen_kwargs is None:
         gen_kwargs = dict()
-    results = []
+    results = defaultdict(list)
     set_global_seed(seed)
+    torch.cuda.empty_cache()
     folds = get_folds(data, k)
     for i_fold in range(len(folds)):
         # Deepcopy since folds is changed in memory when .pop() is used, and folds needs to be re-used
@@ -248,7 +273,20 @@ def k_fold_cross_validate(
         test_data = normalization_fn(test_data, norm_var1, norm_var2)
 
         train_dataset = SAT1Dataset(train_data, **gen_kwargs)
-        test_dataset = SAT1Dataset(test_data, **gen_kwargs)
+        test_dataset = [SAT1Dataset(test_data, **gen_kwargs)]
+        if additional_test_data is not None:
+            for i, additional_test in enumerate(additional_test_data):
+                # If all participants are the exact same, additional test set is of the same dataset and should also be split using test_fold
+                if (
+                    type(additional_test) is xr.Dataset
+                    and (additional_test.participant == test_data.participant)
+                    .all()
+                    .item()
+                ):
+                    tmp_data = additional_test.sel(participant=test_fold)
+                    tmp_data = normalization_fn(tmp_data, norm_var1, norm_var2)
+                    additional_test_data[i] = SAT1Dataset(tmp_data, **gen_kwargs)
+            test_dataset.extend(additional_test_data)
 
         # Resets model every fold
         model_instance = model(**model_kwargs).to(DEVICE)
@@ -265,18 +303,19 @@ def k_fold_cross_validate(
             train_kwargs["additional_name"] = additional_name
 
         # Train and test model
-        result = train_and_test(
+        tt_results = train_and_test(
             model_instance,
             train_dataset,
             test_dataset,
-            val_set=test_dataset,
+            val_set=test_dataset[0],
             batch_size=batch_size,
             epochs=epochs,
             **train_kwargs,
         )
-        print(f"Fold {i_fold + 1}: Accuracy: {result['accuracy']}")
-        print(f"Fold {i_fold + 1}: F1-Score: {result['macro avg']['f1-score']}")
-        results.append(result)
+        print(f"Fold {i_fold + 1}: Accuracy: {tt_results[0]['accuracy']}")
+        print(f"Fold {i_fold + 1}: F1-Score: {tt_results[0]['macro avg']['f1-score']}")
+        for i, result in enumerate(tt_results):
+            results[i].append(result)
 
     return results
 
@@ -373,7 +412,9 @@ def validate(
 
 
 def test(
-    model: torch.nn.Module, test_loader: DataLoader, writer: SummaryWriter = None
+    model: torch.nn.Module,
+    test_loader: DataLoader | list[DataLoader],
+    writer: SummaryWriter = None,
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -389,24 +430,32 @@ def test(
         torch.Tensor: The true classes.
     """
     model.eval()
-    outputs = []
-    true_labels = []
-    with torch.no_grad():
-        for batch in test_loader:
-            data, labels = batch[0].to(DEVICE), batch[1]
+    test_results = []
+    if type(test_loader) is not list:
+        # Assume type is DataLoader
+        test_loader = [test_loader]
+    for i, loader in enumerate(test_loader):
+        outputs = []
+        true_labels = []
+        with torch.no_grad():
+            for batch in loader:
+                data, labels = batch[0].to(DEVICE), batch[1]
 
-            predictions = model(data)
-            predicted_labels = torch.argmax(predictions, dim=1)
-            outputs.append(predicted_labels)
-            true_labels.append(labels)
+                predictions = model(data)
+                predicted_labels = torch.argmax(predictions, dim=1)
+                outputs.append(predicted_labels)
+                true_labels.append(labels)
 
-    predicted_classes = torch.cat(outputs, dim=0)
-    true_classes = torch.cat(true_labels, dim=0)
-    test_results = classification_report(
-        true_classes, predicted_classes.cpu(), output_dict=True
-    )
-    if writer is not None:
-        writer.add_text("Test results", pretty_json(test_results), global_step=0)
+        predicted_classes = torch.cat(outputs, dim=0)
+        true_classes = torch.cat(true_labels, dim=0)
+        loader_results = classification_report(
+            true_classes, predicted_classes.cpu(), output_dict=True
+        )
+        test_results.append(loader_results)
+        if writer is not None:
+            writer.add_text(
+                f"Test results {i}", pretty_json(loader_results), global_step=0
+            )
 
     return test_results, predicted_classes, true_classes
 

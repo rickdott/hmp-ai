@@ -1,3 +1,4 @@
+from collections import defaultdict
 from mne.viz import plot_topomap
 from mne import Info
 import numpy as np
@@ -16,6 +17,7 @@ from sklearn.metrics import confusion_matrix
 import pandas as pd
 from scipy.stats import ttest_rel
 from typing import List, Optional
+import json
 
 
 def add_attribution(
@@ -355,6 +357,28 @@ def p_to_asterisk(pvalue: float):
     return "ns"
 
 
+def generate_table(
+    accs: List[List[float]], f1s: List[List[float]], categories: List[str]
+):
+    table_start = """
+\\begin{table}[H]
+  \\centering
+  \\begin{tabular}{@{}lll@{}} \\toprule
+      & Accuracy             & F1-Score             \\\\ \\midrule"""
+    table_end = """
+  \\end{tabular}
+  \\caption{CAPTION HERE}
+\\end{table}"""
+
+    table = ""
+    for acc, f1, cat in zip(accs, f1s, categories):
+        table += f"\n  {cat} & {np.mean(acc):.2f} (SD {np.std(acc):.2f}) & {np.mean(f1):.2f} (SD {np.std(f1):.2f}) \\\\"
+        if cat == categories[-1]:
+            table += " \\bottomrule"
+
+    return table_start + table + table_end
+
+
 def plot_performance(
     accs: List[List[float]],
     f1s: List[List[float]],
@@ -377,14 +401,16 @@ def plot_performance(
     )
     set_seaborn_style()
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]}
+    )
     # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     sns.violinplot(
         data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
     )
     axes[0].set_ylabel("Metric value")
     axes[0].set_xlabel(cat_name)
-    axes[0].set_ylim((0.75, 1.0))
+    axes[0].set_ylim((0.0, 1.0))
     sns.move_legend(axes[0], "lower right", bbox_to_anchor=(1.0, 0.0), title="Metric")
     sns.despine()
 
@@ -413,14 +439,32 @@ def plot_performance(
     if len(categories) == 2:
         blue_palette = blue_palette.reversed()
         orange_palette = orange_palette.reversed()
-    sns.heatmap(acc_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=blue_palette, cbar=False, ax=axes[1], vmin=-0, vmax=5)
+    sns.heatmap(
+        acc_diffs,
+        annot=True,
+        fmt=".3f",
+        xticklabels=categories,
+        yticklabels=categories,
+        cmap=blue_palette,
+        cbar=False,
+        ax=axes[1],
+    )
 
-    sns.heatmap(f1_diffs, annot=True, fmt=".3f", xticklabels=categories, yticklabels=categories, cmap=orange_palette, cbar=False, ax=axes[1], vmin=-0, vmax=5)
+    sns.heatmap(
+        f1_diffs,
+        annot=True,
+        fmt=".3f",
+        xticklabels=categories,
+        yticklabels=categories,
+        cmap=orange_palette,
+        cbar=False,
+        ax=axes[1],
+    )
 
     # axes[1].set_ylabel("From")
     # axes[0].set_title("Distribution of folds")
     # axes[1].set_title("Differences in performance")
-    axes[1].set_xlabel("Improvement (%)")
+    axes[1].set_xlabel("Performance change (%)")
     plt.tight_layout()
     plt.savefig(f"img/{cat_name}.png")
     plt.show()
@@ -536,6 +580,27 @@ def plot_performance_ttest(
     plt.tight_layout()
     plt.show()
     # sns.despine()
+
+
+def plot_performance_from_file(path, conditions, cat_name, do_generate_table=False):
+    res = defaultdict(lambda: defaultdict(list))
+    with open(path) as f:
+        data = json.load(f)
+    for k, test_results in data.items():
+        for fold in test_results:
+            res[conditions[int(k)]]["accuracy"].append(fold["accuracy"])
+            res[conditions[int(k)]]["f1"].append(fold["weighted avg"]["f1-score"])
+
+    categories = []
+    accs = []
+    f1s = []
+    for k, v in res.items():
+        categories.append(k)
+        accs.append(v["accuracy"])
+        f1s.append(v["f1"])
+    if do_generate_table:
+        print(generate_table(accs, f1s, categories))
+    plot_performance(accs, f1s, categories, cat_name)
 
 
 def set_seaborn_style():

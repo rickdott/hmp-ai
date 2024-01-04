@@ -9,117 +9,47 @@ from hmpai.pytorch.utilities import DEVICE
 class TransformerModel(nn.Module):
     def __init__(self, n_features, n_heads, ff_dim, n_layers, n_samples, n_classes):
         super().__init__()
-        self.pos_encoder = tAPE(n_features, max_len=n_samples)
-        self.linear = nn.Linear(n_features, n_features)
-        # self.pos_encoder = LearnablePositionalEncoding(n_features, max_len=10)
-        # self.pos_encoder = PositionalEncoding(n_features)
+        # self.pos_encoder = tAPE(n_features, max_len=n_samples)
+        # self.pos_encoder = LearnablePositionalEncoding(n_features, max_len=n_samples)
+        self.pos_encoder = PositionalEncoding(n_features, max_len=n_samples)
         encoder_layers = nn.TransformerEncoderLayer(n_features, n_heads, ff_dim)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, n_layers)
         self.n_features = n_features
         self.decoder = nn.Linear(n_features, n_classes)
+        self.linear = nn.Linear(n_features, n_features)
 
     def forward(self, x):
-        # Calculate mask before?
-        # values, lengths = torch.max((x == MASKING_VALUE).int(), dim=1)
-        # lengths = lengths * values - (1 - values)
-        # Why times sqrt(ninp)?
-        # x = torch.squeeze(x, dim=1)
-        # mask = torch.where(x == MASKING_VALUE, 0.0, 1.0)
         # x = x * math.sqrt(self.n_features)
         mask = (x == MASKING_VALUE).all(dim=2).t()
+        max_idx = mask.float().argmax(dim=0).max()
+        mask = mask[:max_idx, :]
+        x = x[:, :max_idx, :]
+        # print(f"Mask == true: {(mask[0,:] == True).any()}")
+        # print(mask[0, :])
         x = self.linear(x)
+        # print(x.isnan().any())
         pos_enc = self.pos_encoder(x)
-        # mask = (x == MASKING_VALUE).bool()[:, :, 0].transpose(0, 1)
+        # print(pos_enc.isnan().any())
         x = self.transformer_encoder(pos_enc, src_key_padding_mask=mask)
-
+        x = torch.nan_to_num(x)
+        # print(x.isnan().any())
         inverse_mask = ~mask
         inverse_mask = inverse_mask.float().t().unsqueeze(-1)
+        # print(inverse_mask.isnan().any())
+
         x = x * inverse_mask
+        # print(x.isnan().any())
 
         sum_emb = x.sum(dim=1)
-        sum_mask = inverse_mask.squeeze(-1).sum(dim=1, keepdim=True)
-        mean_pooled = sum_emb / sum_mask.clamp(min=1)
+        # print(sum_emb.isnan().any())
 
-        # x = x * mask
-        # x = x.mean(dim=1)
-        # mean_pooled = sum_embeddings / sum_mask.clamp(min=1)
+        sum_mask = inverse_mask.squeeze(-1).sum(dim=1, keepdim=True)
+        # print(sum_mask.isnan().any())
+        mean_pooled = (sum_emb / sum_mask).clamp(min=1)
+        # print(mean_pooled.isnan().any())
+
         x = self.decoder(mean_pooled)
         return x
-
-
-class LearnablePositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=1024):
-        super(LearnablePositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        # Each position gets its own embedding
-        # Since indices are always 0 ... max_len, we don't have to do a look-up
-        self.pe = nn.Parameter(
-            torch.empty(max_len, d_model)
-        )  # requires_grad automatically set to True
-        nn.init.uniform_(self.pe, -0.02, 0.02)
-
-        # distance = torch.matmul(self.pe, self.pe[10])
-        # import matplotlib.pyplot as plt
-
-        # plt.plot(distance.detach().numpy())
-        # plt.show()
-
-    def forward(self, x):
-        r"""Inputs of forward function
-        Args:
-            x: the sequence fed to the positional encoder model (required).
-        Shape:
-            x: [sequence length, batch size, embed dim]
-            output: [sequence length, batch size, embed dim]
-        """
-
-        x = x + self.pe
-        # x = x + self.pe[: x.size(0), :].to(DEVICE)
-        return self.dropout(x)
-
-
-class tAPE(nn.Module):
-    r"""Inject some information about the relative or absolute position of the tokens
-        in the sequence. The positional encodings have the same dimension as
-        the embeddings, so that the two can be summed. Here, we use sine and cosine
-        functions of different frequencies.
-    .. math::
-        \text{PosEncoder}(pos, 2i) = sin(pos/10000^(2i/d_model))
-        \text{PosEncoder}(pos, 2i+1) = cos(pos/10000^(2i/d_model))
-        \text{where pos is the word position and i is the embed idx)
-    Args:
-        d_model: the embed dim (required).
-        dropout: the dropout value (default=0.1).
-        max_len: the max. length of the incoming sequence (default=1024).
-    """
-
-    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
-        super(tAPE, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        pe = torch.zeros(max_len, d_model)  # positional encoding
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-
-        pe[:, 0::2] = torch.sin((position * div_term) * (d_model / max_len))
-        pe[:, 1::2] = torch.cos((position * div_term) * (d_model / max_len))
-        pe = scale_factor * pe.unsqueeze(0)
-        self.register_buffer(
-            "pe", pe
-        )  # this stores the variable in the state_dict (used for non-trainable variables)
-
-    def forward(self, x):
-        r"""Inputs of forward function
-        Args:
-            x: the sequence fed to the positional encoder model (required).
-        Shape:
-            x: [sequence length, batch size, embed dim]
-            output: [sequence length, batch size, embed dim]
-        """
-        x = x + self.pe[: x.size(0), :].to(DEVICE)
-        # x = x + self.pe
-        return self.dropout(x)
 
 
 class PositionalEncoding(nn.Module):
@@ -134,11 +64,11 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1).to(DEVICE)
+        pe = pe.unsqueeze(0).to(DEVICE)
         self.register_buffer("pe", pe)
 
     def forward(self, x):
-        x = x + self.pe[: x.size(0), :].to(DEVICE)
+        x = x + self.pe[:, : x.size(1), :].to(DEVICE)
         return self.dropout(x)
 
 

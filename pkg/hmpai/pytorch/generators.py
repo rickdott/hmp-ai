@@ -31,6 +31,7 @@ class SAT1Dataset(Dataset):
 
         # If labels is a data variable, the data is sequential instead of split
         sequential = dataset.data_vars.__contains__("labels")
+
         # Preprocess data
         if do_preprocessing:
             dataset = preprocess(
