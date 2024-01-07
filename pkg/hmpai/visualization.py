@@ -384,6 +384,8 @@ def plot_performance(
     f1s: List[List[float]],
     categories: List[str],
     cat_name: str,
+    legend_pos: str = "lower right",
+    ylim=(0.0, 1.0)
 ):
     n_obs = len(accs[0])
     df = pd.DataFrame(
@@ -401,19 +403,22 @@ def plot_performance(
     )
     set_seaborn_style()
 
-    fig, axes = plt.subplots(
-        1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]}
-    )
-    # fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4), gridspec_kw={"width_ratios": [2, 1]})
     sns.violinplot(
         data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
     )
     axes[0].set_ylabel("Metric value")
     axes[0].set_xlabel(cat_name)
-    axes[0].set_ylim((0.0, 1.0))
-    sns.move_legend(axes[0], "lower right", bbox_to_anchor=(1.0, 0.0), title="Metric")
+    axes[0].set_ylim(ylim)
+    if legend_pos == "lower right":
+        sns.move_legend(
+            axes[0], "lower right", bbox_to_anchor=(1.0, 0.0), title="Metric"
+        )
+    else:
+        sns.move_legend(
+            axes[0], "upper right", bbox_to_anchor=(1.0, 1.0), title="Metric"
+        )
     sns.despine()
-
     means = df.groupby(["category", "metric"], sort=False).mean().reset_index()
     print(means)
     acc_means = means[means.metric == "Accuracy"].value.to_numpy()
@@ -460,6 +465,16 @@ def plot_performance(
         cbar=False,
         ax=axes[1],
     )
+    ax2 = axes[1].twinx()
+    ax2.set_ylim(axes[1].get_ylim())
+    ax2.set_yticks(axes[1].get_yticks())
+    ax2.set_yticklabels(axes[1].get_yticklabels(), rotation=90, va="center")
+    ax2.spines['left'].set_visible(False)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['bottom'].set_visible(False)
+    axes[1].set_yticks([])
+    
 
     # axes[1].set_ylabel("From")
     # axes[0].set_title("Distribution of folds")
@@ -582,7 +597,9 @@ def plot_performance_ttest(
     # sns.despine()
 
 
-def plot_performance_from_file(path, conditions, cat_name, do_generate_table=False):
+def plot_performance_from_file(
+    path, conditions, cat_name, do_generate_table=False, legend_pos="lower right"
+):
     res = defaultdict(lambda: defaultdict(list))
     with open(path) as f:
         data = json.load(f)
@@ -600,7 +617,7 @@ def plot_performance_from_file(path, conditions, cat_name, do_generate_table=Fal
         f1s.append(v["f1"])
     if do_generate_table:
         print(generate_table(accs, f1s, categories))
-    plot_performance(accs, f1s, categories, cat_name)
+    plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos)
 
 
 def set_seaborn_style():

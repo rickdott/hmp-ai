@@ -30,6 +30,8 @@ class TransformerModel(nn.Module):
         # print(x.isnan().any())
         pos_enc = self.pos_encoder(x)
         # print(pos_enc.isnan().any())
+        # Remove mask if writing summary
+        # x = self.transformer_encoder(pos_enc)
         x = self.transformer_encoder(pos_enc, src_key_padding_mask=mask)
         x = torch.nan_to_num(x)
         # print(x.isnan().any())
