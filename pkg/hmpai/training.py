@@ -1,13 +1,21 @@
 import random
+from hmpai.data import preprocess
+from sklearn.metrics import classification_report
 import xarray as xr
 from typing import Callable
-from hmpai.normalization import get_norm_vars, norm_0_to_1
+from hmpai.normalization import get_norm_vars, norm_dummy
+from hmpai.pytorch.utilities import set_global_seed
+import sklearn
+import numpy as np
+from copy import deepcopy
+from hmpai.utilities import MASKING_VALUE
+from collections import defaultdict
 
 
 def split_data_on_participants(
     data: xr.Dataset,
     train_percentage: int = 60,
-    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_0_to_1,
+    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
     truncate_sample: int = None,
 ) -> (xr.Dataset, xr.Dataset, xr.Dataset):
     """Splits dataset into three distinct sets based on participant, ensuring
@@ -63,3 +71,105 @@ def split_data_on_participants(
     test_data = normalization_fn(test_data, norm_var1, norm_var2)
 
     return train_data, val_data, test_data
+
+
+def get_folds(
+    data: xr.Dataset,
+    k: int,
+) -> list[np.ndarray]:
+    """Divides dataset into folds
+
+    Args:
+        data (xr.Dataset): Dataset to be used
+        k (int): Amount of folds
+
+    Raises:
+        ValueError: Occurs when k does not divide number of participants
+
+    Returns:
+        list[np.ndarray]: List of folds
+    """
+    # Make sure #participants is divisible by k
+    n_participants = len(data.participant)
+    if n_participants % k != 0:
+        raise ValueError(
+            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
+        )
+
+    # Divide data into k folds
+    participants = data.participant.values.copy()
+    np.random.shuffle(participants)
+    folds = np.array_split(participants, k)
+    return folds
+
+
+def k_fold_cross_validate_sklearn(
+    model: sklearn.base.ClassifierMixin,
+    data: xr.Dataset,
+    k: int = 5,
+    normalization_fn: Callable[[xr.Dataset, float, float], xr.Dataset] = norm_dummy,
+    seed: int = 42,
+):
+    results = defaultdict(list)
+    set_global_seed(seed)
+    folds = get_folds(data, k)
+
+    for i_fold in range(len(folds)):
+        train_folds = deepcopy(folds)
+        test_fold = train_folds.pop(i_fold)
+        train_fold = np.concatenate(train_folds, axis=0)
+        print(f"Fold {i_fold + 1}: test fold: {test_fold}")
+
+        train_data = data.sel(participant=train_fold)
+        test_data = data.sel(participant=test_fold)
+
+        # Normalize data
+        norm_var1, norm_var2 = get_norm_vars(train_data, normalization_fn)
+        train_data = normalization_fn(train_data, norm_var1, norm_var2)
+        test_data = normalization_fn(test_data, norm_var1, norm_var2)
+
+        train_data = preprocess(train_data)
+        test_data = preprocess(test_data)
+
+        train_data = calculate_features(train_data)
+        test_data = calculate_features(test_data)
+
+        train_data_np = train_data.to_numpy().reshape(-1, train_data.shape[1] * train_data.shape[2])
+        test_data_np = test_data.to_numpy().reshape(-1, test_data.shape[1] * test_data.shape[2])
+
+        clf = model.fit(train_data_np, train_data.labels)
+
+        predictions = clf.predict(test_data_np)
+
+        result = classification_report(test_data.labels, predictions, output_dict=True)
+        print(f"Fold {i_fold + 1}: Accuracy: {result['accuracy']}")
+        print(f"Fold {i_fold + 1}: F1-Score: {result['macro avg']['f1-score']}")
+        # Does not support multiple test sets
+        results[0].append(result)
+    return results
+
+
+def calculate_features(data: xr.Dataset) -> xr.Dataset:
+    """Calculates features from data
+
+    Args:
+        data (xr.Dataset): Dataset to calculate features from
+
+    Returns:
+        xr.Dataset: Dataset with features
+    """
+    data = data.where(data.data != MASKING_VALUE)
+    new_dataset = xr.Dataset()
+
+    # Calculate features
+    new_dataset["mean"] = data["data"].mean(dim="samples")
+    new_dataset["std"] = data["data"].std(dim="samples")
+    new_dataset["min"] = data["data"].min(dim="samples")
+    new_dataset["max"] = data["data"].max(dim="samples")
+    new_dataset["median"] = data["data"].median(dim="samples")
+    new_dataset["var"] = data["data"].var(dim="samples")
+
+    new_dataset = xr.concat([new_dataset[var] for var in new_dataset.data_vars], dim="features")
+    new_dataset = new_dataset.transpose("index", "channels", "features")
+
+    return new_dataset

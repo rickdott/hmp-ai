@@ -21,6 +21,7 @@ from typing import Callable
 from hmpai.normalization import get_norm_vars, norm_dummy
 from copy import deepcopy
 import re
+from hmpai.training import get_folds
 
 
 def train_and_test(
@@ -485,36 +486,6 @@ def calculate_class_weights(
         else:
             weights.append(1)
     return torch.Tensor(weights)
-
-
-def get_folds(
-    data: xr.Dataset,
-    k: int,
-) -> list[np.ndarray]:
-    """Divides dataset into folds
-
-    Args:
-        data (xr.Dataset): Dataset to be used
-        k (int): Amount of folds
-
-    Raises:
-        ValueError: Occurs when k does not divide number of participants
-
-    Returns:
-        list[np.ndarray]: List of folds
-    """
-    # Make sure #participants is divisible by k
-    n_participants = len(data.participant)
-    if n_participants % k != 0:
-        raise ValueError(
-            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
-        )
-
-    # Divide data into k folds
-    participants = data.participant.values.copy()
-    np.random.shuffle(participants)
-    folds = np.array_split(participants, k)
-    return folds
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch

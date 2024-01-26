@@ -319,7 +319,7 @@ class StageFinder:
 
     def __init__(
         self,
-        epoched_data_path,
+        epoched_data: Path | str | xr.Dataset,
         labels,
         conditions=[],
         condition_variable="cue",
@@ -348,7 +348,10 @@ class StageFinder:
                 )
 
         # Load required data and set up paths
-        self.epoch_data = xr.load_dataset(epoched_data_path)
+        if type(epoched_data) is Path or type(epoched_data) is str:
+            self.epoch_data = xr.load_dataset(epoched_data)
+        else:
+            self.epoch_data = epoched_data
 
         self.verbose = verbose
         self.labels = labels
@@ -388,7 +391,7 @@ class StageFinder:
             for condition in self.conditions:
                 condition_subset = hmp.utils.condition_selection(
                     hmp_data,
-                    self.epoch_data,
+                    None,  # epoch_data deprecated
                     condition,
                     variable=self.condition_variable,
                     method=self.condition_method,
@@ -567,8 +570,13 @@ class StageFinder:
             if not np.all(locations[:-1] <= locations[1:]):
                 continue
 
-            epoch = data[1]
+            # epoch = data[1]
+            epoch = condition_epochs.index(data[1])
             # epoch = int(condition_epochs[data[1]])
+
+            if epoch > shape[1]:
+                print("Epoch number exceeds shape of data, skipping")
+                continue
 
             # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
             # Find first sample from the end for combination of participant + epoch where the value is NaN

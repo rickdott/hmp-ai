@@ -40,7 +40,7 @@ def add_attribution(
     test_set = test_set.assign(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
     )
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, pin_memory=True)
 
     # Batch-wise analyzing of data and adding analysis to the dataset
     for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
@@ -54,11 +54,11 @@ def add_attribution(
         batch_analysis = analyzer.attribute(
             batch_data,
             baselines=baselines,
-            n_steps=100,
+            n_steps=50,
             method="riemann_trapezoid",
             # Change to batch[1] if true values should be used instead of model predictions
             target=target,
-            internal_batch_size=512,
+            internal_batch_size=128,
         )
         test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
             batch_analysis.cpu()
@@ -85,8 +85,7 @@ def plot_max_activation_per_label(
     Returns:
         None
     """
-    sns.set_style("ticks")
-    sns.set_context("paper")
+    set_seaborn_style()
     f, ax = plt.subplots(nrows=3, ncols=len(labels), figsize=(8, 4))
 
     for i, label in enumerate(labels):
@@ -132,7 +131,7 @@ def plot_max_activation_per_label(
         )
 
         # Combined
-        combined = mean_max_samples.data * abs(abs_mean_max_analysis)
+        combined = mean_max_samples.data * abs_mean_max_analysis
         plot_topomap(
             combined,
             positions,
@@ -274,8 +273,7 @@ def plot_model_attention_over_stage_duration(
     Returns:
     None
     """
-    sns.set_style("ticks")
-    sns.set_context("paper")
+    set_seaborn_style()
     f, ax = plt.subplots(
         nrows=1,
         ncols=len(labels),
@@ -292,6 +290,8 @@ def plot_model_attention_over_stage_duration(
         )
         interpolated = []
         for sample, nan_index in zip(subset.analysis, nan_indices["samples"]):
+            if nan_index.item() < 3:
+                continue
             sequence = sample.mean(dim="channels")[0 : nan_index.item()]
             if len(sequence) == 0:
                 continue
@@ -301,7 +301,7 @@ def plot_model_attention_over_stage_duration(
         ax[i].plot(np.mean(interpolated, axis=0))
         ax[i].set_facecolor("white")
         ax[i].set_title(f"{label}", fontsize=10)
-        ax[i].set_yticks(np.arange(0.0, 0.2, 0.05))
+        ax[i].set_yticks(np.arange(0.0, 0.25, 0.05))
     # ax[2].text(0, -0.005, 'Linear interpolation\nof stage length', va='bottom', ha='center')
     ax[0].set_ylabel("Model Attention")
     ax[2].set_xlabel("Stage duration (%)")
@@ -372,7 +372,7 @@ def generate_table(
 
     table = ""
     for acc, f1, cat in zip(accs, f1s, categories):
-        table += f"\n  {cat} & {np.mean(acc):.2f} (SD {np.std(acc):.2f}) & {np.mean(f1):.2f} (SD {np.std(f1):.2f}) \\\\"
+        table += f"\n  {cat} & {np.mean(acc):.2f}\% (SD {np.std(acc):.2f}) & {np.mean(f1):.2f}\% (SD {np.std(f1):.2f}) \\\\"
         if cat == categories[-1]:
             table += " \\bottomrule"
 
@@ -385,7 +385,7 @@ def plot_performance(
     categories: List[str],
     cat_name: str,
     legend_pos: str = "lower right",
-    ylim=(0.0, 1.0)
+    ylim=(0, 100)
 ):
     n_obs = len(accs[0])
     df = pd.DataFrame(
@@ -403,11 +403,12 @@ def plot_performance(
     )
     set_seaborn_style()
 
-    fig, axes = plt.subplots(1, 2, figsize=(8, 4), gridspec_kw={"width_ratios": [2, 1]})
+    # fig, axes = plt.subplots(1, 2, figsize=(len(accs) * 2, len(accs)), gridspec_kw={"width_ratios": [2, 1]})
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]})
     sns.violinplot(
         data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
     )
-    axes[0].set_ylabel("Metric value")
+    axes[0].set_ylabel("Metric value (%)")
     axes[0].set_xlabel(cat_name)
     axes[0].set_ylim(ylim)
     if legend_pos == "lower right":
@@ -424,8 +425,8 @@ def plot_performance(
     acc_means = means[means.metric == "Accuracy"].value.to_numpy()
     f1_means = means[means.metric == "F1-score"].value.to_numpy()
     # TODO: To abs or not to abs
-    acc_diffs = (acc_means[:, np.newaxis] - acc_means) * 100
-    f1_diffs = -(f1_means[:, np.newaxis] - f1_means) * 100
+    acc_diffs = (acc_means[:, np.newaxis] - acc_means)
+    f1_diffs = -(f1_means[:, np.newaxis] - f1_means)
 
     mask = np.tril(np.ones_like(acc_diffs), k=-1)
     mask_upper = np.tril(np.ones_like(acc_diffs), k=0)
@@ -471,8 +472,8 @@ def plot_performance(
     ax2.set_yticklabels(axes[1].get_yticklabels(), rotation=90, va="center")
     ax2.spines['left'].set_visible(False)
     ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    ax2.spines['bottom'].set_visible(False)
+    # ax2.spines['right'].set_visible(False)
+    # ax2.spines['bottom'].set_visible(False)
     axes[1].set_yticks([])
     
 
@@ -598,15 +599,24 @@ def plot_performance_ttest(
 
 
 def plot_performance_from_file(
-    path, conditions, cat_name, do_generate_table=False, legend_pos="lower right"
+    path, conditions, cat_name, do_generate_table=False, legend_pos="lower right", ylim=(0.0, 100.0)
 ):
     res = defaultdict(lambda: defaultdict(list))
-    with open(path) as f:
-        data = json.load(f)
-    for k, test_results in data.items():
-        for fold in test_results:
-            res[conditions[int(k)]]["accuracy"].append(fold["accuracy"])
-            res[conditions[int(k)]]["f1"].append(fold["weighted avg"]["f1-score"])
+    if type(path) is list:
+        for i, p in enumerate(path):
+            with open(p) as f:
+                data = json.load(f)
+            for k, test_results in data.items():
+                for fold in test_results:
+                    res[conditions[int(i)]]["accuracy"].append(fold["accuracy"] * 100)
+                    res[conditions[int(i)]]["f1"].append(fold["weighted avg"]["f1-score"] * 100)
+    else:
+        with open(path) as f:
+            data = json.load(f)
+        for k, test_results in data.items():
+            for fold in test_results:
+                res[conditions[int(k)]]["accuracy"].append(fold["accuracy"] * 100)
+                res[conditions[int(k)]]["f1"].append(fold["weighted avg"]["f1-score"] * 100)
 
     categories = []
     accs = []
@@ -617,7 +627,7 @@ def plot_performance_from_file(
         f1s.append(v["f1"])
     if do_generate_table:
         print(generate_table(accs, f1s, categories))
-    plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos)
+    plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos, ylim=ylim)
 
 
 def set_seaborn_style():

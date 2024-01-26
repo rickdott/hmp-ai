@@ -102,13 +102,12 @@ def pretty_json(data: dict) -> str:
     return "".join(f"\t{line}" for line in json_data.splitlines(True))
 
 
-def print_results(results: dict) -> str:
+def print_results(results: dict|list) -> str:
     # From a list of test results to an aggregated accuracy and F1-Score
-    for i, test_set_results in results.items():
-        print(f"Test set {i}")
+    if type(results) is list:
         accuracies = []
         f1s = []
-        for result in test_set_results:
+        for result in results:
             accuracies.append(result["accuracy"])
             f1s.append(result["macro avg"]["f1-score"])
         print('Accuracies')
@@ -117,3 +116,17 @@ def print_results(results: dict) -> str:
         print(f1s)
         print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
         print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")
+    else:
+        for i, test_set_results in results.items():
+            print(f"Test set {i}")
+            accuracies = []
+            f1s = []
+            for result in test_set_results:
+                accuracies.append(result["accuracy"])
+                f1s.append(result["macro avg"]["f1-score"])
+            print('Accuracies')
+            print(accuracies)
+            print('F1-Scores')
+            print(f1s)
+            print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
+            print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")
