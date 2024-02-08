@@ -301,7 +301,7 @@ def plot_model_attention_over_stage_duration(
         ax[i].plot(np.mean(interpolated, axis=0))
         ax[i].set_facecolor("white")
         ax[i].set_title(f"{label}", fontsize=10)
-        ax[i].set_yticks(np.arange(0.0, 0.25, 0.05))
+        ax[i].set_yticks(np.arange(0.0, 0.06, 0.01))
     # ax[2].text(0, -0.005, 'Linear interpolation\nof stage length', va='bottom', ha='center')
     ax[0].set_ylabel("Model Attention")
     ax[2].set_xlabel("Stage duration (%)")
@@ -628,6 +628,7 @@ def plot_performance_from_file(
     if do_generate_table:
         print(generate_table(accs, f1s, categories))
     plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos, ylim=ylim)
+    return res
 
 
 def set_seaborn_style():
