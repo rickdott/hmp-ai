@@ -1,8 +1,8 @@
 from collections import defaultdict
 import xarray as xr
-import hsmm_mvpy as hmp
+import hmp
 import numpy as np
-from pathlib import Path
+from pathlib import Path, PosixPath
 from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
 from tqdm.notebook import tqdm
 
@@ -330,6 +330,7 @@ class StageFinder:
         fit_args=dict(),
         verbose=False,
         n_comp=4,
+        fits_to_load=[],
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -348,7 +349,7 @@ class StageFinder:
                 )
 
         # Load required data and set up paths
-        if type(epoched_data) is Path or type(epoched_data) is str:
+        if isinstance(epoched_data, Path) or type(epoched_data) is str:
             self.epoch_data = xr.load_dataset(epoched_data)
         else:
             self.epoch_data = epoched_data
@@ -366,6 +367,7 @@ class StageFinder:
         self.models = []
         self.fits = []
         self.hmp_data = []
+        self.fits_to_load = fits_to_load
 
         if self.verbose:
             print("Epoch data used:")
@@ -388,7 +390,7 @@ class StageFinder:
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
         if len(self.conditions) > 0:
-            for condition in self.conditions:
+            for idx, condition in enumerate(self.conditions):
                 condition_subset = hmp.utils.condition_selection(
                     hmp_data,
                     None,  # epoch_data deprecated
@@ -403,8 +405,19 @@ class StageFinder:
                     self.fit_args["n_events"] = len(self.labels[condition]) - 1
 
                 # Fit
-                print(f"Fitting HMP model for {condition} condition")
-                fit = self.__fit_model__(condition_subset)
+                if len(self.fits_to_load) > 0:
+                    print(f"Loading fitted HMP model for {condition} condition")
+                    fit = self.fits_to_load[idx]
+                    fit = hmp.utils.load_fit(fit)
+                    # Manual transpose after loading https://github.com/GWeindel/hmp/issues/122
+                    fit['eventprobs'] = fit.eventprobs.transpose('trial_x_participant','samples','event')
+                    model = hmp.models.hmp(
+                        hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
+                    )
+                    self.models.append(model)
+                else:
+                    print(f"Fitting HMP model for {condition} condition")
+                    fit = self.__fit_model__(condition_subset)
 
                 self.fits.append(fit)
                 self.hmp_data.append(condition_subset)
