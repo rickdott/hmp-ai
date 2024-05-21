@@ -324,7 +324,6 @@ class StageFinder:
         conditions=[],
         condition_variable="cue",
         condition_method="equal",
-        duration=0,
         cpus=1,
         fit_function="fit",
         fit_args=dict(),
@@ -359,7 +358,6 @@ class StageFinder:
         self.conditions = conditions
         self.condition_variable = condition_variable
         self.condition_method = condition_method
-        self.duration = duration
         self.cpus = cpus
         self.fit_function = fit_function
         self.fit_args = fit_args
@@ -410,9 +408,14 @@ class StageFinder:
                     fit = self.fits_to_load[idx]
                     fit = hmp.utils.load_fit(fit)
                     # Manual transpose after loading https://github.com/GWeindel/hmp/issues/122
-                    fit['eventprobs'] = fit.eventprobs.transpose('trial_x_participant','samples','event')
+                    fit["eventprobs"] = fit.eventprobs.transpose(
+                        "trial_x_participant", "samples", "event"
+                    )
                     model = hmp.models.hmp(
-                        hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
+                        hmp_data,
+                        self.epoch_data,
+                        cpus=self.cpus,
+                        sfreq=self.epoch_data.sfreq,
                     )
                     self.models.append(model)
                 else:
@@ -421,7 +424,6 @@ class StageFinder:
 
                 self.fits.append(fit)
                 self.hmp_data.append(condition_subset)
-
         else:
             print("Fitting HMP model")
             # Determine amount of expected events from number of supplied labels
@@ -433,12 +435,17 @@ class StageFinder:
             self.hmp_data.append(hmp_data)
             self.conditions.append("No condition")
 
-    def label_model(self):
+    def label_model(self, label_fn, label_fn_kwargs=None):
         model_labels = None
+        if label_fn_kwargs is None:
+            label_fn_kwargs = {}
+
         for fit, condition in zip(self.fits, self.conditions):
             # Label
             print(f"Labeling dataset for {condition} condition")
-            new_labels = self.__label_model__(fit, condition)
+            new_labels = self.__label_model__(
+                fit, label_fn, label_fn_kwargs, condition=condition
+            )
             if model_labels is None:
                 model_labels = new_labels
             else:
@@ -496,7 +503,7 @@ class StageFinder:
                 f'Provided fit_function "{self.fit_function}" not found on model instance. Available methods are: {available_methods}'
             )
 
-    def __label_model__(self, model, condition=None):
+    def __label_model__(self, model, label_fn, label_fn_kwargs, condition=None):
         n_events = len(model.event)
         if condition == "No condition":
             condition = None
@@ -583,11 +590,12 @@ class StageFinder:
             if not np.all(locations[:-1] <= locations[1:]):
                 continue
 
+            # TODO: Look into if this changes for SAT2
             # epoch = data[1]
-            epoch = condition_epochs.index(data[1])
-            # epoch = int(condition_epochs[data[1]])
+            # epoch = condition_epochs.index(data[1])
+            # # epoch = int(condition_epochs[data[1]])
 
-            if epoch > shape[1]:
+            if data[1] > shape[1]:
                 print("Epoch number exceeds shape of data, skipping")
                 continue
 
@@ -608,38 +616,66 @@ class StageFinder:
 
             prev_participant = participant
 
-            # Set stage label for each stage
-            for j, location in enumerate(locations):
-                # Record labels for pre-attentive stage (from stimulus onset to first peak)
-                if j == 0:
-                    initial_slice = slice(0, location) if self.duration == 0 else slice(0, self.duration)
-                    labels_array[participant, epoch, initial_slice] = labels[0]
-                # Slice from known event location n to known event location n + 1
-                # unless it is the last event, then slice from known event location n to reaction time
-                if j != n_events - 1:
-
-                    if not locations[j + 1] >= RT_sample:
-                        # Dont slice 10 if +10 is later than next event
-                        if self.duration == 0 or locations[j + 1] - location < self.duration:
-                            samples_slice = slice(location, locations[j + 1])
-                        else:
-                            samples_slice = slice(location, location + self.duration)
-                    else:
-                        # End of stage is later than NaNs begin
-                        continue
-                else:
-                    if not location >= RT_sample:
-                        if self.duration == 0 or RT_sample - location < self.duration:
-                            samples_slice = slice(location, RT_sample)
-                        else:
-                            samples_slice = slice(location, location + self.duration)
-                    else:
-                        # NaNs begin before beginning of stage, error in measurement, disregard stage
-                        continue
-                if self.verbose:
-                    print(
-                        f"j: {j}, Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
-                    )
-                labels_array[participant, epoch, samples_slice] = labels[j + 1]
+            # Calls function that puts the labels corresponding to the given locations in labels_array
+            label_fn(
+                locations,
+                RT_sample,
+                participant,
+                data[1],
+                labels,
+                labels_array,
+                **label_fn_kwargs,
+            )
 
         return np.copy(labels_array)
+
+    def __label_bump_to_bump__(
+        self, locations, RT_sample, participant, epoch, labels, labels_array
+    ):
+
+        for i, location in enumerate(locations):
+            if i == 0:
+                # From stimulus onset to first bump == first operation
+                initial_slice = slice(0, location)
+                labels_array[participant, epoch, initial_slice] = labels[0]
+            if i != len(labels) - 1:
+                # Operations in between, slice from event to next event as long as the next event timing is not after reaction time (RT)
+                if not locations[i + 1] >= RT_sample:
+                    samples_slice = slice(location, locations[i + 1])
+                else:
+                    continue
+            else:
+                # Last operation, from last event sample to RT (if the event does not occur after RT)
+                if not location >= RT_sample:
+                    samples_slice = slice(location, RT_sample)
+            if self.verbose:
+                print(
+                    f"i: {i}, Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
+                )
+            labels_array[participant, epoch, samples_slice] = labels[i + 1]
+
+    def __label_samples_around_bump__(
+        self,
+        locations,
+        RT_sample,
+        participant,
+        epoch,
+        labels,
+        labels_array,
+        window=(0, 0),  # (samples_before, samples_after)
+    ):
+        # If there is enough room between two locations
+        # Set that room to labels[-1], meaning NO EVENT
+        for i, location in enumerate(locations):
+            if locations[i + 1] - location > window[0] + window[1]
+
+        for i, location in enumerate(locations):
+            # Add one since slice(x, x) returns nothing, slice(x, x + 1) returns value at index x
+            samples_slice = slice(location - window[0], location + window[1] + 1)
+            if samples_slice.start < 0:
+                samples_slice = slice(0, samples_slice.stop)
+            if samples_slice.stop > RT_sample:
+                samples_slice = slice(samples_slice.start, RT_sample)
+            # Add one since we count a bump as the start of an event, so we label it as the operation the event leads into
+            labels_array[participant, epoch, samples_slice] = labels[i + 1]
+        pass
