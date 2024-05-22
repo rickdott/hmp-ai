@@ -40,7 +40,9 @@ def add_attribution(
     test_set = test_set.assign(
         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
     )
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, pin_memory=True)
+    test_loader = DataLoader(
+        test_dataset, batch_size=128, shuffle=False, pin_memory=True
+    )
 
     # Batch-wise analyzing of data and adding analysis to the dataset
     for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
@@ -385,7 +387,7 @@ def plot_performance(
     categories: List[str],
     cat_name: str,
     legend_pos: str = "lower right",
-    ylim=(0, 100)
+    ylim=(0, 100),
 ):
     n_obs = len(accs[0])
     df = pd.DataFrame(
@@ -404,7 +406,9 @@ def plot_performance(
     set_seaborn_style()
 
     # fig, axes = plt.subplots(1, 2, figsize=(len(accs) * 2, len(accs)), gridspec_kw={"width_ratios": [2, 1]})
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [2, 1]}
+    )
     sns.violinplot(
         data=df, x="category", y="value", hue="metric", split=True, ax=axes[0]
     )
@@ -425,7 +429,7 @@ def plot_performance(
     acc_means = means[means.metric == "Accuracy"].value.to_numpy()
     f1_means = means[means.metric == "F1-score"].value.to_numpy()
     # TODO: To abs or not to abs
-    acc_diffs = (acc_means[:, np.newaxis] - acc_means)
+    acc_diffs = acc_means[:, np.newaxis] - acc_means
     f1_diffs = -(f1_means[:, np.newaxis] - f1_means)
 
     mask = np.tril(np.ones_like(acc_diffs), k=-1)
@@ -470,12 +474,11 @@ def plot_performance(
     ax2.set_ylim(axes[1].get_ylim())
     ax2.set_yticks(axes[1].get_yticks())
     ax2.set_yticklabels(axes[1].get_yticklabels(), rotation=90, va="center")
-    ax2.spines['left'].set_visible(False)
-    ax2.spines['top'].set_visible(False)
+    ax2.spines["left"].set_visible(False)
+    ax2.spines["top"].set_visible(False)
     # ax2.spines['right'].set_visible(False)
     # ax2.spines['bottom'].set_visible(False)
     axes[1].set_yticks([])
-    
 
     # axes[1].set_ylabel("From")
     # axes[0].set_title("Distribution of folds")
@@ -599,7 +602,12 @@ def plot_performance_ttest(
 
 
 def plot_performance_from_file(
-    path, conditions, cat_name, do_generate_table=False, legend_pos="lower right", ylim=(0.0, 100.0)
+    path,
+    conditions,
+    cat_name,
+    do_generate_table=False,
+    legend_pos="lower right",
+    ylim=(0.0, 100.0),
 ):
     res = defaultdict(lambda: defaultdict(list))
     if type(path) is list:
@@ -609,14 +617,18 @@ def plot_performance_from_file(
             for k, test_results in data.items():
                 for fold in test_results:
                     res[conditions[int(i)]]["accuracy"].append(fold["accuracy"] * 100)
-                    res[conditions[int(i)]]["f1"].append(fold["weighted avg"]["f1-score"] * 100)
+                    res[conditions[int(i)]]["f1"].append(
+                        fold["weighted avg"]["f1-score"] * 100
+                    )
     else:
         with open(path) as f:
             data = json.load(f)
         for k, test_results in data.items():
             for fold in test_results:
                 res[conditions[int(k)]]["accuracy"].append(fold["accuracy"] * 100)
-                res[conditions[int(k)]]["f1"].append(fold["weighted avg"]["f1-score"] * 100)
+                res[conditions[int(k)]]["f1"].append(
+                    fold["weighted avg"]["f1-score"] * 100
+                )
 
     categories = []
     accs = []
@@ -637,3 +649,6 @@ def set_seaborn_style():
     sns.set_palette("tab10")
     # Dutch field
     # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))
+
+
+def plot_predictions_on_epoch(epoch: torch.Tensor, true: torch.Tensor, labels: list<str>,   )

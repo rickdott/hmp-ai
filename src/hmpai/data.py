@@ -7,6 +7,16 @@ from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
 from tqdm.notebook import tqdm
 
 
+SAT_CLASSES_ACCURACY = [
+    "negative",
+    "encoding",
+    "decision",
+    "confirmation",
+    "response",
+]
+
+SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
+
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",
     "encoding",
@@ -508,6 +518,7 @@ class StageFinder:
         if condition == "No condition":
             condition = None
         labels = self.labels if condition is None else self.labels[condition]
+        self.negative_class_start_idx = 0
 
         if len(labels) - 1 != n_events:
             raise ValueError(
@@ -550,6 +561,7 @@ class StageFinder:
             print("Epochs used for current condition (if applicable):")
             print(condition_epochs)
 
+        
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
@@ -626,13 +638,16 @@ class StageFinder:
                 labels_array,
                 **label_fn_kwargs,
             )
+            # Increment the index to start looking for negative classes from by 1 if there are indices left, otherwise reset it
+            # With 4 classes: 0, 1, 2, 3, 0,...
+            # TODO: Maybe only increment if a negative class has been found at that bump location
+            self.negative_class_start_idx = self.negative_class_start_idx + 1 if self.negative_class_start_idx + 1 < len(labels) - 1 else 0
 
         return np.copy(labels_array)
 
     def __label_bump_to_bump__(
         self, locations, RT_sample, participant, epoch, labels, labels_array
     ):
-
         for i, location in enumerate(locations):
             if i == 0:
                 # From stimulus onset to first bump == first operation
@@ -664,18 +679,44 @@ class StageFinder:
         labels_array,
         window=(0, 0),  # (samples_before, samples_after)
     ):
-        # If there is enough room between two locations
-        # Set that room to labels[-1], meaning NO EVENT
-        for i, location in enumerate(locations):
-            if locations[i + 1] - location > window[0] + window[1]
+        n = len(locations)
+        current_idx = self.negative_class_start_idx
+        neg_end_idx = (self.negative_class_start_idx - 1) % n
+        negative_class_written = False
+        total_window_size = sum(window) * 2 + 1
+        if current_idx >= n:
+            print(" WHOA!")
 
-        for i, location in enumerate(locations):
+        while True:
+            if not negative_class_written:
+                # Handle the case where the current index is the first one
+                if current_idx == 0 and locations[current_idx] > total_window_size:
+                    start_idx = locations[current_idx] - window[0] - sum(window) - 1
+                    end_idx = locations[current_idx] - window[0]
+                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
+                    negative_class_written = True
+                # Handle the case where there is more room between transitions than twice the total window size
+                elif current_idx != n - 1 and locations[current_idx + 1] - locations[current_idx] > total_window_size:
+                    start_idx = locations[current_idx + 1] - window[0] - sum(window) - 1
+                    end_idx = locations[current_idx + 1] - window[0]
+                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
+                    negative_class_written = True
+                # Handle the case where the current index is the last one
+                elif current_idx == n - 1 and RT_sample - locations[current_idx] > total_window_size:
+                    start_idx = RT_sample - window[0] - sum(window) - 1
+                    end_idx = RT_sample - window[0]
+                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
+                    negative_class_written = True
+
             # Add one since slice(x, x) returns nothing, slice(x, x + 1) returns value at index x
-            samples_slice = slice(location - window[0], location + window[1] + 1)
+            samples_slice = slice(locations[current_idx] - window[0], locations[current_idx] + window[1] + 1)
             if samples_slice.start < 0:
                 samples_slice = slice(0, samples_slice.stop)
             if samples_slice.stop > RT_sample:
                 samples_slice = slice(samples_slice.start, RT_sample)
             # Add one since we count a bump as the start of an event, so we label it as the operation the event leads into
-            labels_array[participant, epoch, samples_slice] = labels[i + 1]
-        pass
+            labels_array[participant, epoch, samples_slice] = labels[current_idx + 1]
+
+            if current_idx == neg_end_idx:
+                break
+            current_idx = (current_idx + 1) % n
