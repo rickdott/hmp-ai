@@ -651,4 +651,100 @@ def set_seaborn_style():
     # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))
 
 
-def plot_predictions_on_epoch(epoch: torch.Tensor, true: torch.Tensor, labels: list<str>,   )
+def plot_predictions_on_epoch(
+    epoch: torch.Tensor,
+    true: torch.Tensor,
+    labels: list[str],
+    window_size: int,
+    model: torch.nn.Module,
+    smoothing: bool = False,
+):
+    def smooth_predictions(predictions, window_size):
+        smoothed = np.copy(predictions)
+        for i in range(window_size // 2, len(predictions) - window_size // 2):
+            smoothed[i] = np.mean(
+                predictions[i - window_size // 2 : i + window_size // 2 + 1], axis=0
+            )
+        return smoothed
+
+    set_seaborn_style()
+    empty = np.zeros((epoch.size()[0], len(labels)))
+    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
+
+    slices = get_padded_slices(epoch, window_size)
+    stacked = torch.stack(slices).to(DEVICE)
+
+    pred = model(stacked)
+    pred = torch.nn.Softmax(dim=1)(pred)
+    pred = pred.cpu().detach().numpy()
+    if smoothing:
+        pred = smooth_predictions(pred, window_size)
+
+    for i, prediction in enumerate(pred):
+        empty[i, :] = prediction
+        # empty[i + window_size // 2, :] = prediction
+
+    fig, ax = plt.subplots()
+    for i in range(0, 5):
+        mask = torch.eq(true, i)
+        indices = torch.nonzero(mask, as_tuple=True)
+        if indices[0].numel() == 0:
+            continue
+        ax.barh(
+            0.9,
+            torch.sum(mask).item(),
+            left=indices[0][0],
+            align="center",
+            alpha=0.5,
+            height=0.05,
+            color=sns.color_palette()[i],
+        )
+    for i in range(0, empty.shape[1]):
+        sns.lineplot(
+            x=range(len(empty[:, i])),
+            y=empty[:, i],
+            ax=ax,
+            color=sns.color_palette()[i],
+            label=labels[i],
+        )
+    # sns.lineplot(empty[:, 1:], ax=ax)
+    # label=SAT_CLASSES_ACCURACY[1:]
+    ax.legend()
+    plt.xlim(0, rt_idx + (window_size // 2))
+    plt.ylim(0, 1.0)
+    plt.xlabel("Samples")
+    plt.ylabel("Softmax probability")
+    plt.show()
+
+
+def get_padded_slices(epoch: torch.Tensor, window_size: int):
+    # Get index where epoch ends
+    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
+    slices = []
+
+    # Right-pad beginning elements
+    for start in range(-window_size + 1, 0):
+        padded_slice = torch.full(
+            (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
+        )
+        if start < 0:
+            padded_slice[0 : window_size - -start, :] = epoch[
+                0 : window_size - -start, :
+            ]
+        slices.append(padded_slice)
+
+    # Normal slices
+    for start in range(rt_idx - window_size + 1):
+        slices.append(epoch[start : start + window_size, :])
+
+    # Right-pad end
+    for start in range(rt_idx - window_size + 1, rt_idx - 1):
+        padded_slice = torch.full(
+            (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
+        )
+        if start + window_size > rt_idx:
+            valid_length = rt_idx - start + 1
+            padded_slice[:valid_length, :] = epoch[start : start + valid_length, :]
+        slices.append(padded_slice)
+
+    return slices
