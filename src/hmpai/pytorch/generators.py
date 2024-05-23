@@ -25,6 +25,7 @@ class SAT1Dataset(Dataset):
         shape_topological=False,
         do_preprocessing=True,
         labels: list[str] = SAT1_STAGES_ACCURACY,
+        set_to_zero: bool = False,
     ):
         # Alphabetical ordering of labels used for categorization of labels
         label_lookup = {label: idx for idx, label in enumerate(labels)}
@@ -43,6 +44,9 @@ class SAT1Dataset(Dataset):
         vectorized_label_to_index = np.vectorize(lambda x: label_lookup.get(x, -1))
         indices = xr.apply_ufunc(vectorized_label_to_index, dataset.labels)
         self.labels = torch.as_tensor(indices.values, dtype=torch.long)
+        if set_to_zero:
+            self.labels = torch.where(self.labels == -1, torch.tensor(0), self.labels)
+
 
     def __len__(self):
         return len(self.data)

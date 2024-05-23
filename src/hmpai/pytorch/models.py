@@ -5,6 +5,64 @@ from hmpai.utilities import MASKING_VALUE
 import math
 from hmpai.pytorch.utilities import DEVICE
 
+class LearnablePositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=1024):
+        super(LearnablePositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        # Each position gets its own embedding
+        # Since indices are always 0 ... max_len, we don't have to do a look-up
+        self.pe = nn.Parameter(
+            torch.empty(max_len, d_model)
+        )  # requires_grad automatically set to True
+        nn.init.uniform_(self.pe, -0.02, 0.02)
+
+        # distance = torch.matmul(self.pe, self.pe[10])
+        # import matplotlib.pyplot as plt
+
+        # plt.plot(distance.detach().numpy())
+        # plt.show()
+
+    def forward(self, x):
+        r"""Inputs of forward function
+        Args:
+            x: the sequence fed to the positional encoder model (required).
+        Shape:
+            x: [sequence length, batch size, embed dim]
+            output: [sequence length, batch size, embed dim]
+        """
+
+        x = x + self.pe
+        # distance = torch.matmul(self.pe, self.pe.transpose(1,0))
+        # distance_pd = pd.DataFrame(distance.cpu().detach().numpy())
+        # distance_pd.to_csv('learn_position_distance.csv')
+        return self.dropout(x)
+
+
+class Seq2SeqTransformer(nn.Module):
+    def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes):
+        super().__init__()
+        self.embedding = nn.Linear(d_model, d_model)
+        # self.pos_encoder = LearnablePositionalEncoding(d_model, max_len=250)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=0.1)
+        encoder_layers = nn.TransformerEncoderLayer(d_model, num_heads, ff_dim)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
+        self.fc = nn.Linear(d_model, num_classes)
+
+    def forward(self, x):
+        mask = (x == MASKING_VALUE).all(dim=2)
+        max_idx = mask.float().argmax(dim=1).max()
+        mask = mask[:, :max_idx]
+        x = x[:, :max_idx, :]
+
+        x = self.embedding(x)
+        x = self.pos_encoder(x)
+        x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+        transformer_output = self.transformer_encoder(x, src_key_padding_mask=mask)
+        transformer_output = transformer_output.permute(1, 0, 2)
+        output = self.fc(transformer_output)
+        return output
+
 
 class TransformerModel(nn.Module):
     def __init__(self, n_features, n_heads, ff_dim, n_layers, n_samples, n_classes):
@@ -62,7 +120,7 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+            torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model)
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)

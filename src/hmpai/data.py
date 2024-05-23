@@ -678,6 +678,7 @@ class StageFinder:
         labels,
         labels_array,
         window=(0, 0),  # (samples_before, samples_after)
+        get_negative_class=True
     ):
         n = len(locations)
         current_idx = self.negative_class_start_idx
@@ -688,7 +689,7 @@ class StageFinder:
             print(" WHOA!")
 
         while True:
-            if not negative_class_written:
+            if not negative_class_written and get_negative_class:
                 # Handle the case where the current index is the first one
                 if current_idx == 0 and locations[current_idx] > total_window_size:
                     start_idx = locations[current_idx] - window[0] - sum(window) - 1

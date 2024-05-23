@@ -152,7 +152,7 @@ def train_and_test(
     weight = weight.to(DEVICE)
     model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
-    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay)
+    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=0.0001)
     stopper = EarlyStopper()
 
     lowest_mean_val_loss = np.inf
@@ -353,8 +353,9 @@ def train(
         optimizer.zero_grad()
 
         predictions = model(data)
-
-        loss = loss_function(predictions, labels)
+        labels = labels[:,:predictions.shape[1]]
+        loss = loss_function(predictions.view(-1, 5), labels.flatten())
+        # loss = loss_function(predictions, labels)
         if do_spectral_decoupling:
             loss += 0.1 / 2 * (predictions**2).mean()
         loss_per_batch.append(loss.item())
@@ -400,14 +401,25 @@ def validate(
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
 
             predictions = model(data)
-            predicted_labels = torch.argmax(predictions, dim=1)
-            correct_predictions = sum(predicted_labels == labels).item()
+            # predicted_labels = torch.argmax(predictions, dim=1)
+            predicted_labels = torch.argmax(predictions, dim=2)
+
+            labels = labels[:,:predictions.shape[1]]
+            matches = predicted_labels == labels
+            correct_predictions = matches.sum().item()
+
 
             total_correct += correct_predictions
-            total_instances += len(labels)
+            total_instances += labels.numel()
 
-            loss = loss_function(predictions, labels)
+            # loss = loss_function(predictions, labels)
+            loss = loss_function(predictions.view(-1, 5), labels.flatten())
             loss_per_batch.append(loss.item())
+        # Show test results for last batch
+        test_results = classification_report(
+            labels.cpu().flatten(), predicted_labels.cpu().flatten(), output_dict=False
+        )
+        print(test_results)
 
     return loss_per_batch, round(total_correct / total_instances, 5)
 
@@ -441,14 +453,18 @@ def test(
         with torch.no_grad():
             for batch in loader:
                 data, labels = batch[0].to(DEVICE), batch[1]
-
                 predictions = model(data)
-                predicted_labels = torch.argmax(predictions, dim=1)
+                labels = labels[:,:predictions.shape[1]]
+
+                predicted_labels = torch.argmax(predictions, dim=2)
+                # predicted_labels = torch.argmax(predictions, dim=1)
                 outputs.append(predicted_labels)
                 true_labels.append(labels)
 
-        predicted_classes = torch.cat(outputs, dim=0)
-        true_classes = torch.cat(true_labels, dim=0)
+        # predicted_classes = torch.cat(outputs, dim=0)
+        predicted_classes = torch.cat(outputs, dim=0).flatten()
+        # true_classes = torch.cat(true_labels, dim=0)
+        true_classes = torch.cat(true_labels, dim=0).flatten()
         loader_results = classification_report(
             true_classes, predicted_classes.cpu(), output_dict=True
         )
