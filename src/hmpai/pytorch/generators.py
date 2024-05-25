@@ -11,6 +11,7 @@ class SAT1Dataset(Dataset):
 
     Args:
         dataset (xr.Dataset): The input dataset.
+        info_to_keep (list[str]): list of XArray dimension names to keep in a dictionary, returned as the third index of the batch item.
         shape_topological (bool): Whether to shape the data topologically.
         do_preprocessing (bool): Whether to preprocess the data.
 
@@ -26,6 +27,7 @@ class SAT1Dataset(Dataset):
         do_preprocessing=True,
         labels: list[str] = SAT1_STAGES_ACCURACY,
         set_to_zero: bool = False,
+        info_to_keep: list[str] = [],
     ):
         # Alphabetical ordering of labels used for categorization of labels
         label_lookup = {label: idx for idx, label in enumerate(labels)}
@@ -38,6 +40,9 @@ class SAT1Dataset(Dataset):
             dataset = preprocess(
                 dataset, shuffle=True, shape_topological=shape_topological, sequential=sequential
             )
+
+        values_to_keep = [dataset[key].to_numpy() for key in info_to_keep]
+        self.info = [dict(zip(info_to_keep, values)) for values in zip(*values_to_keep)]
 
         self.data = torch.as_tensor(dataset.data.to_numpy(), dtype=torch.float32)
 
@@ -52,4 +57,4 @@ class SAT1Dataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
+        return self.data[idx], self.labels[idx], self.info[idx]

@@ -38,6 +38,7 @@ def train_and_test(
     use_class_weights: bool = True,
     label_smoothing: float = 0.0,
     weight_decay: float = 0.0,
+    lr: float = 0.002, # Default learning rate for optimizer
     do_spectral_decoupling: bool = False,
     labels: list[str] = None,
     seed: int = 42,
@@ -147,12 +148,12 @@ def train_and_test(
         calculate_class_weights(train_set, labels)
         if use_class_weights
         # TODO: Replace AR_STAGES with dynamic calculation based on dataset
-        else torch.ones((len(SAT1_STAGES_ACCURACY),))
+        else torch.ones((len(labels),))
     )
     weight = weight.to(DEVICE)
     model = model.to(DEVICE)
     loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
-    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=0.0001)
+    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
 
     lowest_mean_val_loss = np.inf
@@ -353,9 +354,14 @@ def train(
         optimizer.zero_grad()
 
         predictions = model(data)
-        labels = labels[:,:predictions.shape[1]]
-        loss = loss_function(predictions.view(-1, 5), labels.flatten())
-        # loss = loss_function(predictions, labels)
+
+        if labels.shape[1] != predictions.shape[1]:
+            labels = labels[:,:predictions.shape[1]]
+
+        if len(predictions.shape) == 3:
+            loss = loss_function(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+        else:
+            loss = loss_function(predictions, labels)
         if do_spectral_decoupling:
             loss += 0.1 / 2 * (predictions**2).mean()
         loss_per_batch.append(loss.item())
@@ -401,20 +407,26 @@ def validate(
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
 
             predictions = model(data)
-            # predicted_labels = torch.argmax(predictions, dim=1)
-            predicted_labels = torch.argmax(predictions, dim=2)
 
-            labels = labels[:,:predictions.shape[1]]
+            dim = len(predictions.shape) - 1
+            predicted_labels = torch.argmax(predictions, dim=dim)
+
+            if labels.shape[1] != predictions.shape[1]:
+                labels = labels[:,:predictions.shape[1]]
+
             matches = predicted_labels == labels
             correct_predictions = matches.sum().item()
-
 
             total_correct += correct_predictions
             total_instances += labels.numel()
 
-            # loss = loss_function(predictions, labels)
-            loss = loss_function(predictions.view(-1, 5), labels.flatten())
+            # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
+            if len(predictions.shape) == 3:
+                loss = loss_function(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+            else:
+                loss = loss_function(predictions, labels)
             loss_per_batch.append(loss.item())
+
         # Show test results for last batch
         test_results = classification_report(
             labels.cpu().flatten(), predicted_labels.cpu().flatten(), output_dict=False
@@ -448,25 +460,23 @@ def test(
         # Assume type is DataLoader
         test_loader = [test_loader]
     for i, loader in enumerate(test_loader):
-        outputs = []
-        true_labels = []
+        outputs = torch.Tensor()
+        true_labels = torch.Tensor()
         with torch.no_grad():
             for batch in loader:
                 data, labels = batch[0].to(DEVICE), batch[1]
                 predictions = model(data)
-                labels = labels[:,:predictions.shape[1]]
+                # Cut off labels if needed
+                if labels.shape[1] != predictions.shape[1]:
+                    labels = labels[:,:predictions.shape[1]]
 
-                predicted_labels = torch.argmax(predictions, dim=2)
-                # predicted_labels = torch.argmax(predictions, dim=1)
-                outputs.append(predicted_labels)
-                true_labels.append(labels)
+                dim = len(predictions.shape) - 1
+                predicted_labels = torch.argmax(predictions, dim=dim)
+                outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
+                true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        # predicted_classes = torch.cat(outputs, dim=0)
-        predicted_classes = torch.cat(outputs, dim=0).flatten()
-        # true_classes = torch.cat(true_labels, dim=0)
-        true_classes = torch.cat(true_labels, dim=0).flatten()
         loader_results = classification_report(
-            true_classes, predicted_classes.cpu(), output_dict=True
+            true_labels, outputs, output_dict=True
         )
         test_results.append(loader_results)
         if writer is not None:
@@ -474,7 +484,7 @@ def test(
                 f"Test results {i}", pretty_json(loader_results), global_step=0
             )
 
-    return test_results, predicted_classes, true_classes
+    return test_results, outputs, true_labels
 
 
 def calculate_class_weights(
