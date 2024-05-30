@@ -3,6 +3,7 @@ import xarray as xr
 import torch
 import numpy as np
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
+from hmpai.pytorch.utilities import DEVICE
 
 
 class SAT1Dataset(Dataset):
@@ -28,7 +29,9 @@ class SAT1Dataset(Dataset):
         labels: list[str] = SAT1_STAGES_ACCURACY,
         set_to_zero: bool = False,
         info_to_keep: list[str] = [],
+        interpolate_to: int = 0,
     ):
+        self.interpolate_to = interpolate_to
         # Alphabetical ordering of labels used for categorization of labels
         label_lookup = {label: idx for idx, label in enumerate(labels)}
 
@@ -51,10 +54,49 @@ class SAT1Dataset(Dataset):
         self.labels = torch.as_tensor(indices.values, dtype=torch.long)
         if set_to_zero:
             self.labels = torch.where(self.labels == -1, torch.tensor(0), self.labels)
+        if interpolate_to != 0:
+            self.data = torch.Tensor(self.__resample_batch_eeg__(self.data))
+            self.labels = torch.Tensor(self.__resample_batch_labels__(self.labels)).long()
 
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx], self.info[idx]
+        if len(self.info) > 0:
+            return self.data[idx], self.labels[idx], self.info[idx]
+        else:
+            return self.data[idx], self.labels[idx]
+        
+    def __resample_batch_eeg__(self, trials):
+        batch_size, original_length, num_channels = trials.shape
+    
+        # Create the original and target time axes
+        original_time = np.linspace(0, 1, original_length)
+        target_time = np.linspace(0, 1, self.interpolate_to)
+        
+        # Prepare an array to hold the resampled data
+        resampled_trials = np.zeros((batch_size, self.interpolate_to, num_channels))
+        
+        # Perform the interpolation for each trial and each channel
+        for i in range(batch_size):
+            for j in range(num_channels):
+                resampled_trials[i, :, j] = np.interp(target_time, original_time, trials[i, :, j])
+        
+        return resampled_trials
+
+
+    def __resample_batch_labels__(self, labels):
+        batch_size, original_length = labels.shape
+    
+        # Create the original and target time axes
+        original_time = np.linspace(0, 1, original_length)
+        target_time = np.linspace(0, 1, self.interpolate_to)
+        
+        # Prepare an array to hold the resampled labels
+        resampled_labels = np.zeros((batch_size, self.interpolate_to),)
+        
+        # Vectorized interpolation
+        resampled_labels = np.array([np.interp(target_time, original_time, labels[i]) for i in range(batch_size)], dtype=np.intc)
+        
+        return resampled_labels

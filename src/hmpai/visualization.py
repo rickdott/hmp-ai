@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 from mne.viz import plot_topomap
 from mne import Info
 import numpy as np
@@ -754,3 +754,175 @@ def get_padded_slices(epoch: torch.Tensor, window_size: int):
         slices.append(padded_slice)
 
     return slices
+
+
+def predict_with_auc(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    info_to_keep: list[str],
+    labels: list[str],
+):
+    torch.cuda.empty_cache()
+    torch.set_grad_enabled(False)
+    data_list = []
+    for batch in loader:
+        data = {info_key: batch[2][info_key] for info_key in info_to_keep}
+        pred = model(batch[0].to(DEVICE))
+        pred = torch.nn.Softmax(dim=2)(pred)
+        pred = pred.cpu().detach()
+        batch_aucs = torch.sum(pred, dim=1)
+        for i in range(batch[1].shape[0]):
+            trial_labels = batch[1][i, :]
+            unique_counts = torch.unique(trial_labels, return_counts=True)
+            unique = list(unique_counts[0])
+            counts = list(unique_counts[1])
+            for j, label in enumerate(labels):
+                if label + "_true_samples" not in data:
+                    data[label + "_true_samples"] = []
+                try:
+                    data[label + "_true_samples"].append(counts[unique.index(j)])
+                except ValueError:
+                    data[label + "_true_samples"].append(0)
+        for i, label in enumerate(labels):
+            data[label + "_auc"] = batch_aucs[:, i]
+        data_list.append(pd.DataFrame(data))
+    data = pd.concat(data_list)
+    return data
+
+
+def plot_median_split_error_rate(data: pd.DataFrame, operation: str):
+    set_seaborn_style()
+    data["ratio"] = (data[f"{operation}_auc"] / 100) / data["rt_x"]
+    median = data["ratio"].median()
+    data["above_median"] = data["ratio"] >= median
+    plt.figure(figsize=(4, 6))
+    plot = sns.barplot(data=data, x="SAT", y="response", hue="above_median", legend=True)
+    plt.ylabel("Proportion of correct responses")
+    plt.xlabel(f"Below or above median of {operation} AUC/RT\n(Median: {median:.2f})")
+    # plt.xticks(ticks=[0,1], labels=["Below", "Above"])
+    plt.ylim(0, 1)
+    plt.plot()
+
+
+def plot_ratio_auc_over_RT(data: pd.DataFrame, operation: str):
+    set_seaborn_style()
+    # Divide by sampling frequency, change if sampling frequency changes
+    data["ratio"] = (data[f"{operation}_auc"] / 100) / data["rt_x"]
+    bins = np.linspace(0, 1, 11)
+    labels = [f"{bin:.1f},{bin + 0.1:.1f}" for bin in bins]
+    data["ratio_bin"] = pd.cut(data["ratio"], bins=bins)
+    # data['ratio_bin'] = pd.qcut(data['ratio'], 5)
+
+    data_sp = data[data["SAT"] == "speed"]
+    data_acc = data[data["SAT"] == "accuracy"]
+
+    crosstab_sp = pd.crosstab(
+        data_sp["ratio_bin"], data_sp["response"], normalize="index"
+    )
+    crosstab_acc = pd.crosstab(
+        data_acc["ratio_bin"], data_acc["response"], normalize="index"
+    )
+
+    crosstab_sp["SAT"] = "speed"
+    crosstab_acc["SAT"] = "accuracy"
+    crosstab = pd.concat([crosstab_sp, crosstab_acc])
+    crosstab_long = crosstab.reset_index().melt(
+        id_vars=["ratio_bin", "SAT"],
+        value_vars=[0, 1],
+        var_name="response",
+        value_name="proportion",
+    )
+
+    plt.figure()
+    plot = sns.barplot(
+        x="ratio_bin",
+        y="proportion",
+        hue="SAT",
+        data=crosstab_long[crosstab_long.response == 1],
+        errorbar=("ci", 95),
+    )
+    plot.set_xticklabels(labels=labels, rotation=45)
+    plt.xlabel(f"AUC of {operation} / RT, divided into 10 bins from 0 to 1")
+    plt.ylabel("Proportion of correct responses")
+    plt.ylim(0, 1)
+    plt.xlim(-0.5, 9.5)
+    plt.plot()
+
+
+def plot_ratio_true_over_RT(data: pd.DataFrame, operation: str):
+    set_seaborn_style()
+    # Divide by sampling frequency, change if sampling frequency changes
+    data["ratio"] = (data[f"{operation}_true_samples"] / 100) / data["rt_x"]
+    bins = np.linspace(0, 1, 11)
+    labels = [f"{bin:.1f},{bin + 0.1:.1f}" for bin in bins]
+    data["ratio_bin"] = pd.cut(data["ratio"], bins=bins, include_lowest=True)
+    # data['ratio_bin'] = pd.qcut(data['ratio'], 5)
+
+    data_sp = data[data["SAT"] == "speed"]
+    data_acc = data[data["SAT"] == "accuracy"]
+
+    crosstab_sp = pd.crosstab(
+        data_sp["ratio_bin"], data_sp["response"], normalize="index"
+    )
+    crosstab_acc = pd.crosstab(
+        data_acc["ratio_bin"], data_acc["response"], normalize="index"
+    )
+
+    crosstab_sp["SAT"] = "speed"
+    crosstab_acc["SAT"] = "accuracy"
+    crosstab = pd.concat([crosstab_sp, crosstab_acc])
+    crosstab_long = crosstab.reset_index().melt(
+        id_vars=["ratio_bin", "SAT"],
+        value_vars=[0, 1],
+        var_name="response",
+        value_name="proportion",
+    )
+
+    plt.figure()
+    plot = sns.barplot(
+        x="ratio_bin",
+        y="proportion",
+        hue="SAT",
+        data=crosstab_long[crosstab_long.response == 1],
+        errorbar=("ci", 95),
+    )
+    plot.set_xticklabels(labels=labels, rotation=45)
+    plt.xlabel(f"HMP-predicted {operation} / RT, divided into 10 bins from 0 to 1")
+    plt.ylabel("Proportion of correct responses")
+    plt.ylim(0, 1)
+    plt.xlim(-0.5, 9.5)
+    plt.plot()
+
+
+# def plot_auc_and_true_over_RT(data: pd.DataFrame, operation: str, sat: str):
+#     set_seaborn_style()
+#     data = data.copy()
+#     data = data[data['SAT'] == sat]
+#     data["ratio_true"] = (data[f"{operation}_true_samples"] / 100) / data["rt_x"]
+#     data["ratio_auc"] = (data[f"{operation}_auc"] / 100) / data["rt_x"]
+#     bins = np.linspace(0, 1, 11)
+#     labels = [f"{bin:.1f},{bin + 0.1:.1f}" for bin in bins[:-1]]
+
+#     data['ratio_bin_true'] = pd.cut(data['ratio_true'], bins=bins, include_lowest=True)
+#     data['ratio_bin_auc'] = pd.cut(data['ratio_auc'], bins=bins, include_lowest=True)
+
+#     crosstab_true = pd.crosstab(data['ratio_bin_true'], data['response'], normalize='index')
+#     crosstab_auc = pd.crosstab(data['ratio_bin_auc'], data['response'], normalize='index')
+#     crosstab_long_true = crosstab_true.reset_index().melt(id_vars=['ratio_bin_true'], value_vars=[0], var_name='response', value_name='proportion')
+#     crosstab_long_auc = crosstab_auc.reset_index().melt(id_vars=['ratio_bin_auc'], value_vars=[0], var_name='response', value_name='proportion')
+#     plt.figure()
+#     plot = sns.barplot(x='ratio_bin_true', y='proportion', data=crosstab_long_true[crosstab_long_true.response == 1], errorbar=("ci", 95))
+#     plot.set_xticklabels(labels=labels, rotation=45)
+#     plt.xlabel(f"HMP-predicted {operation} / RT, divided into 10 bins from 0 to 1")
+#     plt.ylabel("Proportion of correct guesses")
+#     plt.ylim(0, 1)
+#     plt.xlim(-.5, 9.5)
+#     plt.plot();
+#     plt.figure()
+#     plot = sns.barplot(x='ratio_bin_auc', y='proportion', data=crosstab_long_auc[crosstab_long_auc.response == 1], errorbar=("ci", 95))
+#     plot.set_xticklabels(labels=labels, rotation=45)
+#     plt.xlabel(f"HMP-predicted {operation} / RT, divided into 10 bins from 0 to 1")
+#     plt.ylabel("Proportion of correct guesses")
+#     plt.ylim(0, 1)
+#     plt.xlim(-.5, 9.5)
+#     plt.plot()
