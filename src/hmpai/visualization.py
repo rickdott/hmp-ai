@@ -771,6 +771,19 @@ def predict_with_auc(
         pred = torch.nn.Softmax(dim=2)(pred)
         pred = pred.cpu().detach()
         batch_aucs = torch.sum(pred, dim=1)
+        predicted_labels = pred.argmax(dim=2) # (batch_size, seq_len)
+        for i in range(predicted_labels.shape[0]):
+            trial_predictions = predicted_labels[i,:]
+            unique_counts = torch.unique(trial_predictions, return_counts=True)
+            unique = list(unique_counts[0])
+            counts = list(unique_counts[1])
+            for j, label in enumerate(labels):
+                if label + "_pred_samples" not in data:
+                    data[label + "_pred_samples"] = []
+                try:
+                    data[label + "_pred_samples"].append(counts[unique.index(j)].item())
+                except ValueError:
+                    data[label + "_pred_samples"].append(0)
         for i in range(batch[1].shape[0]):
             trial_labels = batch[1][i, :]
             unique_counts = torch.unique(trial_labels, return_counts=True)
@@ -780,7 +793,7 @@ def predict_with_auc(
                 if label + "_true_samples" not in data:
                     data[label + "_true_samples"] = []
                 try:
-                    data[label + "_true_samples"].append(counts[unique.index(j)])
+                    data[label + "_true_samples"].append(counts[unique.index(j)].item())
                 except ValueError:
                     data[label + "_true_samples"].append(0)
         for i, label in enumerate(labels):

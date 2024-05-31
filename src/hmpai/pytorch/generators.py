@@ -30,6 +30,7 @@ class SAT1Dataset(Dataset):
         set_to_zero: bool = False,
         info_to_keep: list[str] = [],
         interpolate_to: int = 0,
+        order_by_rt: bool = False,
     ):
         self.interpolate_to = interpolate_to
         # Alphabetical ordering of labels used for categorization of labels
@@ -57,6 +58,15 @@ class SAT1Dataset(Dataset):
         if interpolate_to != 0:
             self.data = torch.Tensor(self.__resample_batch_eeg__(self.data))
             self.labels = torch.Tensor(self.__resample_batch_labels__(self.labels)).long()
+        if order_by_rt:
+            if 'rt' not in info_to_keep:
+                raise ValueError("rt must be included in info_to_keep and in the source data to be able to order by rt.")
+            combined = list(zip(self.data, self.labels, self.info))
+            sorted_combined = sorted(combined, key=lambda x: x[2]['rt'])
+            self.data, self.labels, self.info = zip(*sorted_combined)
+            self.data = torch.stack(self.data)
+            self.labels = torch.stack(self.labels).long()
+            self.info = list(self.info)
 
 
     def __len__(self):
