@@ -43,11 +43,10 @@ class Seq2SeqTransformer(nn.Module):
     def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes):
         super().__init__()
         self.embedding = nn.Linear(d_model, d_model)
-        # self.pos_encoder = LearnablePositionalEncoding(d_model, max_len=250)
         self.pos_encoder = PositionalEncoding(d_model, dropout=0.1)
         encoder_layers = nn.TransformerEncoderLayer(d_model, num_heads, ff_dim)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
-        self.fc = nn.Linear(d_model, num_classes)
+        self.fc = nn.Linear(d_model, d_model)
 
     def forward(self, x):
         mask = (x == MASKING_VALUE).all(dim=2)

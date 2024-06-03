@@ -38,10 +38,11 @@ def train_and_test(
     use_class_weights: bool = True,
     label_smoothing: float = 0.0,
     weight_decay: float = 0.0,
-    lr: float = 0.002, # Default learning rate for optimizer
+    lr: float = 0.002,  # Default learning rate for optimizer
     do_spectral_decoupling: bool = False,
     labels: list[str] = None,
     seed: int = 42,
+    pretrain_fn: Callable = None,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -145,14 +146,16 @@ def train_and_test(
 
     # Set up optimizer and loss
     weight = (
-        calculate_class_weights(train_set, labels)
+        calculate_class_weights(train_set, labels).to(DEVICE)
         if use_class_weights
         # TODO: Replace AR_STAGES with dynamic calculation based on dataset
-        else torch.ones((len(labels),))
+        else None
     )
-    weight = weight.to(DEVICE)
     model = model.to(DEVICE)
-    loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
+    if pretrain_fn is not None:
+        loss = torch.nn.MSELoss()
+    else: 
+        loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
 
@@ -162,21 +165,29 @@ def train_and_test(
             tepoch.set_description(f"Epoch {epoch + 1}")
 
             # Train on batches in train_loader
-            batch_losses = train(
-                model,
-                train_loader,
-                opt,
-                loss,
-                tepoch,
-                do_spectral_decoupling=do_spectral_decoupling,
-            )
+            if pretrain_fn is None:
+                batch_losses = train(
+                    model,
+                    train_loader,
+                    opt,
+                    loss,
+                    pretrain_fn=pretrain_fn,
+                    progress=tepoch,
+                    do_spectral_decoupling=do_spectral_decoupling,
+                )
+            else: 
+                batch_losses = pretrain_train(model, train_loader, opt, loss, pretrain_fn, progress=tepoch)
 
             # Validate model and communicate results
             val_loss_list = []
             val_acc_list = []
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
-                val_losses, val_accuracy = validate(model, val_loader, loss)
+                if pretrain_fn is None:
+                    val_losses, val_accuracy = validate(model, val_loader, loss)
+                else:
+                    val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
+                    val_accuracy = 0
                 # Only count val_loss for first validation set
                 if i == 0:
                     val_loss_list.append(val_losses)
@@ -216,7 +227,10 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    results, _, _ = test(model, test_loaders, writer)
+    if pretrain_fn is None:
+        results, _, _ = test(model, test_loaders, writer)
+    else:
+        results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
 
 
@@ -326,7 +340,7 @@ def train(
     model: torch.nn.Module,
     train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    loss_function: torch.nn.modules.loss._Loss,
+    loss_fn: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
     do_spectral_decoupling: bool = False,
 ) -> list[float]:
@@ -356,14 +370,18 @@ def train(
         predictions = model(data)
 
         if labels.shape[1] != predictions.shape[1]:
-            labels = labels[:,:predictions.shape[1]]
+            labels = labels[:, : predictions.shape[1]]
 
         if len(predictions.shape) == 3:
-            loss = loss_function(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+            loss = loss_fn(
+                predictions.reshape(-1, predictions.shape[-1]).flatten(),
+                labels.reshape(-1, labels.shape[-1]).flatten(),
+            )
         else:
-            loss = loss_function(predictions, labels)
+            loss = loss_fn(predictions, labels)
         if do_spectral_decoupling:
             loss += 0.1 / 2 * (predictions**2).mean()
+
         loss_per_batch.append(loss.item())
 
         # Update loss shown every 5 batches, otherwise it is illegible
@@ -382,7 +400,7 @@ def train(
 def validate(
     model: torch.nn.Module,
     validation_loader: DataLoader,
-    loss_function: torch.nn.modules.loss._Loss,
+    loss_fn: torch.nn.modules.loss._Loss,
 ) -> (list[float], float):
     """Validate model.
 
@@ -405,31 +423,34 @@ def validate(
         for batch in validation_loader:
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-
             predictions = model(data)
 
             dim = len(predictions.shape) - 1
             predicted_labels = torch.argmax(predictions, dim=dim)
 
             if labels.shape[1] != predictions.shape[1]:
-                labels = labels[:,:predictions.shape[1]]
+                labels = labels[:, : predictions.shape[1]]
 
             matches = predicted_labels == labels
             correct_predictions = matches.sum().item()
 
             total_correct += correct_predictions
             total_instances += labels.numel()
-
             # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
             if len(predictions.shape) == 3:
-                loss = loss_function(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+                loss = loss_fn(
+                    predictions.view(-1, predictions.shape[-1]), labels.flatten()
+                )
             else:
-                loss = loss_function(predictions, labels)
+                loss = loss_fn(predictions, labels)
+
             loss_per_batch.append(loss.item())
 
         # Show test results for last batch
         test_results = classification_report(
-            labels.cpu().flatten(), predicted_labels.cpu().flatten(), output_dict=False
+            labels.cpu().flatten(),
+            predicted_labels.cpu().flatten(),
+            output_dict=False,
         )
         print(test_results)
 
@@ -468,16 +489,14 @@ def test(
                 predictions = model(data)
                 # Cut off labels if needed
                 if labels.shape[1] != predictions.shape[1]:
-                    labels = labels[:,:predictions.shape[1]]
+                    labels = labels[:, : predictions.shape[1]]
 
                 dim = len(predictions.shape) - 1
                 predicted_labels = torch.argmax(predictions, dim=dim)
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        loader_results = classification_report(
-            true_labels, outputs, output_dict=True
-        )
+        loader_results = classification_report(true_labels, outputs, output_dict=True)
         test_results.append(loader_results)
         if writer is not None:
             writer.add_text(
@@ -512,6 +531,105 @@ def calculate_class_weights(
         else:
             weights.append(1)
     return torch.Tensor(weights)
+
+
+def pretrain_train(
+    model: torch.nn.Module,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    loss_fn: torch.nn.modules.loss._Loss,
+    pretrain_fn: Callable,
+    progress: tqdm = None,
+):
+    model.train()
+    loss_per_batch = []
+    for i, batch in enumerate(train_loader):
+        data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+        data, labels = pretrain_fn(data, labels)
+        optimizer.zero_grad()
+
+        predictions = model(data)
+
+        # Cut off to end of trial
+        if labels.shape[1] != predictions.shape[1]:
+            labels = labels[:, : predictions.shape[1]]
+
+        mask = torch.isnan(labels)
+        loss = loss_fn(predictions[~mask], labels[~mask])
+
+        loss_per_batch.append(loss.item())
+
+        # Update loss shown every 5 batches, otherwise it is illegible
+        if progress is not None:
+            progress.update(1)
+            if i % 5 == 0:
+                progress.set_postfix({"loss": round(np.mean(loss_per_batch), 5)})
+
+        loss.backward()
+        optimizer.step()
+    return loss_per_batch
+
+
+def pretrain_validate(
+    model: torch.nn.Module,
+    validation_loader: DataLoader,
+    loss_fn: torch.nn.modules.loss._Loss,
+    pretrain_fn: Callable,
+):
+    model.eval()
+    loss_per_batch = []
+
+    with torch.no_grad():
+        for batch in validation_loader:
+            data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+            data, labels = pretrain_fn(data, labels)
+            predictions = model(data)
+
+            # Cut off to end of trial
+            if labels.shape[1] != predictions.shape[1]:
+                labels = labels[:, : predictions.shape[1]]
+
+            mask = torch.isnan(labels)
+            loss = loss_fn(predictions[~mask], labels[~mask])
+
+            loss_per_batch.append(loss.item())
+
+    return loss_per_batch
+
+
+def pretrain_test(
+    model: torch.nn.Module,
+    test_loader: DataLoader | list[DataLoader],
+    loss_fn: torch.nn.modules.loss._Loss,
+    pretrain_fn: Callable,
+    writer: SummaryWriter = None,
+):
+    model.eval()
+    test_results = []
+    if type(test_loader) is not list:
+        # Assume type is DataLoader
+        test_loader = [test_loader]
+    for i, loader in enumerate(test_loader):
+        loss_per_batch = []
+        with torch.no_grad():
+            for batch in loader:
+                data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+                data, labels = pretrain_fn(data, labels)
+
+                predictions = model(data)
+
+                # Cut off to end of trial
+                if labels.shape[1] != predictions.shape[1]:
+                    labels = labels[:, : predictions.shape[1]]
+
+                mask = torch.isnan(labels)
+                loss = loss_fn(predictions[~mask], labels[~mask])
+
+            loss_per_batch.append(loss.item())
+        test_results.append(loss_per_batch)
+        if writer is not None:
+            writer.add_text(f"Test results {i}", str(loss_per_batch), global_step=0)
+    return test_results
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
