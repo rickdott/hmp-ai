@@ -210,13 +210,14 @@ def preprocess(
     # Stack dimensions into one MultiIndex dimension 'index'
     stack_dims = ["epochs"]
     if not sequential:
-        stack_dims.append("labels")
+        # stack_dims.append("labels")
+        pass
     if not for_ica:
         stack_dims = ["participant"] + stack_dims
     dataset = dataset.stack({"index": stack_dims})
     # Reorder so index is in front and samples/channels are switched, components is used when preprocessing for ICA
     channel_dim = "channels" if "channels" in dataset.dims else "components1"
-    dataset = dataset.transpose("index", "samples", channel_dim)
+    dataset = dataset.transpose("index", "samples", ...)
     # Drop all indices for which all channels & samples are NaN, this happens in cases of
     # measuring error or label does not occur under condition in dataset
     dataset = (
@@ -365,6 +366,7 @@ class StageFinder:
 
         self.verbose = verbose
         self.labels = labels
+        self.main_labels = self.labels[max(self.labels, key=lambda k: len(self.labels[k]))]
         self.conditions = conditions
         self.condition_variable = condition_variable
         self.condition_method = condition_method
@@ -445,27 +447,37 @@ class StageFinder:
             self.hmp_data.append(hmp_data)
             self.conditions.append("No condition")
 
-    def label_model(self, label_fn, label_fn_kwargs=None):
+    def label_model(self, label_fn=None, label_fn_kwargs=None, probabilistic=False):
         model_labels = None
         if label_fn_kwargs is None:
             label_fn_kwargs = {}
+        empty = 0 if probabilistic else ""
 
         for fit, condition in zip(self.fits, self.conditions):
             # Label
             print(f"Labeling dataset for {condition} condition")
-            new_labels = self.__label_model__(
-                fit, label_fn, label_fn_kwargs, condition=condition
-            )
+            if not probabilistic:
+                new_labels = self.__label_model__(
+                    fit, label_fn, label_fn_kwargs, condition=condition
+                )
+            else:
+                new_labels = self.__label_model_probabilistic__(fit, condition=condition)
             if model_labels is None:
                 model_labels = new_labels
             else:
                 # Merge new labels with old labels, will always be disjoint sets since an epoch can only be one condition
-                model_labels = np.where(model_labels == "", new_labels, model_labels)
+                model_labels = np.where(model_labels == empty, new_labels, model_labels)
 
         # Add label information to stage_data: ['', '', 'stage1', 'stage1', 'stage2' ...]
-        stage_data = self.epoch_data.assign(
-            labels=(["participant", "epochs", "samples"], model_labels)
-        )
+        if not probabilistic:
+            stage_data = self.epoch_data.assign(
+                labels=(["participant", "epochs", "samples"], model_labels)
+            )
+        else:
+            prob_da = xr.DataArray(model_labels, dims=('participant', 'epochs', 'labels', 'samples'), name='probability')
+            # prob_da.expand_dims('labels')
+            stage_data = self.epoch_data.assign({'probabilities': prob_da})
+            
         return stage_data
 
     def visualize_model(self, positions):
@@ -644,6 +656,47 @@ class StageFinder:
             self.negative_class_start_idx = self.negative_class_start_idx + 1 if self.negative_class_start_idx + 1 < len(labels) - 1 else 0
 
         return np.copy(labels_array)
+
+    def __label_model_probabilistic__(self, model, condition=None):
+        n_events = len(model.event)
+        if condition == "No condition":
+            condition = None
+        labels = self.labels if condition is None else self.labels[condition]
+
+        if len(labels) - 1 != n_events:
+            raise ValueError(
+                "Amount of labels is not equal to amount of events, adjust labels parameter"
+            )
+        shape = list(self.epoch_data.data.shape)
+        # Instead of channels, create a dim for label probabilities
+        shape[-2] = len(self.main_labels)
+
+        labels_array = np.full(shape, fill_value=0, dtype=np.float32)
+        # participants = list(self.epoch_data.participant.values)
+        # prev_participant = None
+        
+        # (trials, samples, events)
+        probs = model.eventprobs.unstack()
+        dims = probs.dims
+        participants = probs.participant.to_numpy()
+        probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
+        for participant in np.arange(probs.shape[0]):
+            participant_id = participants[participant]
+            print(f"Processing participant {participant_id}")
+            for trial in probs.trials:
+                trial_data = probs.sel(participant=participant_id, trials=trial)
+                if not np.any(np.isnan(trial_data.data)):
+                    for event in trial_data.event:
+                        # Translate from event index (0,1,2,3 for acc, 0,1,2 for spd) to index in labels_array
+                        # Assumes labels start with 'negative' (irrelevant for this method of labelling)
+                        event_idx = self.main_labels.index(labels[event.item() + 1])
+                        event_data = trial_data.sel(event=event).data
+                        labels_array[participant, trial.item(), event_idx, :] = event_data
+        
+        return np.copy(labels_array)
+
+
+
 
     def __label_bump_to_bump__(
         self, locations, RT_sample, participant, epoch, labels, labels_array

@@ -9,6 +9,7 @@ from hmpai.pytorch.utilities import (
     load_model,
 )
 from hmpai.pytorch.generators import SAT1Dataset
+from hmpai.pytorch.pretraining import *
 import torch
 from hmpai.data import SAT1_STAGES_ACCURACY
 from pathlib import Path
@@ -154,8 +155,9 @@ def train_and_test(
     model = model.to(DEVICE)
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
-    else: 
-        loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing)
+    else:
+        loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=True)
+        # loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing, ignore_index=0)
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
 
@@ -171,12 +173,13 @@ def train_and_test(
                     train_loader,
                     opt,
                     loss,
-                    pretrain_fn=pretrain_fn,
                     progress=tepoch,
                     do_spectral_decoupling=do_spectral_decoupling,
                 )
-            else: 
-                batch_losses = pretrain_train(model, train_loader, opt, loss, pretrain_fn, progress=tepoch)
+            else:
+                batch_losses = pretrain_train(
+                    model, train_loader, opt, loss, pretrain_fn, progress=tepoch
+                )
 
             # Validate model and communicate results
             val_loss_list = []
@@ -358,7 +361,7 @@ def train(
         list[float]: List containing loss for each batch.
     """
     model.train()
-
+    softmax = torch.nn.Softmax(dim=2)
     loss_per_batch = []
 
     for i, batch in enumerate(train_loader):
@@ -373,10 +376,12 @@ def train(
             labels = labels[:, : predictions.shape[1]]
 
         if len(predictions.shape) == 3:
-            loss = loss_fn(
-                predictions.reshape(-1, predictions.shape[-1]).flatten(),
-                labels.reshape(-1, labels.shape[-1]).flatten(),
-            )
+            loss = loss_fn(softmax(predictions), labels)
+            # loss = loss_fn(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+            # loss = loss_fn(
+            #     predictions.reshape(-1, predictions.shape[-1]).flatten(),
+            #     labels.reshape(-1, labels.shape[-1]).flatten(),
+            # )
         else:
             loss = loss_fn(predictions, labels)
         if do_spectral_decoupling:
@@ -531,105 +536,6 @@ def calculate_class_weights(
         else:
             weights.append(1)
     return torch.Tensor(weights)
-
-
-def pretrain_train(
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    loss_fn: torch.nn.modules.loss._Loss,
-    pretrain_fn: Callable,
-    progress: tqdm = None,
-):
-    model.train()
-    loss_per_batch = []
-    for i, batch in enumerate(train_loader):
-        data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-        data, labels = pretrain_fn(data, labels)
-        optimizer.zero_grad()
-
-        predictions = model(data)
-
-        # Cut off to end of trial
-        if labels.shape[1] != predictions.shape[1]:
-            labels = labels[:, : predictions.shape[1]]
-
-        mask = torch.isnan(labels)
-        loss = loss_fn(predictions[~mask], labels[~mask])
-
-        loss_per_batch.append(loss.item())
-
-        # Update loss shown every 5 batches, otherwise it is illegible
-        if progress is not None:
-            progress.update(1)
-            if i % 5 == 0:
-                progress.set_postfix({"loss": round(np.mean(loss_per_batch), 5)})
-
-        loss.backward()
-        optimizer.step()
-    return loss_per_batch
-
-
-def pretrain_validate(
-    model: torch.nn.Module,
-    validation_loader: DataLoader,
-    loss_fn: torch.nn.modules.loss._Loss,
-    pretrain_fn: Callable,
-):
-    model.eval()
-    loss_per_batch = []
-
-    with torch.no_grad():
-        for batch in validation_loader:
-            data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-            data, labels = pretrain_fn(data, labels)
-            predictions = model(data)
-
-            # Cut off to end of trial
-            if labels.shape[1] != predictions.shape[1]:
-                labels = labels[:, : predictions.shape[1]]
-
-            mask = torch.isnan(labels)
-            loss = loss_fn(predictions[~mask], labels[~mask])
-
-            loss_per_batch.append(loss.item())
-
-    return loss_per_batch
-
-
-def pretrain_test(
-    model: torch.nn.Module,
-    test_loader: DataLoader | list[DataLoader],
-    loss_fn: torch.nn.modules.loss._Loss,
-    pretrain_fn: Callable,
-    writer: SummaryWriter = None,
-):
-    model.eval()
-    test_results = []
-    if type(test_loader) is not list:
-        # Assume type is DataLoader
-        test_loader = [test_loader]
-    for i, loader in enumerate(test_loader):
-        loss_per_batch = []
-        with torch.no_grad():
-            for batch in loader:
-                data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-                data, labels = pretrain_fn(data, labels)
-
-                predictions = model(data)
-
-                # Cut off to end of trial
-                if labels.shape[1] != predictions.shape[1]:
-                    labels = labels[:, : predictions.shape[1]]
-
-                mask = torch.isnan(labels)
-                loss = loss_fn(predictions[~mask], labels[~mask])
-
-            loss_per_batch.append(loss.item())
-        test_results.append(loss_per_batch)
-        if writer is not None:
-            writer.add_text(f"Test results {i}", str(loss_per_batch), global_step=0)
-    return test_results
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch

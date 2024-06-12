@@ -659,6 +659,7 @@ def plot_predictions_on_epoch(
     model: torch.nn.Module,
     smoothing: bool = False,
     sequence: bool = False,
+    random_perm: bool = False,
 ):
     def smooth_predictions(predictions, window_size):
         smoothed = np.copy(predictions)
@@ -676,8 +677,12 @@ def plot_predictions_on_epoch(
         slices = get_padded_slices(epoch, window_size)
         stacked = torch.stack(slices).to(DEVICE)
         pred = model(stacked)
-        pred = torch.nn.Softmax(dim=1)(pred)
+        # pred = torch.nn.Softmax(dim=1)(pred)
     else:
+        if random_perm:
+            perm = torch.randperm(rt_idx)
+            epoch[:rt_idx] = epoch[perm]
+            true[:rt_idx] = true[perm]
         pred = model(epoch.unsqueeze(0).to(DEVICE))
         pred = torch.nn.Softmax(dim=2)(pred)
     pred = pred.cpu().detach().numpy()
@@ -690,6 +695,7 @@ def plot_predictions_on_epoch(
             # empty[i + window_size // 2, :] = prediction
     else:
         empty = pred.squeeze()
+    # print(true)
     fig, ax = plt.subplots()
     for i in range(0, 5):
         mask = torch.eq(true, i)

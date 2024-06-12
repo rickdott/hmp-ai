@@ -1,9 +1,11 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 from hmpai.utilities import MASKING_VALUE
 import math
 from hmpai.pytorch.utilities import DEVICE
+
 
 class LearnablePositionalEncoding(nn.Module):
 
@@ -39,27 +41,153 @@ class LearnablePositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class Seq2SeqTransformer(nn.Module):
-    def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes):
+class ClassTokenEmbedding(nn.Module):
+    def __init__(self, class_token_dim):
         super().__init__()
-        self.embedding = nn.Linear(d_model, d_model)
-        self.pos_encoder = PositionalEncoding(d_model, dropout=0.1)
-        encoder_layers = nn.TransformerEncoderLayer(d_model, num_heads, ff_dim)
+        self.class_token = nn.Parameter(
+            torch.zeros(1, 1, class_token_dim, device=DEVICE)
+        )
+
+    def forward(self, batch_size, sequence_length):
+        return self.class_token.expand(batch_size, sequence_length, -1)
+
+
+class Seq2SeqTransformer(nn.Module):
+    def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes, emb_dim):
+        super().__init__()
+        self.embedding = nn.Linear(d_model, emb_dim)
+        self.pos_encoder = PositionalEncoding(emb_dim, dropout=0.1)
+        encoder_layers = nn.TransformerEncoderLayer(
+            emb_dim, num_heads, ff_dim
+        )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
-        self.fc = nn.Linear(d_model, d_model)
+        self.fc_translation = nn.Linear(emb_dim, d_model)
+        self.fc_output = nn.Linear(emb_dim, num_classes)
+        self.pretraining = True
+        # TESTING
+
+    def set_pretraining(self, is_pretraining):
+        self.pretraining = is_pretraining
 
     def forward(self, x):
         mask = (x == MASKING_VALUE).all(dim=2)
-        max_idx = mask.float().argmax(dim=1).max()
+        max_idx = mask.float().argmax(dim=1).max().item()
         mask = mask[:, :max_idx]
         x = x[:, :max_idx, :]
-
         x = self.embedding(x)
         x = self.pos_encoder(x)
         x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+
+        # transformer_output = self.transformer_encoder(x)
         transformer_output = self.transformer_encoder(x, src_key_padding_mask=mask)
+
         transformer_output = transformer_output.permute(1, 0, 2)
-        output = self.fc(transformer_output)
+
+        output = (
+            self.fc_translation(transformer_output)
+            if self.pretraining
+            else self.fc_output(transformer_output)
+        )
+        return output
+    
+
+class Seq2SeqTransformerWithChannelConv(nn.Module):
+    def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes, emb_dim):
+        super().__init__()
+        self.embedding = nn.Linear(d_model, emb_dim)
+        self.pos_encoder = PositionalEncoding(128, dropout=0.1)
+        encoder_layers = nn.TransformerEncoderLayer(
+            emb_dim, num_heads, ff_dim
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
+        self.fc_translation = nn.Linear(emb_dim, d_model)
+        self.fc_output = nn.Linear(emb_dim, num_classes)
+        self.pretraining = True
+        # TESTING
+        self.conv1 = nn.Conv2d(1, 128, kernel_size=(d_model, 1))
+        # self.conv2 = nn.Conv2d(128, 256, kernel_size=(3, 1), padding='same')
+
+    def set_pretraining(self, is_pretraining):
+        self.pretraining = is_pretraining
+
+    def forward(self, x):
+        mask = (x == MASKING_VALUE).all(dim=2)
+        max_idx = mask.float().argmax(dim=1).max().item()
+        mask = mask[:, :max_idx]
+        x = x[:, :max_idx, :]
+        x = torch.unsqueeze(x, dim=-1) # (batch_size, seq_len, feature_dim, 1)
+        x = x.permute(0, 3, 2, 1) # (batch_size, 1, feature_dim, seq_len)
+        # x = x.permute(0, 2, 1)  # Transformer expects (seq_len, batch_size, feature_dim)
+        # (batch_size, feature_dim, seq_len)
+        x = self.conv1(x)
+        # x = self.conv2(x)
+        x = torch.squeeze(x, dim=2)
+        # x = self.embedding(x)
+        x = x.permute(0, 2, 1)
+        x = self.pos_encoder(x)
+        x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+        # x = x.permute(2, 1, 0)  # Transformer expects (seq_len, batch_size, feature_dim)
+
+        # transformer_output = self.transformer_encoder(x)
+        transformer_output = self.transformer_encoder(x, src_key_padding_mask=mask)
+
+        transformer_output = transformer_output.permute(1, 0, 2)
+
+        output = (
+            self.fc_translation(transformer_output)
+            if self.pretraining
+            else self.fc_output(transformer_output)
+        )
+        return output
+
+
+class Seq2SeqTransformerWithClassTokens(nn.Module):
+    def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes, emb_dim):
+        super().__init__()
+        self.class_token_dim = 1
+        self.embedding = nn.Linear(d_model, emb_dim)
+        self.cls_embedding = ClassTokenEmbedding(self.class_token_dim)
+        self.positional_encoding = nn.Parameter(
+            torch.zeros(1, 1000, emb_dim + self.class_token_dim)
+        )  # Assuming max seq length of 1000
+        # self.pos_encoder = PositionalEncoding(emb_dim + self.class_token_dim, dropout=0.1)
+        encoder_layers = nn.TransformerEncoderLayer(
+            emb_dim + self.class_token_dim, num_heads, ff_dim
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
+        self.fc_translation = nn.Linear(self.class_token_dim, d_model)
+        self.fc_output = nn.Linear(self.class_token_dim, num_classes)
+        self.pretraining = True
+        # TESTING
+
+    def set_pretraining(self, is_pretraining):
+        self.pretraining = is_pretraining
+
+    def forward(self, x):
+        mask = (x == MASKING_VALUE).all(dim=2)
+        max_idx = mask.float().argmax(dim=1).max().item()
+        mask = mask[:, :max_idx]
+        x = x[:, :max_idx, :]
+        x = self.embedding(x)
+        class_tokens = self.cls_embedding(x.shape[0], x.shape[1])
+        # class_tokens = torch.zeros((x.shape[0], x.shape[1], self.class_token_dim), device=x.device) # (batch_size, seq_len, 1)
+        x = torch.cat(
+            (class_tokens, x), dim=-1
+        )  # Preprend class tokens to last dimension (feature_dim)
+        # x = self.pos_encoder(x)
+        x = x + self.positional_encoding[:, : x.shape[1], :]
+        x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+
+        # transformer_output = self.transformer_encoder(x)
+        transformer_output = self.transformer_encoder(x, src_key_padding_mask=mask)
+
+        transformer_output = transformer_output.permute(1, 0, 2)
+
+        output = (
+            self.fc_translation(transformer_output[:, :, : self.class_token_dim])
+            if self.pretraining
+            else self.fc_output(transformer_output[:, :, : self.class_token_dim])
+        )
         return output
 
 
@@ -111,25 +239,47 @@ class TransformerModel(nn.Module):
         return x
 
 
+# class PositionalEncoding(nn.Module):
+#     def __init__(self, d_model, dropout=0.1, max_len=250):
+#         super().__init__()
+#         self.dropout = nn.Dropout(p=dropout)
+
+#         pe = torch.zeros(max_len, d_model)
+#         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+#         div_term = torch.exp(
+#             torch.arange(0, d_model, 2).float()
+#             * (-torch.log(torch.tensor(10000.0)) / d_model)
+#         )
+#         pe[:, 0::2] = torch.sin(position * div_term)
+#         pe[:, 1::2] = torch.cos(position * div_term)
+#         pe = pe.unsqueeze(0).to(DEVICE)
+#         self.register_buffer("pe", pe)
+
+#     def forward(self, x):
+#         x = x + self.pe[:, : x.size(1), :].to(DEVICE)
+#         return self.dropout(x)
+
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=250):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).to(DEVICE)
-        self.register_buffer("pe", pe)
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
 
-    def forward(self, x):
-        x = x + self.pe[:, : x.size(1), :].to(DEVICE)
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        x = x + self.pe[:x.size(0)]
         return self.dropout(x)
-
+    
 
 class SAT1Base(nn.Module):
     def __init__(self, n_classes):

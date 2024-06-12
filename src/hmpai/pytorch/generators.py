@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset
+from torchvision.transforms import Compose
 import xarray as xr
 import torch
 import numpy as np
@@ -31,13 +32,15 @@ class SAT1Dataset(Dataset):
         info_to_keep: list[str] = [],
         interpolate_to: int = 0,
         order_by_rt: bool = False,
+        transform: Compose = None,
     ):
         self.interpolate_to = interpolate_to
+        self.transform = transform
         # Alphabetical ordering of labels used for categorization of labels
         label_lookup = {label: idx for idx, label in enumerate(labels)}
 
         # If labels is a data variable, the data is sequential instead of split
-        sequential = dataset.data_vars.__contains__("labels")
+        sequential = dataset.data_vars.__contains__("labels") and 'probabilities' not in dataset
 
         # Preprocess data
         if do_preprocessing:
@@ -50,13 +53,17 @@ class SAT1Dataset(Dataset):
 
         self.data = torch.as_tensor(dataset.data.to_numpy(), dtype=torch.float32)
 
-        vectorized_label_to_index = np.vectorize(lambda x: label_lookup.get(x, -1))
-        indices = xr.apply_ufunc(vectorized_label_to_index, dataset.labels)
-        self.labels = torch.as_tensor(indices.values, dtype=torch.long)
-        if set_to_zero:
-            self.labels = torch.where(self.labels == -1, torch.tensor(0), self.labels)
+        if 'probabilities' in dataset:
+            self.labels = torch.as_tensor(dataset.probabilities.values, dtype=torch.float32)
+        else:
+            vectorized_label_to_index = np.vectorize(lambda x: label_lookup.get(x, -1))
+            indices = xr.apply_ufunc(vectorized_label_to_index, dataset.labels)
+            self.labels = torch.as_tensor(indices.values, dtype=torch.long)
+            if set_to_zero:
+                self.labels = torch.where(self.labels == -1, torch.tensor(0), self.labels)
         if interpolate_to != 0:
             self.data = torch.Tensor(self.__resample_batch_eeg__(self.data))
+            # Probably does not work with probabilities
             self.labels = torch.Tensor(self.__resample_batch_labels__(self.labels)).long()
         if order_by_rt:
             if 'rt' not in info_to_keep:
@@ -73,10 +80,15 @@ class SAT1Dataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        if len(self.info) > 0:
-            return self.data[idx], self.labels[idx], self.info[idx]
+        if self.transform is not None:
+            data, labels = self.transform((self.data[idx], self.labels[idx]))
         else:
-            return self.data[idx], self.labels[idx]
+            data = self.data[idx]
+            labels = self.labels[idx]
+        if len(self.info) > 0:
+            return data, labels, self.info[idx]
+        else:
+            return data, labels
         
     def __resample_batch_eeg__(self, trials):
         batch_size, original_length, num_channels = trials.shape
