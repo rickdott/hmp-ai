@@ -210,6 +210,7 @@ def preprocess(
     # Stack dimensions into one MultiIndex dimension 'index'
     stack_dims = ["epochs"]
     if not sequential:
+        #TODO: Find out where this was needed?
         # stack_dims.append("labels")
         pass
     if not for_ica:
@@ -223,7 +224,7 @@ def preprocess(
     dataset = (
         dataset.dropna("index", how="all", subset=["data"])
         if sequential
-        else dataset.dropna("index", how="all")
+        else dataset.dropna("index", how="all", subset=["data"])
     )
     dataset = dataset.fillna(MASKING_VALUE)
 

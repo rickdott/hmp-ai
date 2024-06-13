@@ -156,7 +156,7 @@ def train_and_test(
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
     else:
-        loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=True)
+        loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
         # loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing, ignore_index=0)
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
@@ -361,7 +361,8 @@ def train(
         list[float]: List containing loss for each batch.
     """
     model.train()
-    softmax = torch.nn.Softmax(dim=2)
+    if isinstance(loss_fn, torch.nn.KLDivLoss):
+        softmax = torch.nn.LogSoftmax(dim=2)
     loss_per_batch = []
 
     for i, batch in enumerate(train_loader):
@@ -376,12 +377,17 @@ def train(
             labels = labels[:, : predictions.shape[1]]
 
         if len(predictions.shape) == 3:
-            loss = loss_fn(softmax(predictions), labels)
-            # loss = loss_fn(predictions.view(-1, predictions.shape[-1]), labels.flatten())
-            # loss = loss_fn(
-            #     predictions.reshape(-1, predictions.shape[-1]).flatten(),
-            #     labels.reshape(-1, labels.shape[-1]).flatten(),
-            # )
+            if isinstance(loss_fn, torch.nn.KLDivLoss):
+                # Add small value to prevent log(0), re-normalize
+                labels = labels + 1e-8
+                labels = labels / labels.sum(dim=-1, keepdim=True)
+                loss = loss_fn(softmax(predictions), labels)
+            else:
+                loss = loss_fn(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+                # loss = loss_fn(
+                #     predictions.reshape(-1, predictions.shape[-1]).flatten(),
+                #     labels.reshape(-1, labels.shape[-1]).flatten(),
+                # )
         else:
             loss = loss_fn(predictions, labels)
         if do_spectral_decoupling:
@@ -420,6 +426,8 @@ def validate(
     """
     model.eval()
 
+    if isinstance(loss_fn, torch.nn.KLDivLoss):
+        softmax = torch.nn.LogSoftmax(dim=2)
     loss_per_batch = []
     total_correct = 0
     total_instances = 0
@@ -436,28 +444,38 @@ def validate(
             if labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
 
-            matches = predicted_labels == labels
-            correct_predictions = matches.sum().item()
+            if not isinstance(loss_fn, torch.nn.KLDivLoss):
+                matches = predicted_labels == labels
+                correct_predictions = matches.sum().item()
+            else:
+                correct_predictions = labels.numel()
 
             total_correct += correct_predictions
             total_instances += labels.numel()
             # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
             if len(predictions.shape) == 3:
-                loss = loss_fn(
-                    predictions.view(-1, predictions.shape[-1]), labels.flatten()
-                )
+                if isinstance(loss_fn, torch.nn.KLDivLoss):
+                    # Add small value to prevent log(0), re-normalize
+                    labels = labels + 1e-8
+                    labels = labels / labels.sum(dim=-1, keepdim=True)
+                    loss = loss_fn(softmax(predictions), labels)
+                else:
+                    loss = loss_fn(
+                        predictions.view(-1, predictions.shape[-1]), labels.flatten()
+                    )
             else:
                 loss = loss_fn(predictions, labels)
 
             loss_per_batch.append(loss.item())
 
         # Show test results for last batch
-        test_results = classification_report(
-            labels.cpu().flatten(),
-            predicted_labels.cpu().flatten(),
-            output_dict=False,
-        )
-        print(test_results)
+        if not isinstance(loss_fn, torch.nn.KLDivLoss):
+            test_results = classification_report(
+                labels.cpu().flatten(),
+                predicted_labels.cpu().flatten(),
+                output_dict=False,
+            )
+            print(test_results)
 
     return loss_per_batch, round(total_correct / total_instances, 5)
 
@@ -482,6 +500,7 @@ def test(
     """
     model.eval()
     test_results = []
+
     if type(test_loader) is not list:
         # Assume type is DataLoader
         test_loader = [test_loader]

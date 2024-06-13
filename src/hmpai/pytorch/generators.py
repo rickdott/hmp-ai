@@ -55,6 +55,7 @@ class SAT1Dataset(Dataset):
 
         if 'probabilities' in dataset:
             self.labels = torch.as_tensor(dataset.probabilities.values, dtype=torch.float32)
+            
         else:
             vectorized_label_to_index = np.vectorize(lambda x: label_lookup.get(x, -1))
             indices = xr.apply_ufunc(vectorized_label_to_index, dataset.labels)

@@ -74,12 +74,16 @@ class Seq2SeqTransformer(nn.Module):
         max_idx = mask.float().argmax(dim=1).max().item()
         mask = mask[:, :max_idx]
         x = x[:, :max_idx, :]
+        # print(x.isnan().any())
         x = self.embedding(x)
+        # print(x.isnan().any())
         x = self.pos_encoder(x)
+        # print(x.isnan().any())
         x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
 
         # transformer_output = self.transformer_encoder(x)
         transformer_output = self.transformer_encoder(x, src_key_padding_mask=mask)
+        # print(transformer_output.isnan().any())
 
         transformer_output = transformer_output.permute(1, 0, 2)
 
@@ -88,6 +92,7 @@ class Seq2SeqTransformer(nn.Module):
             if self.pretraining
             else self.fc_output(transformer_output)
         )
+        # print(output.isnan().any())
         return output
     
 
