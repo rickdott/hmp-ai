@@ -8,7 +8,7 @@ from tqdm.notebook import tqdm
 
 
 SAT_CLASSES_ACCURACY = [
-    "negative",
+    "pre-attentive",
     "encoding",
     "decision",
     "confirmation",
@@ -211,7 +211,7 @@ def preprocess(
     stack_dims = ["epochs"]
     if not sequential:
         #TODO: Find out where this was needed?
-        # stack_dims.append("labels")
+        stack_dims.append("labels")
         pass
     if not for_ica:
         stack_dims = ["participant"] + stack_dims

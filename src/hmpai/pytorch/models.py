@@ -5,6 +5,7 @@ from torch import Tensor
 from hmpai.utilities import MASKING_VALUE
 import math
 from hmpai.pytorch.utilities import DEVICE
+from mamba_ssm import Mamba2, Mamba
 
 
 class LearnablePositionalEncoding(nn.Module):
@@ -52,14 +53,48 @@ class ClassTokenEmbedding(nn.Module):
         return self.class_token.expand(batch_size, sequence_length, -1)
 
 
+class MambaModel(nn.Module):
+    def __init__(self, d_model, num_classes, emb_dim):
+        super().__init__()
+        self.embedding = nn.Linear(d_model, emb_dim)
+        self.mamba_encoder = Mamba(d_model=emb_dim, d_state=16, d_conv=4, expand=2)
+        self.fc_translation = nn.Linear(emb_dim, d_model)
+        self.fc_output = nn.Linear(emb_dim, num_classes)
+        self.pretraining = True
+        # TESTING
+
+    def set_pretraining(self, is_pretraining):
+        self.pretraining = is_pretraining
+
+    def forward(self, x):
+        mask = (x == MASKING_VALUE).all(dim=2)
+        max_idx = mask.float().argmax(dim=1).max().item()
+        mask = mask[:, :max_idx]
+        x = x[:, :max_idx, :]
+        x = self.embedding(x)
+        # x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+
+        # transformer_output = self.transformer_encoder(x)
+        transformer_output = self.mamba_encoder(x)
+        # print(transformer_output.isnan().any())
+
+        # transformer_output = transformer_output.permute(1, 0, 2)
+
+        output = (
+            self.fc_translation(transformer_output)
+            if self.pretraining
+            else self.fc_output(transformer_output)
+        )
+        # print(output.isnan().any())
+        return output
+
+
 class Seq2SeqTransformer(nn.Module):
     def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes, emb_dim):
         super().__init__()
         self.embedding = nn.Linear(d_model, emb_dim)
         self.pos_encoder = PositionalEncoding(emb_dim, dropout=0.1)
-        encoder_layers = nn.TransformerEncoderLayer(
-            emb_dim, num_heads, ff_dim
-        )
+        encoder_layers = nn.TransformerEncoderLayer(emb_dim, num_heads, ff_dim)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         self.fc_translation = nn.Linear(emb_dim, d_model)
         self.fc_output = nn.Linear(emb_dim, num_classes)
@@ -94,16 +129,14 @@ class Seq2SeqTransformer(nn.Module):
         )
         # print(output.isnan().any())
         return output
-    
+
 
 class Seq2SeqTransformerWithChannelConv(nn.Module):
     def __init__(self, d_model, ff_dim, num_heads, num_layers, num_classes, emb_dim):
         super().__init__()
         self.embedding = nn.Linear(d_model, emb_dim)
         self.pos_encoder = PositionalEncoding(128, dropout=0.1)
-        encoder_layers = nn.TransformerEncoderLayer(
-            emb_dim, num_heads, ff_dim
-        )
+        encoder_layers = nn.TransformerEncoderLayer(emb_dim, num_heads, ff_dim)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         self.fc_translation = nn.Linear(emb_dim, d_model)
         self.fc_output = nn.Linear(emb_dim, num_classes)
@@ -120,8 +153,8 @@ class Seq2SeqTransformerWithChannelConv(nn.Module):
         max_idx = mask.float().argmax(dim=1).max().item()
         mask = mask[:, :max_idx]
         x = x[:, :max_idx, :]
-        x = torch.unsqueeze(x, dim=-1) # (batch_size, seq_len, feature_dim, 1)
-        x = x.permute(0, 3, 2, 1) # (batch_size, 1, feature_dim, seq_len)
+        x = torch.unsqueeze(x, dim=-1)  # (batch_size, seq_len, feature_dim, 1)
+        x = x.permute(0, 3, 2, 1)  # (batch_size, 1, feature_dim, seq_len)
         # x = x.permute(0, 2, 1)  # Transformer expects (seq_len, batch_size, feature_dim)
         # (batch_size, feature_dim, seq_len)
         x = self.conv1(x)
@@ -264,6 +297,7 @@ class TransformerModel(nn.Module):
 #         x = x + self.pe[:, : x.size(1), :].to(DEVICE)
 #         return self.dropout(x)
 
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -271,20 +305,22 @@ class PositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
         position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(max_len, 1, d_model)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Arguments:
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
         """
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[: x.size(0)]
         return self.dropout(x)
-    
+
 
 class SAT1Base(nn.Module):
     def __init__(self, n_classes):
@@ -447,6 +483,68 @@ class SAT1Deep(nn.Module):
 
         return x
 
+
+class SAT1Mamba(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super().__init__()
+        self.relu = nn.ReLU()
+        # self.mamba = Mamba(d_model=128, d_state=16, d_conv=4, expand=2)
+        self.linear = nn.LazyLinear(n_classes)
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=n_channels, out_channels=64, kernel_size=5, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+        )
+        self.norm = nn.LayerNorm(128)
+    
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        x = self.cnn(x)
+        x = x.permute(0, 2, 1)
+        x = self.mamba(x)
+        x = self.norm(x)
+        x = x[:, -1, :]
+        # x = x.mean(dim=1)
+        x = self.linear(x)
+        return x
+
+
+class MambaModel(nn.Module):
+    def __init__(self, embed_dim, n_channels, n_classes, n_layers, global_pool=False):
+        super().__init__()
+        self.blocks = nn.Sequential(*[MambaBlock(embed_dim) for _ in range(n_layers)])
+        self.global_pool = global_pool
+        self.linear_in = nn.Linear(n_channels, embed_dim)
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=n_channels, out_channels=128, kernel_size=5, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=128, out_channels=embed_dim, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+        )
+        self.linear_out = nn.Linear(embed_dim, n_classes)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        x = self.cnn(x)
+        x = x.permute(0, 2, 1)
+        # x = self.linear_in(x)
+        out = self.blocks(x) if not self.global_pool else torch.mean(self.blocks(x), dim=1)
+        out = self.linear_out(out)
+        return out
+
+# https://github.com/apapiu/mamba_small_bench
+class MambaBlock(nn.Module):
+    def __init__(self, embed_dim, dropout_level=0):
+        super().__init__()
+
+        self.mamba = Mamba(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
+        self.norm = nn.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(dropout_level)
+
+    def forward(self, x):
+        x = self.norm(self.mamba(x) + x)
+        return self.dropout(x)
 
 class SAT1GRU(nn.Module):
     def __init__(self, n_channels, n_samples, n_classes):

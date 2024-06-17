@@ -156,8 +156,12 @@ def train_and_test(
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
     else:
-        loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
-        # loss = torch.nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing, ignore_index=0)
+        # KLDivLoss for calculating loss between probability distributions
+        # loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
+        # TODO: Think about ignore_index
+        loss = torch.nn.CrossEntropyLoss(
+            weight=weight, label_smoothing=label_smoothing, ignore_index=-1
+        )
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
 
@@ -187,7 +191,7 @@ def train_and_test(
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 if pretrain_fn is None:
-                    val_losses, val_accuracy = validate(model, val_loader, loss)
+                    val_losses, val_accuracy = validate(model, val_loader, loss, labels)
                 else:
                     val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
                     val_accuracy = 0
@@ -231,7 +235,7 @@ def train_and_test(
 
     # Test model
     if pretrain_fn is None:
-        results, _, _ = test(model, test_loaders, writer)
+        results, _, _ = test(model, test_loaders, writer, labels)
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -373,7 +377,7 @@ def train(
 
         predictions = model(data)
 
-        if labels.shape[1] != predictions.shape[1]:
+        if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
 
         if len(predictions.shape) == 3:
@@ -383,7 +387,9 @@ def train(
                 labels = labels / labels.sum(dim=-1, keepdim=True)
                 loss = loss_fn(softmax(predictions), labels)
             else:
-                loss = loss_fn(predictions.view(-1, predictions.shape[-1]), labels.flatten())
+                loss = loss_fn(
+                    predictions.view(-1, predictions.shape[-1]), labels.flatten()
+                )
                 # loss = loss_fn(
                 #     predictions.reshape(-1, predictions.shape[-1]).flatten(),
                 #     labels.reshape(-1, labels.shape[-1]).flatten(),
@@ -412,6 +418,7 @@ def validate(
     model: torch.nn.Module,
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
+    class_labels: list[str] = None,
 ) -> (list[float], float):
     """Validate model.
 
@@ -433,6 +440,8 @@ def validate(
     total_instances = 0
 
     with torch.no_grad():
+        all_labels = []
+        all_preds = []
         for batch in validation_loader:
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
@@ -441,7 +450,7 @@ def validate(
             dim = len(predictions.shape) - 1
             predicted_labels = torch.argmax(predictions, dim=dim)
 
-            if labels.shape[1] != predictions.shape[1]:
+            if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
 
             if not isinstance(loss_fn, torch.nn.KLDivLoss):
@@ -465,15 +474,19 @@ def validate(
                     )
             else:
                 loss = loss_fn(predictions, labels)
-
+            all_labels.append(labels.cpu().flatten())
+            all_preds.append(predicted_labels.cpu().flatten())
             loss_per_batch.append(loss.item())
 
         # Show test results for last batch
         if not isinstance(loss_fn, torch.nn.KLDivLoss):
+            all_labels = torch.cat(all_labels, dim=0)
+            all_preds = torch.cat(all_preds, dim=0)
             test_results = classification_report(
-                labels.cpu().flatten(),
-                predicted_labels.cpu().flatten(),
+                all_labels,
+                all_preds,
                 output_dict=False,
+                # target_names=class_labels
             )
             print(test_results)
 
@@ -484,6 +497,7 @@ def test(
     model: torch.nn.Module,
     test_loader: DataLoader | list[DataLoader],
     writer: SummaryWriter = None,
+    class_labels: list[str] = None,
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -512,7 +526,7 @@ def test(
                 data, labels = batch[0].to(DEVICE), batch[1]
                 predictions = model(data)
                 # Cut off labels if needed
-                if labels.shape[1] != predictions.shape[1]:
+                if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]
 
                 dim = len(predictions.shape) - 1
@@ -520,7 +534,9 @@ def test(
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        loader_results = classification_report(true_labels, outputs, output_dict=True)
+        loader_results = classification_report(
+            true_labels, outputs, output_dict=True
+        )
         test_results.append(loader_results)
         if writer is not None:
             writer.add_text(
