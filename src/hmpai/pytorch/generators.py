@@ -1,5 +1,6 @@
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose
+import netCDF4
 import xarray as xr
 import torch
 import numpy as np
@@ -82,6 +83,8 @@ class SAT1Dataset(Dataset):
     def __getitem__(self, idx):
         if self.transform is not None:
             data, labels = self.transform((self.data[idx], self.labels[idx]))
+            # data = self.transform(self.data[idx])
+            # labels = self.labels[idx]
         else:
             data = self.data[idx]
             labels = self.labels[idx]

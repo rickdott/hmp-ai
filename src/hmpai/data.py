@@ -1,4 +1,5 @@
 from collections import defaultdict
+import netCDF4
 import xarray as xr
 import hmp
 import numpy as np
@@ -110,7 +111,7 @@ def add_stage_data_to_unprocessed(
 
 
 def add_stage_dimension(
-    data_path: str | Path, merge_dataset: xr.Dataset = None
+    data_path: str | Path, merge_dataset: xr.Dataset = None, max_length = np.inf
 ) -> xr.Dataset:
     """Adds stage dimension to xr.Dataset without a stage dimension.
 
@@ -152,7 +153,7 @@ def add_stage_dimension(
             sample_slice = (
                 slice(0, change_idx)
                 if i == 0
-                else slice(change_indices[i - 1], change_idx)
+                else slice(change_indices[i - 1], min(change_idx, change_indices[i - 1] + max_length))
             )
             segment = stage_data.isel(
                 participant=[participant],  # List to retain dimension in segment

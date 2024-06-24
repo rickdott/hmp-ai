@@ -1,6 +1,7 @@
 import random
 from hmpai.data import preprocess
 from sklearn.metrics import classification_report
+import netCDF4
 import xarray as xr
 from typing import Callable
 from hmpai.normalization import get_norm_vars, norm_dummy
@@ -43,6 +44,7 @@ def split_data_on_participants(
 
     # Split into train, test, and val by sampling randomly
     testval_participants = random.sample(participants, testval_n)
+    print(testval_participants)
     train_participants = [p for p in participants if p not in testval_participants]
     val_participants = testval_participants[: testval_n // 2]
     test_participants = testval_participants[testval_n // 2 :]

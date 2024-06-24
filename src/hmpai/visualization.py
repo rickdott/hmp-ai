@@ -2,6 +2,7 @@ from collections import defaultdict, Counter
 from mne.viz import plot_topomap
 from mne import Info
 import numpy as np
+import netCDF4
 import xarray as xr
 import matplotlib.pyplot as plt
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
@@ -728,36 +729,79 @@ def plot_predictions_on_epoch(
     plt.ylabel("Softmax probability")
     plt.show()
 
+def plot_stage_predictions(epoch: torch.Tensor, labels: list[str], window_size: int, model: torch.nn.Module): 
+    set_seaborn_style()
+    empty = np.zeros((epoch.size()[0], len(labels)))
+    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
 
-def get_padded_slices(epoch: torch.Tensor, window_size: int):
+    slices = get_padded_slices(epoch, window_size, include_start_end=False)
+    stacked = torch.stack(slices).to(DEVICE)
+    # Pad to the size the model is used to
+    stacked = torch.nn.functional.pad(stacked, (0, 0, 0, 100 - window_size), value=MASKING_VALUE)
+    try:
+        pred = model(stacked)
+    except Exception:
+        print('Oopsie')
+        return
+    pred = torch.nn.Softmax(dim=1)(pred)
+    pred = pred.cpu().detach().numpy()
+    # if smoothing:
+    #     pred = smooth_predictions(pred, window_size)
+
+    for i, prediction in enumerate(pred):
+        empty[i, :] = prediction
+        # empty[i + window_size // 2, :] = prediction
+
+    fig, ax = plt.subplots()
+    for i in range(0, empty.shape[1]):
+        sns.lineplot(
+            x=range(len(empty[:, i])),
+            y=empty[:, i],
+            ax=ax,
+            color=sns.color_palette()[i],
+            label=labels[i],
+        )
+    # sns.lineplot(empty[:, 1:], ax=ax)
+    # label=SAT_CLASSES_ACCURACY[1:]
+    ax.legend()
+    plt.xlim(0, rt_idx + (window_size // 2))
+    plt.ylim(0, 1.0)
+    plt.xlabel("Samples")
+    plt.ylabel("Softmax probability")
+    plt.show()
+
+
+def get_padded_slices(epoch: torch.Tensor, window_size: int, include_start_end: bool = True):
     # Get index where epoch ends
     rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
     slices = []
 
     # Right-pad beginning elements
-    for start in range(-window_size + 1, 0):
-        padded_slice = torch.full(
-            (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
-        )
-        if start < 0:
-            padded_slice[0 : window_size - -start, :] = epoch[
-                0 : window_size - -start, :
-            ]
-        slices.append(padded_slice)
+    if include_start_end:
+        for start in range(-window_size + 1, 0):
+            padded_slice = torch.full(
+                (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
+            )
+            if start < 0:
+                padded_slice[0 : window_size - -start, :] = epoch[
+                    0 : window_size - -start, :
+                ]
+            slices.append(padded_slice)
 
     # Normal slices
     for start in range(rt_idx - window_size + 1):
         slices.append(epoch[start : start + window_size, :])
 
     # Right-pad end
-    for start in range(rt_idx - window_size + 1, rt_idx - 1):
-        padded_slice = torch.full(
-            (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
-        )
-        if start + window_size > rt_idx:
-            valid_length = rt_idx - start + 1
-            padded_slice[:valid_length, :] = epoch[start : start + valid_length, :]
-        slices.append(padded_slice)
+    if include_start_end:
+        for start in range(rt_idx - window_size + 1, rt_idx - 1):
+            padded_slice = torch.full(
+                (window_size, epoch.size(1)), MASKING_VALUE, dtype=torch.float32
+            )
+            if start + window_size > rt_idx:
+                valid_length = rt_idx - start + 1
+                padded_slice[:valid_length, :] = epoch[start : start + valid_length, :]
+            slices.append(padded_slice)
 
     return slices
 
@@ -911,37 +955,3 @@ def plot_ratio_true_over_RT(data: pd.DataFrame, operation: str):
     plt.ylim(0, 1)
     plt.xlim(-0.5, 9.5)
     plt.plot()
-
-
-# def plot_auc_and_true_over_RT(data: pd.DataFrame, operation: str, sat: str):
-#     set_seaborn_style()
-#     data = data.copy()
-#     data = data[data['SAT'] == sat]
-#     data["ratio_true"] = (data[f"{operation}_true_samples"] / 100) / data["rt_x"]
-#     data["ratio_auc"] = (data[f"{operation}_auc"] / 100) / data["rt_x"]
-#     bins = np.linspace(0, 1, 11)
-#     labels = [f"{bin:.1f},{bin + 0.1:.1f}" for bin in bins[:-1]]
-
-#     data['ratio_bin_true'] = pd.cut(data['ratio_true'], bins=bins, include_lowest=True)
-#     data['ratio_bin_auc'] = pd.cut(data['ratio_auc'], bins=bins, include_lowest=True)
-
-#     crosstab_true = pd.crosstab(data['ratio_bin_true'], data['response'], normalize='index')
-#     crosstab_auc = pd.crosstab(data['ratio_bin_auc'], data['response'], normalize='index')
-#     crosstab_long_true = crosstab_true.reset_index().melt(id_vars=['ratio_bin_true'], value_vars=[0], var_name='response', value_name='proportion')
-#     crosstab_long_auc = crosstab_auc.reset_index().melt(id_vars=['ratio_bin_auc'], value_vars=[0], var_name='response', value_name='proportion')
-#     plt.figure()
-#     plot = sns.barplot(x='ratio_bin_true', y='proportion', data=crosstab_long_true[crosstab_long_true.response == 1], errorbar=("ci", 95))
-#     plot.set_xticklabels(labels=labels, rotation=45)
-#     plt.xlabel(f"HMP-predicted {operation} / RT, divided into 10 bins from 0 to 1")
-#     plt.ylabel("Proportion of correct guesses")
-#     plt.ylim(0, 1)
-#     plt.xlim(-.5, 9.5)
-#     plt.plot();
-#     plt.figure()
-#     plot = sns.barplot(x='ratio_bin_auc', y='proportion', data=crosstab_long_auc[crosstab_long_auc.response == 1], errorbar=("ci", 95))
-#     plot.set_xticklabels(labels=labels, rotation=45)
-#     plt.xlabel(f"HMP-predicted {operation} / RT, divided into 10 bins from 0 to 1")
-#     plt.ylabel("Proportion of correct guesses")
-#     plt.ylim(0, 1)
-#     plt.xlim(-.5, 9.5)
-#     plt.plot()

@@ -14,6 +14,7 @@ import torch
 from hmpai.data import SAT1_STAGES_ACCURACY
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
+import netCDF4
 import xarray as xr
 from datetime import datetime
 import numpy as np
@@ -408,7 +409,7 @@ def train(
                 progress.set_postfix({"loss": round(np.mean(loss_per_batch), 5)})
 
         loss.backward()
-
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
     return loss_per_batch
@@ -486,7 +487,8 @@ def validate(
                 all_labels,
                 all_preds,
                 output_dict=False,
-                # target_names=class_labels
+                # target_names=class_labels,
+                zero_division=0.0
             )
             print(test_results)
 
@@ -534,9 +536,7 @@ def test(
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        loader_results = classification_report(
-            true_labels, outputs, output_dict=True
-        )
+        loader_results = classification_report(true_labels, outputs, output_dict=True, zero_division=0.0)
         test_results.append(loader_results)
         if writer is not None:
             writer.add_text(

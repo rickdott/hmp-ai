@@ -511,9 +511,9 @@ class SAT1Mamba(nn.Module):
 
 
 class MambaModel(nn.Module):
-    def __init__(self, embed_dim, n_channels, n_classes, n_layers, global_pool=False):
+    def __init__(self, embed_dim, n_channels, n_classes, n_layers, global_pool=False, dropout=0):
         super().__init__()
-        self.blocks = nn.Sequential(*[MambaBlock(embed_dim) for _ in range(n_layers)])
+        self.blocks = nn.Sequential(*[MambaBlock(embed_dim, dropout) for _ in range(n_layers)])
         self.global_pool = global_pool
         self.linear_in = nn.Linear(n_channels, embed_dim)
         self.cnn = nn.Sequential(
@@ -525,22 +525,27 @@ class MambaModel(nn.Module):
         self.linear_out = nn.Linear(embed_dim, n_classes)
 
     def forward(self, x):
-        x = x.permute(0, 2, 1)
-        x = self.cnn(x)
-        x = x.permute(0, 2, 1)
-        # x = self.linear_in(x)
+        mask = (x == MASKING_VALUE).all(dim=2).t()
+        max_idx = mask.float().argmax(dim=0).max()
+        mask = mask[:max_idx, :]
+        x = x[:, :max_idx, :]
+        # x = x.permute(0, 2, 1)
+        # x = self.cnn(x)
+        # x = x.permute(0, 2, 1)
+        x = self.linear_in(x)
         out = self.blocks(x) if not self.global_pool else torch.mean(self.blocks(x), dim=1)
         out = self.linear_out(out)
         return out
 
 # https://github.com/apapiu/mamba_small_bench
 class MambaBlock(nn.Module):
-    def __init__(self, embed_dim, dropout_level=0):
+    def __init__(self, embed_dim, dropout=0):
         super().__init__()
 
         self.mamba = Mamba(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
+        # self.mamba = Mamba2(d_model=embed_dim, d_state=128, d_conv=4, expand=2)
         self.norm = nn.LayerNorm(embed_dim)
-        self.dropout = nn.Dropout(dropout_level)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         x = self.norm(self.mamba(x) + x)

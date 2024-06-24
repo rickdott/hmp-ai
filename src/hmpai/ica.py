@@ -3,6 +3,7 @@ from mne.io import read_info
 import mne
 from pathlib import Path
 from scipy.optimize import linear_sum_assignment
+import netCDF4
 import xarray as xr
 from hmpai.utilities import MASKING_VALUE
 import matplotlib.pyplot as plt
