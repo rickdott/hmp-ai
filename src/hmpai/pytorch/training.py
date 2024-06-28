@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 from hmpai.utilities import pretty_json
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
@@ -38,6 +38,7 @@ def train_and_test(
     additional_info: dict = None,
     additional_name: str = None,
     use_class_weights: bool = True,
+    class_weights: torch.Tensor = None,
     label_smoothing: float = 0.0,
     weight_decay: float = 0.0,
     lr: float = 0.002,  # Default learning rate for optimizer
@@ -136,8 +137,8 @@ def train_and_test(
         writer = SummaryWriter(path)
 
         # Log model summary
-        shape = list(train_loader.dataset.data.shape)
-        shape[0] = batch_size
+        # shape = list(train_loader.dataset.data.shape)
+        # shape[0] = batch_size
         # to_write = {"Model summary": get_summary_str(model, shape)}
         to_write = {}
         if additional_info:
@@ -147,12 +148,13 @@ def train_and_test(
             writer.add_text(k, v, global_step=0)
 
     # Set up optimizer and loss
-    weight = (
-        calculate_class_weights(train_set, labels).to(DEVICE)
-        if use_class_weights
-        # TODO: Replace AR_STAGES with dynamic calculation based on dataset
-        else None
-    )
+    if use_class_weights:
+        if class_weights is None:
+            calculate_class_weights(train_set, labels).to(DEVICE)
+        else:
+            class_weights = class_weights.to(DEVICE)
+    else:
+        class_weights = None
     model = model.to(DEVICE)
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
@@ -161,7 +163,7 @@ def train_and_test(
         # loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
         # TODO: Think about ignore_index
         loss = torch.nn.CrossEntropyLoss(
-            weight=weight, label_smoothing=label_smoothing, ignore_index=-1
+            weight=class_weights, label_smoothing=label_smoothing, ignore_index=-1
         )
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
@@ -488,7 +490,7 @@ def validate(
                 all_preds,
                 output_dict=False,
                 # target_names=class_labels,
-                zero_division=0.0
+                zero_division=0.0,
             )
             print(test_results)
 
@@ -536,7 +538,9 @@ def test(
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        loader_results = classification_report(true_labels, outputs, output_dict=True, zero_division=0.0)
+        loader_results = classification_report(
+            true_labels, outputs, output_dict=True, zero_division=0.0
+        )
         test_results.append(loader_results)
         if writer is not None:
             writer.add_text(
@@ -544,6 +548,26 @@ def test(
             )
 
     return test_results, outputs, true_labels
+
+
+def calculate_global_class_weights(
+    datasets: list[Dataset],
+    labels: list[str] = SAT1_STAGES_ACCURACY,
+):
+    counters = {(label, 0) for label in labels}
+    for dataset in datasets:
+        if dataset.split:
+            # Split, count last dims in index_map
+            labels = [idx[3] for idx in dataset.index_map]
+            dataset_counter = Counter(labels)
+            for key, value in dataset_counter.items():
+                # Figure out solution, this is using dim indices instead of labels
+                # can figure out labels by loading one sample maybe?
+                # cant really load samples with specific labels
+                pass
+        else:
+            pass
+            # Not split, count occurrences of each label in data?
 
 
 def calculate_class_weights(

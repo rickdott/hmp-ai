@@ -552,7 +552,7 @@ class MambaBlock(nn.Module):
         return self.dropout(x)
 
 class SAT1GRU(nn.Module):
-    def __init__(self, n_channels, n_samples, n_classes):
+    def __init__(self, n_channels, n_classes):
         super().__init__()
         self.relu = nn.ReLU()
         # self.gru = nn.GRU(input_size=n_channels, hidden_size=16, batch_first=True, dropout=0.25)

@@ -11,6 +11,28 @@ import numpy as np
 from copy import deepcopy
 from hmpai.utilities import MASKING_VALUE
 from collections import defaultdict
+from pathlib import Path
+
+
+def split_participants(
+    data_paths: list[str | Path],
+    train_percentage: int = 60,
+):
+    # Split all participants from datasets in data_paths into train, val and test splits
+    participants = []
+    for data_path in data_paths:
+        with xr.open_dataset(data_path) as ds:
+            participants.extend(ds.participant.values)
+    # Find amounts of train and test/val participants
+    train_n = int(len(participants) * (train_percentage / 100))
+    testval_n = len(participants) - train_n
+
+    # Split into train, test, and val by sampling randomly
+    testval_participants = random.sample(participants, testval_n)
+    train_participants = [p for p in participants if p not in testval_participants]
+    val_participants = testval_participants[: testval_n // 2]
+    test_participants = testval_participants[testval_n // 2 :]
+    return (train_participants, val_participants, test_participants)
 
 
 def split_data_on_participants(
@@ -136,8 +158,12 @@ def k_fold_cross_validate_sklearn(
         train_data = calculate_features(train_data)
         test_data = calculate_features(test_data)
 
-        train_data_np = train_data.to_numpy().reshape(-1, train_data.shape[1] * train_data.shape[2])
-        test_data_np = test_data.to_numpy().reshape(-1, test_data.shape[1] * test_data.shape[2])
+        train_data_np = train_data.to_numpy().reshape(
+            -1, train_data.shape[1] * train_data.shape[2]
+        )
+        test_data_np = test_data.to_numpy().reshape(
+            -1, test_data.shape[1] * test_data.shape[2]
+        )
 
         clf = model.fit(train_data_np, train_data.labels)
 
@@ -171,7 +197,9 @@ def calculate_features(data: xr.Dataset) -> xr.Dataset:
     new_dataset["median"] = data["data"].median(dim="samples")
     new_dataset["var"] = data["data"].var(dim="samples")
 
-    new_dataset = xr.concat([new_dataset[var] for var in new_dataset.data_vars], dim="features")
+    new_dataset = xr.concat(
+        [new_dataset[var] for var in new_dataset.data_vars], dim="features"
+    )
     new_dataset = new_dataset.transpose("index", "channels", "features")
 
     return new_dataset

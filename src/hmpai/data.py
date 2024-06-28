@@ -16,7 +16,7 @@ SAT_CLASSES_ACCURACY = [
     "response",
 ]
 
-SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
+SAT_CLASSES_SPEED = ["pre-attentive", "encoding", "decision", "response"]
 
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",
@@ -111,7 +111,7 @@ def add_stage_data_to_unprocessed(
 
 
 def add_stage_dimension(
-    data_path: str | Path, merge_dataset: xr.Dataset = None, max_length = np.inf
+    data_path: str | Path, merge_dataset: xr.Dataset = None, max_length=np.inf
 ) -> xr.Dataset:
     """Adds stage dimension to xr.Dataset without a stage dimension.
 
@@ -153,7 +153,10 @@ def add_stage_dimension(
             sample_slice = (
                 slice(0, change_idx)
                 if i == 0
-                else slice(change_indices[i - 1], min(change_idx, change_indices[i - 1] + max_length))
+                else slice(
+                    change_indices[i - 1],
+                    min(change_idx, change_indices[i - 1] + max_length),
+                )
             )
             segment = stage_data.isel(
                 participant=[participant],  # List to retain dimension in segment
@@ -211,7 +214,7 @@ def preprocess(
     # Stack dimensions into one MultiIndex dimension 'index'
     stack_dims = ["epochs"]
     if not sequential:
-        #TODO: Find out where this was needed?
+        # TODO: Find out where this was needed?
         stack_dims.append("labels")
         pass
     if not for_ica:
@@ -368,7 +371,9 @@ class StageFinder:
 
         self.verbose = verbose
         self.labels = labels
-        self.main_labels = self.labels[max(self.labels, key=lambda k: len(self.labels[k]))]
+        self.main_labels = self.labels[
+            max(self.labels, key=lambda k: len(self.labels[k]))
+        ]
         self.conditions = conditions
         self.condition_variable = condition_variable
         self.condition_method = condition_method
@@ -463,7 +468,9 @@ class StageFinder:
                     fit, label_fn, label_fn_kwargs, condition=condition
                 )
             else:
-                new_labels = self.__label_model_probabilistic__(fit, condition=condition)
+                new_labels = self.__label_model_probabilistic__(
+                    fit, condition=condition
+                )
             if model_labels is None:
                 model_labels = new_labels
             else:
@@ -476,10 +483,14 @@ class StageFinder:
                 labels=(["participant", "epochs", "samples"], model_labels)
             )
         else:
-            prob_da = xr.DataArray(model_labels, dims=('participant', 'epochs', 'labels', 'samples'), name='probability')
+            prob_da = xr.DataArray(
+                model_labels,
+                dims=("participant", "epochs", "labels", "samples"),
+                name="probability",
+            )
             # prob_da.expand_dims('labels')
-            stage_data = self.epoch_data.assign({'probabilities': prob_da})
-            
+            stage_data = self.epoch_data.assign({"probabilities": prob_da})
+
         return stage_data
 
     def visualize_model(self, positions):
@@ -547,8 +558,9 @@ class StageFinder:
         # ).astype(int)
 
         # Remove channels dimension
-        shape = list(self.epoch_data.data.shape)
-        shape.pop(2)
+        # shape = list(self.epoch_data.data.shape)
+        # shape.pop(2)
+        shape = (len(self.epoch_data.participant), len(self.epoch_data.epochs), len(self.epoch_data.samples))
 
         # Fill with empty strings since XArray saves np.NaN and other None values as empty strings anyway
         # this avoids discrepancies in data
@@ -575,7 +587,6 @@ class StageFinder:
             print("Epochs used for current condition (if applicable):")
             print(condition_epochs)
 
-        
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
@@ -617,11 +628,14 @@ class StageFinder:
                 continue
 
             # TODO: Look into if this changes for SAT2
+            # data[1] = epoch number (0...2446)
             # epoch = data[1]
+            epochs = list(self.epoch_data.epochs.to_numpy())
+            epoch = epochs.index(data[1])
             # epoch = condition_epochs.index(data[1])
-            # # epoch = int(condition_epochs[data[1]])
+            # epoch = int(condition_epochs[data[1]])
 
-            if data[1] > shape[1]:
+            if epoch > shape[1]:
                 print("Epoch number exceeds shape of data, skipping")
                 continue
 
@@ -630,7 +644,7 @@ class StageFinder:
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
                 participant=data[0],
-                epochs=data[1],
+                epochs=data[1], # Use data[1] instead of epoch (.isel)?
                 channels=self.epoch_data.channels[0],
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
@@ -647,7 +661,7 @@ class StageFinder:
                 locations,
                 RT_sample,
                 participant,
-                data[1],
+                epoch,
                 labels,
                 labels_array,
                 **label_fn_kwargs,
@@ -655,7 +669,11 @@ class StageFinder:
             # Increment the index to start looking for negative classes from by 1 if there are indices left, otherwise reset it
             # With 4 classes: 0, 1, 2, 3, 0,...
             # TODO: Maybe only increment if a negative class has been found at that bump location
-            self.negative_class_start_idx = self.negative_class_start_idx + 1 if self.negative_class_start_idx + 1 < len(labels) - 1 else 0
+            self.negative_class_start_idx = (
+                self.negative_class_start_idx + 1
+                if self.negative_class_start_idx + 1 < len(labels) - 1
+                else 0
+            )
 
         return np.copy(labels_array)
 
@@ -676,7 +694,7 @@ class StageFinder:
         labels_array = np.full(shape, fill_value=0, dtype=np.float32)
         # participants = list(self.epoch_data.participant.values)
         # prev_participant = None
-        
+
         # (trials, samples, events)
         probs = model.eventprobs.unstack()
         dims = probs.dims
@@ -693,12 +711,11 @@ class StageFinder:
                         # Assumes labels start with 'negative' (irrelevant for this method of labelling)
                         event_idx = self.main_labels.index(labels[event.item() + 1])
                         event_data = trial_data.sel(event=event).data
-                        labels_array[participant, trial.item(), event_idx, :] = event_data
-        
+                        labels_array[participant, trial.item(), event_idx, :] = (
+                            event_data
+                        )
+
         return np.copy(labels_array)
-
-
-
 
     def __label_bump_to_bump__(
         self, locations, RT_sample, participant, epoch, labels, labels_array
@@ -708,7 +725,7 @@ class StageFinder:
                 # From stimulus onset to first bump == first operation
                 initial_slice = slice(0, location)
                 labels_array[participant, epoch, initial_slice] = labels[0]
-            if i != len(labels) - 1:
+            if i != len(labels) - 2:
                 # Operations in between, slice from event to next event as long as the next event timing is not after reaction time (RT)
                 if not locations[i + 1] >= RT_sample:
                     samples_slice = slice(location, locations[i + 1])
@@ -718,10 +735,13 @@ class StageFinder:
                 # Last operation, from last event sample to RT (if the event does not occur after RT)
                 if not location >= RT_sample:
                     samples_slice = slice(location, RT_sample)
+                else:
+                    continue
             if self.verbose:
                 print(
                     f"i: {i}, Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
                 )
+
             labels_array[participant, epoch, samples_slice] = labels[i + 1]
 
     def __label_samples_around_bump__(
@@ -733,7 +753,7 @@ class StageFinder:
         labels,
         labels_array,
         window=(0, 0),  # (samples_before, samples_after)
-        get_negative_class=True
+        get_negative_class=True,
     ):
         n = len(locations)
         current_idx = self.negative_class_start_idx
@@ -752,20 +772,30 @@ class StageFinder:
                     labels_array[participant, epoch, start_idx:end_idx] = labels[0]
                     negative_class_written = True
                 # Handle the case where there is more room between transitions than twice the total window size
-                elif current_idx != n - 1 and locations[current_idx + 1] - locations[current_idx] > total_window_size:
+                elif (
+                    current_idx != n - 1
+                    and locations[current_idx + 1] - locations[current_idx]
+                    > total_window_size
+                ):
                     start_idx = locations[current_idx + 1] - window[0] - sum(window) - 1
                     end_idx = locations[current_idx + 1] - window[0]
                     labels_array[participant, epoch, start_idx:end_idx] = labels[0]
                     negative_class_written = True
                 # Handle the case where the current index is the last one
-                elif current_idx == n - 1 and RT_sample - locations[current_idx] > total_window_size:
+                elif (
+                    current_idx == n - 1
+                    and RT_sample - locations[current_idx] > total_window_size
+                ):
                     start_idx = RT_sample - window[0] - sum(window) - 1
                     end_idx = RT_sample - window[0]
                     labels_array[participant, epoch, start_idx:end_idx] = labels[0]
                     negative_class_written = True
 
             # Add one since slice(x, x) returns nothing, slice(x, x + 1) returns value at index x
-            samples_slice = slice(locations[current_idx] - window[0], locations[current_idx] + window[1] + 1)
+            samples_slice = slice(
+                locations[current_idx] - window[0],
+                locations[current_idx] + window[1] + 1,
+            )
             if samples_slice.start < 0:
                 samples_slice = slice(0, samples_slice.stop)
             if samples_slice.stop > RT_sample:
