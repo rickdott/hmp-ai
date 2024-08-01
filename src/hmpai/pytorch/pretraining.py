@@ -20,12 +20,16 @@ def pretrain_train(
     loss_fn: torch.nn.modules.loss._Loss,
     pretrain_fn: Callable,
     progress: tqdm = None,
+    scheduler: torch.optim.lr_scheduler = None,
 ):
     model.train()
     loss_per_batch = []
     for i, batch in enumerate(train_loader):
-        data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-        data, labels = pretrain_fn(data, labels)
+        # Changed to account for no labels in Dataset, maybe change back or make more complex if ever pretrain with Dataset that does include labels
+        data = batch.to(DEVICE)
+        # data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+        # Generate pseudolabels in pretrain_fn
+        data, labels = pretrain_fn(data)
         optimizer.zero_grad()
 
         predictions = model(data)
@@ -47,6 +51,8 @@ def pretrain_train(
 
         loss.backward()
         optimizer.step()
+        if scheduler:
+            scheduler.step()
     return loss_per_batch
 
 
@@ -61,8 +67,8 @@ def pretrain_validate(
 
     with torch.no_grad():
         for batch in validation_loader:
-            data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-            data, labels = pretrain_fn(data, labels)
+            data = batch.to(DEVICE)
+            data, labels = pretrain_fn(data)
             predictions = model(data)
 
             # Cut off to end of trial
@@ -93,8 +99,8 @@ def pretrain_test(
         loss_per_batch = []
         with torch.no_grad():
             for batch in loader:
-                data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-                data, labels = pretrain_fn(data, labels)
+                data = batch.to(DEVICE)
+                data, labels = pretrain_fn(data)
 
                 predictions = model(data)
 

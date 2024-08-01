@@ -11,6 +11,12 @@ import pyedflib
 from pathlib import Path
 from functools import lru_cache
 from typing import Callable
+from tqdm.notebook import tqdm
+import multiprocessing
+from multiprocessing import Pool
+import pandas as pd
+import itertools
+import h5py
 
 
 class SAT1Dataset(Dataset):
@@ -154,6 +160,67 @@ class SAT1Dataset(Dataset):
 
 
 global_ds_cache = {}
+def worker_init_fn(worker_id):
+    global global_ds_cache
+    global_ds_cache = {}
+
+
+class MultiNumpyDataset(Dataset):
+    def __init__(
+        self,
+        data_paths: list[str | Path] = None,
+        transform: Compose = None,
+        index_map: list[tuple] = None,
+        cpus: int = None,
+    ):
+        self.data_paths = data_paths
+        self.transform = transform
+        self.index_map = index_map
+        self.cpus = cpus
+        if self.data_paths is None:
+            if self.index_map is None:
+                raise ValueError(
+                    "Either index_map or data_paths (or both) must be supplied"
+                )
+        else:
+            # Only re-create index_map if ONLY data_paths is supplied
+            if self.index_map is None:
+                self.index_map = self._create_index_map()
+        self.cumulative_sizes = self.index_map['n_samples'].cumsum()
+        # self.cumulative_sizes = np.cumsum([num_samples for _, num_samples in self.index_map])
+
+    def _create_index_map(self):
+        index_map = parallelize_df(
+            pd.DataFrame(self.data_paths), create_index_map, self.cpus
+        )
+        return index_map
+
+    def _get_dataset(self, file_path):
+        if file_path not in global_ds_cache:
+            global_ds_cache[file_path] = h5py.File(file_path,rdcc_nbytes=1024**2*4000,rdcc_nslots=1e7)
+        return global_ds_cache[file_path]
+
+    def _find_file_idx(self, idx):
+        return np.searchsorted(self.cumulative_sizes, idx, side='right')
+    
+    def __len__(self):
+        return self.cumulative_sizes.iloc[-1]
+
+    def __getitem__(self, idx):
+        info_idx = self._find_file_idx(idx)
+        info_row = self.index_map.iloc[info_idx]
+        file_path = info_row['path']
+
+        file = self._get_dataset(file_path)
+
+        sample_idx = idx if info_idx == 0 else idx - self.cumulative_sizes[info_idx]
+        data = file[f'participants/{info_row["participant"]}/sessions/{info_row["session"]}/data'][sample_idx,:]
+
+        sample_data = data.transpose(1, 0)
+
+        # if self.transform is not None:
+        #     sample_data, sample_label = self.transform((sample_data, sample_label))
+        return sample_data
 
 
 class MultiXArrayDataset(Dataset):
@@ -181,18 +248,21 @@ class MultiXArrayDataset(Dataset):
 
         self.label_lookup = {label: idx for idx, label in enumerate(labels)}
         self.index_map = self._create_index_map()
-        
+
         # Open first dataset to check if split
         with xr.open_dataset(data_paths[0]) as ds:
             self.split = "labels" not in ds.data_vars and "probabilities" not in ds
 
         if norm_vars is None:
             self._calc_global_statistics(4000)
-            norm_vars = (self.statistics['global_min'], self.statistics['global_max']) if normalization_fn != norm_zscore else (self.statistics['global_mean'], self.statistics['global_std'])
+            norm_vars = (
+                (self.statistics["global_min"], self.statistics["global_max"])
+                if normalization_fn != norm_zscore
+                else (self.statistics["global_mean"], self.statistics["global_std"])
+            )
 
         self.normalization_fn = normalization_fn
         self.norm_vars = norm_vars
-
 
     def _create_index_map(self):
         index_map = []
@@ -212,7 +282,13 @@ class MultiXArrayDataset(Dataset):
                         for index, value in enumerate(ds.participant.values.tolist())
                         if value in self.participants_to_keep
                     ]
-                    index_map.extend([(file_idx, *idx) for idx in indices if idx[0] in participants_in_data])
+                    index_map.extend(
+                        [
+                            (file_idx, *idx)
+                            for idx in indices
+                            if idx[0] in participants_in_data
+                        ]
+                    )
                 else:
                     index_map.extend([(file_idx, *idx) for idx in indices])
         return index_map
@@ -224,12 +300,14 @@ class MultiXArrayDataset(Dataset):
         return global_ds_cache[file_path]
 
     def _calc_global_statistics(self, sample_size):
-        sample_size = sample_size if len(self.index_map) >= sample_size else len(self.index_map)
+        sample_size = (
+            sample_size if len(self.index_map) >= sample_size else len(self.index_map)
+        )
         # Normalization variables have not been calculated, compute these by sampling from the dataset
         indices = np.random.choice(range(len(self.index_map)), (sample_size,))
 
-        global_min = float('inf')
-        global_max = float('-inf')
+        global_min = float("inf")
+        global_max = float("-inf")
         n_samples = 0
         global_sum = 0.0
         global_sum_squares = 0.0
@@ -248,21 +326,23 @@ class MultiXArrayDataset(Dataset):
             valid_data = np.nan_to_num(data, nan=0.0)
             nan_mask = np.isnan(data)
             global_sum += np.sum(valid_data)
-            global_sum_squares += np.sum(valid_data ** 2)
+            global_sum_squares += np.sum(valid_data**2)
             n_samples += np.sum(nan_mask)
 
         global_mean = global_sum / n_samples
-        global_std = np.sqrt(global_sum_squares / n_samples - global_mean ** 2)
+        global_std = np.sqrt(global_sum_squares / n_samples - global_mean**2)
 
         total_labels = sum(label_counter.values())
-        class_weights = {label: total_labels / count for label, count in label_counter.items()}
+        class_weights = {
+            label: total_labels / count for label, count in label_counter.items()
+        }
         class_weights = torch.Tensor(list(class_weights.values()))
         self.statistics = {
-            'global_min': global_min,
-            'global_max': global_max,
-            'global_mean': global_mean,
-            'global_std': global_std,
-            'class_weights': class_weights,
+            "global_min": global_min,
+            "global_max": global_max,
+            "global_mean": global_mean,
+            "global_std": global_std,
+            "class_weights": class_weights,
         }
 
     def __len__(self):
@@ -296,7 +376,7 @@ class MultiXArrayDataset(Dataset):
             ]
             return sample_data, sample_label, sample_info
         return sample_data, sample_label
-    
+
     def __getitem_clean__(self, idx):
         # For use in calculating normalization variables and class weights
         indices = self.index_map[idx]
@@ -317,17 +397,47 @@ class MultiXArrayDataset(Dataset):
             if file_path in global_ds_cache:
                 global_ds_cache[file_path].close()
                 del global_ds_cache[file_path]
-        
 
 
-class TUEGDataset(Dataset):
-    def __init__(self, files_path):
-        self.files = open(files_path, "r").readlines()
+def parallelize_df(files, func, cpus):
+    num_cores = (
+        multiprocessing.cpu_count() - 1 if cpus is None else cpus
+    )  # leave one free to not freeze machine
+    num_partitions = num_cores  # number of partitions to split dataframe
+    # convert to DataFrame to keep index numbers after splitting
+    df_files = pd.DataFrame(files)
+    df_split = np.array_split(df_files, num_partitions)
+    pool = multiprocessing.Pool(num_cores)
+    df = pd.concat(pool.map(func, df_split))
+    # df = list(itertools.chain(*df))
+    pool.close()
+    pool.join()
+    return df
 
-    def __len__(self):
-        return len(self.files)
+def create_index_map(df_files):
+    index_map = {'path': [], 'participant': [], 'session': [], 'n_samples': []}
+    for idx, row in df_files.iterrows():
+        path = row.iloc[0]
+        with h5py.File(path) as file:
+            for participant in file['participants']:
+                for session in file[f'participants/{participant}/sessions']:
+                    for dataset in file[f'participants/{participant}/sessions/{session}']:
+                        n_samples = file[f'participants/{participant}/sessions/{session}/{dataset}'].shape[0]
+                        index_map['path'].append(path)
+                        index_map['participant'].append(participant)
+                        index_map['session'].append(session)
+                        index_map['n_samples'].append(n_samples)
+    return pd.DataFrame(index_map)
 
-    def __getitem__(self, idx):
-        # One entry in self.files == one index, maybe split it up into individual samples?
-        f = pyedflib.EdfReader(self.files[idx])
-        return f
+
+def create_index_map_old(df_files):
+    index_map = []
+    for idx, row in df_files.iterrows():
+        path = row.iloc[0]
+        data = np.load(path)
+        # data = (n, 19, 150) where n = num of samples
+        # Could also do this based on filesize maybe?
+        index_map.append((idx, data.shape[0]))
+        # index_map.extend([(idx, i) for i in range(data.shape[0])])
+        del data
+    return index_map

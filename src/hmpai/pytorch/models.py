@@ -107,8 +107,9 @@ class Seq2SeqTransformer(nn.Module):
     def forward(self, x):
         mask = (x == MASKING_VALUE).all(dim=2)
         max_idx = mask.float().argmax(dim=1).max().item()
-        mask = mask[:, :max_idx]
-        x = x[:, :max_idx, :]
+        if max_idx > 0:
+            mask = mask[:, :max_idx]
+            x = x[:, :max_idx, :]
         # print(x.isnan().any())
         x = self.embedding(x)
         # print(x.isnan().any())
