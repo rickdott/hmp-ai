@@ -105,14 +105,18 @@ class Seq2SeqTransformer(nn.Module):
         self.pretraining = is_pretraining
 
     def forward(self, x):
+        # orig_data = x.clone().detach()
         mask = (x == MASKING_VALUE).all(dim=2)
         max_idx = mask.float().argmax(dim=1).max().item()
         if max_idx > 0:
             mask = mask[:, :max_idx]
             x = x[:, :max_idx, :]
+        # print('\tNew Batch!')
         # print(x.isnan().any())
         x = self.embedding(x)
         # print(x.isnan().any())
+        if x.isnan().any():
+            print('STOP IN THE NAME OF GOD')
         x = self.pos_encoder(x)
         # print(x.isnan().any())
         x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
@@ -128,7 +132,7 @@ class Seq2SeqTransformer(nn.Module):
             if self.pretraining
             else self.fc_output(transformer_output)
         )
-        # print(output.isnan().any())
+        print(output.isnan().any())
         return output
 
 

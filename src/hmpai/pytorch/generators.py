@@ -218,6 +218,8 @@ class MultiNumpyDataset(Dataset):
 
         sample_data = data.transpose(1, 0)
 
+        sample_data = np.clip(sample_data, -3.0, 3.0)
+
         # if self.transform is not None:
         #     sample_data, sample_label = self.transform((sample_data, sample_label))
         return sample_data
