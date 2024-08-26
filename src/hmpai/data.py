@@ -560,7 +560,11 @@ class StageFinder:
         # Remove channels dimension
         # shape = list(self.epoch_data.data.shape)
         # shape.pop(2)
-        shape = (len(self.epoch_data.participant), len(self.epoch_data.epochs), len(self.epoch_data.samples))
+        shape = (
+            len(self.epoch_data.participant),
+            len(self.epoch_data.epochs),
+            len(self.epoch_data.samples),
+        )
 
         # Fill with empty strings since XArray saves np.NaN and other None values as empty strings anyway
         # this avoids discrepancies in data
@@ -644,7 +648,7 @@ class StageFinder:
             # this is the reaction time sample where the participant pressed the button and stage ends
             RT_data = self.epoch_data.sel(
                 participant=data[0],
-                epochs=data[1], # Use data[1] instead of epoch (.isel)?
+                epochs=data[1],  # Use data[1] instead of epoch (.isel)?
                 channels=self.epoch_data.channels[0],
             ).data.to_numpy()
             RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
@@ -690,7 +694,6 @@ class StageFinder:
         shape = list(self.epoch_data.data.shape)
         # Instead of channels, create a dim for label probabilities
         shape[-2] = len(self.main_labels)
-
         labels_array = np.full(shape, fill_value=0, dtype=np.float32)
         # participants = list(self.epoch_data.participant.values)
         # prev_participant = None
@@ -700,6 +703,7 @@ class StageFinder:
         dims = probs.dims
         participants = probs.participant.to_numpy()
         probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
+        epochs = list(probs.trials.to_numpy())
         for participant in np.arange(probs.shape[0]):
             participant_id = participants[participant]
             print(f"Processing participant {participant_id}")
@@ -711,9 +715,21 @@ class StageFinder:
                         # Assumes labels start with 'negative' (irrelevant for this method of labelling)
                         event_idx = self.main_labels.index(labels[event.item() + 1])
                         event_data = trial_data.sel(event=event).data
-                        labels_array[participant, trial.item(), event_idx, :] = (
-                            event_data
-                        )
+                        # TODO: Bad way to do this, this is true for everything in this condition
+                        if event_data.shape[-1] < labels_array.shape[-1]:
+                            event_data = np.pad(
+                                event_data,
+                                pad_width=(
+                                    (0, labels_array.shape[-1] - event_data.shape[-1]),
+                                ),
+                                mode="constant",
+                                constant_values=0,
+                            )
+                        # Index from premade list of epochs
+                        # : dimension (samples) differs across condition
+                        labels_array[
+                            participant, epochs.index(trial.item()), event_idx, :
+                        ] = event_data
 
         return np.copy(labels_array)
 

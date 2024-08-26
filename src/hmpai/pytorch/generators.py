@@ -160,6 +160,8 @@ class SAT1Dataset(Dataset):
 
 
 global_ds_cache = {}
+
+
 def worker_init_fn(worker_id):
     global global_ds_cache
     global_ds_cache = {}
@@ -186,7 +188,7 @@ class MultiNumpyDataset(Dataset):
             # Only re-create index_map if ONLY data_paths is supplied
             if self.index_map is None:
                 self.index_map = self._create_index_map()
-        self.cumulative_sizes = self.index_map['n_samples'].cumsum()
+        self.cumulative_sizes = self.index_map["n_samples"].cumsum()
         # self.cumulative_sizes = np.cumsum([num_samples for _, num_samples in self.index_map])
 
     def _create_index_map(self):
@@ -197,24 +199,28 @@ class MultiNumpyDataset(Dataset):
 
     def _get_dataset(self, file_path):
         if file_path not in global_ds_cache:
-            global_ds_cache[file_path] = h5py.File(file_path,rdcc_nbytes=1024**2*4000,rdcc_nslots=1e7)
+            global_ds_cache[file_path] = h5py.File(
+                file_path, rdcc_nbytes=1024**2 * 4000, rdcc_nslots=1e7
+            )
         return global_ds_cache[file_path]
 
     def _find_file_idx(self, idx):
-        return np.searchsorted(self.cumulative_sizes, idx, side='right')
-    
+        return np.searchsorted(self.cumulative_sizes, idx, side="right")
+
     def __len__(self):
         return self.cumulative_sizes.iloc[-1]
 
     def __getitem__(self, idx):
         info_idx = self._find_file_idx(idx)
         info_row = self.index_map.iloc[info_idx]
-        file_path = info_row['path']
+        file_path = info_row["path"]
 
         file = self._get_dataset(file_path)
 
         sample_idx = idx if info_idx == 0 else idx - self.cumulative_sizes[info_idx]
-        data = file[f'participants/{info_row["participant"]}/sessions/{info_row["session"]}/data'][sample_idx,:]
+        data = file[
+            f'participants/{info_row["participant"]}/sessions/{info_row["session"]}/data'
+        ][sample_idx, :]
 
         sample_data = data.transpose(1, 0)
 
@@ -225,20 +231,20 @@ class MultiNumpyDataset(Dataset):
         return sample_data
 
 
-class MultiXArrayDataset(Dataset):
+class MultiXArrayProbaDataset(Dataset):
     def __init__(
         self,
         data_paths: list[str | Path],
         participants_to_keep: list = None,
-        do_preprocessing: bool = True,
         labels: list[str] = SAT1_STAGES_ACCURACY,
-        set_to_zero: bool = False,
         info_to_keep: list[str] = [],
         transform: Compose = None,
         normalization_fn: Callable[
             [torch.Tensor, float, float], torch.Tensor
         ] = norm_dummy,
         norm_vars: tuple[float, float] = None,
+        window_size: int = 11,
+        jiggle: int = 3,
     ):
         self.data_paths = data_paths
         self.transform = transform
@@ -248,8 +254,12 @@ class MultiXArrayDataset(Dataset):
             participants_to_keep if participants_to_keep is not None else []
         )
 
+        self.labels = labels
         self.label_lookup = {label: idx for idx, label in enumerate(labels)}
         self.index_map = self._create_index_map()
+
+        self.window_size = window_size // 2
+        self.jiggle = lambda: np.random.randint(-jiggle, jiggle)
 
         # Open first dataset to check if split
         with xr.open_dataset(data_paths[0]) as ds:
@@ -268,6 +278,254 @@ class MultiXArrayDataset(Dataset):
 
     def _create_index_map(self):
         index_map = []
+
+        for file_idx, file_path in enumerate(self.data_paths):
+            with xr.open_dataset(file_path) as ds:
+                probas = ds["probabilities"].values
+                event_locs = probas.argmax(axis=-1)
+                # Indices where at least one location is found
+                mask = event_locs.sum(axis=2) != 0
+                # indices = np.argwhere(mask)
+                acc_indices = ds.event_name.str.contains('accuracy').to_numpy()
+                # acc_indices = np.repeat(acc_indices[:,:,np.newaxis], 5, axis=2)
+                # sp_indices = np.argwhere(sp_indices)
+                combined_indices = np.argwhere((mask) & (acc_indices))
+                if len(self.participants_to_keep) > 0:
+                    participants_in_data = [
+                        index
+                        for index, value in enumerate(ds.participant.values.tolist())
+                        if value in self.participants_to_keep
+                    ]
+                    index_map.extend(
+                        [
+                            (file_idx, *idx, loc, loc_idx)
+                            for idx in combined_indices
+                            if idx[0] in participants_in_data
+                            for loc_idx, loc in enumerate(event_locs[idx[0], idx[1]])
+                            if loc != 0
+                        ]
+                    )
+                else:
+                    index_map.extend(
+                        [
+                            (file_idx, *idx, loc, loc_idx)
+                            for idx in combined_indices
+                            for loc_idx, loc in enumerate(event_locs[idx[0], idx[1]])
+                            if loc != 0
+                        ]
+                    )
+
+        return index_map
+
+    def _calc_global_statistics(self, sample_size):
+        sample_size = (
+            sample_size if len(self.index_map) >= sample_size else len(self.index_map)
+        )
+        # Normalization variables have not been calculated, compute these by sampling from the dataset
+        indices = np.random.choice(range(len(self.index_map)), (sample_size,))
+
+        global_min = float("inf")
+        global_max = float("-inf")
+        n_samples = 0
+        global_sum = 0.0
+        global_sum_squares = 0.0
+        label_counter = {k: 0 for k in self.label_lookup.values()}
+
+        for idx in indices:
+            data, label = self.__getitem_clean__(idx)
+            data = data.numpy()
+            label_counter[label] += 1
+
+            sample_min = np.nanmin(data)
+            sample_max = np.nanmax(data)
+            global_min = min(global_min, sample_min)
+            global_max = max(global_max, sample_max)
+
+            valid_data = np.nan_to_num(data, nan=0.0)
+            nan_mask = np.isnan(data)
+            global_sum += np.sum(valid_data)
+            global_sum_squares += np.sum(valid_data**2)
+            n_samples += np.sum(nan_mask)
+
+        global_mean = global_sum / n_samples
+        global_std = np.sqrt(global_sum_squares / n_samples - global_mean**2)
+
+        total_labels = sum(label_counter.values())
+        class_weights = {
+            label: 0 if count == 0 else total_labels / count
+            for label, count in label_counter.items()
+        }
+        class_weights = torch.Tensor(list(class_weights.values()))
+        self.statistics = {
+            "global_min": global_min,
+            "global_max": global_max,
+            "global_mean": global_mean,
+            "global_std": global_std,
+            "class_weights": class_weights,
+        }
+
+    def _get_dataset(self, file_idx):
+        file_path = self.data_paths[file_idx]
+        if file_path not in global_ds_cache:
+            global_ds_cache[file_path] = xr.open_dataset(file_path)
+        return global_ds_cache[file_path]
+
+    def __getitem__(self, idx):
+        indices = self.index_map[idx]
+
+        ds = self._get_dataset(indices[0])
+        n_samples = len(ds.samples)
+        # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
+        event_idx = indices[3]
+        event_idx += self.jiggle()
+
+        min_sample = event_idx - self.window_size
+        max_sample = event_idx + self.window_size + 1
+        pad_left = 0
+        pad_right = 0
+        if min_sample < 0:
+            pad_left = abs(min_sample)
+            min_sample = 0
+        if max_sample > n_samples:
+            pad_right = max_sample - n_samples
+            max_sample = n_samples
+        filter = {
+            "participant": indices[1],
+            "epochs": indices[2],
+            "samples": range(min_sample, max_sample),
+        }
+        sample = ds.isel(**filter)
+
+        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        if pad_left > 0 or pad_right > 0:
+            sample_data = torch.nn.functional.pad(
+                sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
+            )
+        sample_label = indices[4]
+        sample_data = self.normalization_fn(sample_data, *self.norm_vars)
+
+        # fillna with masking_value
+        sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
+        # Swap samples and channels dims, since [time, features] is expected
+        sample_data = sample_data.transpose(1, 0)
+
+        if self.transform is not None:
+            sample_data, sample_label = self.transform((sample_data, sample_label))
+        if self.keep_info:
+            values_to_keep = [sample[key].to_numpy() for key in self.info_to_keep]
+            sample_info = [
+                dict(zip(self.info_to_keep, values)) for values in zip(*values_to_keep)
+            ]
+            return sample_data, sample_label, sample_info
+        return sample_data, sample_label
+
+    def __getitem_clean__(self, idx):
+        # For use in calculating normalization variables and class weights
+        indices = self.index_map[idx]
+        ds = self._get_dataset(indices[0])
+        n_samples = len(ds.samples)
+        # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
+        event_idx = indices[3] + self.jiggle()
+
+        min_sample = event_idx - self.window_size
+        max_sample = event_idx + self.window_size + 1
+        pad_left = 0
+        pad_right = 0
+        if min_sample < 0:
+            pad_left = abs(min_sample)
+            min_sample = 0
+        if max_sample > n_samples:
+            pad_right = max_sample - n_samples
+            max_sample = n_samples
+
+        filter = {
+            "participant": indices[1],
+            "epochs": indices[2],
+            "samples": range(min_sample, max_sample),
+        }
+        sample = ds.isel(**filter)
+        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        if pad_left > 0 or pad_right > 0:
+            # TODO: Currently doing right-pad all since pad-left is not implemented in training?
+            sample_data = torch.nn.functional.pad(
+                sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
+                # sample_data, (0, pad_right + pad_left), mode="constant", value=torch.nan
+            )
+        sample_label = indices[4]
+
+        return sample_data, sample_label
+
+    def __len__(self):
+        return len(self.index_map)
+
+
+class MultiXArrayDataset(Dataset):
+    def __init__(
+        self,
+        data_paths: list[str | Path],
+        participants_to_keep: list = None,
+        do_preprocessing: bool = True,
+        labels: list[str] = SAT1_STAGES_ACCURACY,
+        set_to_zero: bool = False,
+        info_to_keep: list[str] = [],
+        transform: Compose = None,
+        normalization_fn: Callable[
+            [torch.Tensor, float, float], torch.Tensor
+        ] = norm_dummy,
+        norm_vars: tuple[float, float] = None,
+        labram: bool = False,
+    ):
+        self.data_paths = data_paths
+        self.transform = transform
+        self.info_to_keep = info_to_keep
+        self.keep_info = len(self.info_to_keep) > 0
+        self.participants_to_keep = (
+            participants_to_keep if participants_to_keep is not None else []
+        )
+        electrode_mapping = {
+            "EEG FP1": "Fp1",
+            "EEG FP2": "Fp2",
+            "EEG F7": "F7",
+            "EEG F8": "F8",
+            "EEG F3": "F3",
+            "EEG F4": "F4",
+            "EEG FZ": "Fz",
+            "EEG T3": "T7",  # T3 corresponds to T7
+            "EEG T4": "T8",  # T4 corresponds to T8
+            "EEG C3": "C3",
+            "EEG C4": "C4",
+            "EEG CZ": "Cz",
+            "EEG T5": "P7",  # T5 corresponds to P7
+            "EEG T6": "P8",  # T6 corresponds to P8
+            "EEG P3": "P3",
+            "EEG P4": "P4",
+            "EEG PZ": "Pz",
+            "EEG O1": "O1",
+            "EEG O2": "O2",
+        }
+        self.sat2_chs = list(electrode_mapping.values())
+        self.ch_names = [ch.upper() for ch in self.sat2_chs]
+        self.label_lookup = {label: idx for idx, label in enumerate(labels)}
+        self.index_map = self._create_index_map()
+
+        # Open first dataset to check if split
+        with xr.open_dataset(data_paths[0]) as ds:
+            self.split = "labels" not in ds.data_vars and "probabilities" not in ds
+
+        if norm_vars is None:
+            self._calc_global_statistics(4000)
+            norm_vars = (
+                (self.statistics["global_min"], self.statistics["global_max"])
+                if normalization_fn != norm_zscore
+                else (self.statistics["global_mean"], self.statistics["global_std"])
+            )
+
+        self.normalization_fn = normalization_fn
+        self.norm_vars = norm_vars
+        self.labram = labram
+
+    def _create_index_map(self):
+        index_map = []
         for file_idx, file_path in enumerate(self.data_paths):
             with xr.open_dataset(file_path) as ds:
                 # num_participants * num_trials
@@ -277,6 +535,15 @@ class MultiXArrayDataset(Dataset):
                 data = data[..., 0, :]
                 mask = np.isnan(data).all(axis=-1)
                 indices = np.argwhere(~mask)
+                # acc_indices = ds.event_name.str.contains('accuracy').to_numpy()
+                # print(np.count_nonzero(indices) / 5)
+                # print(np.count_nonzero(acc_indices))
+                # print(np.count_nonzero(ds.event_name.str.contains('speed').to_numpy()))
+                # acc_indices = np.repeat(acc_indices[:,:,np.newaxis], 5, axis=2)
+                # sp_indices = np.argwhere(sp_indices)
+                # combined_indices = np.argwhere((~mask) & (acc_indices))
+                # Combine sp_indices condition with ~mask somehow, even though they are diff dimensions
+
                 # Add indices to index_map, filtering based on required participants
                 if len(self.participants_to_keep) > 0:
                     participants_in_data = [
@@ -336,7 +603,8 @@ class MultiXArrayDataset(Dataset):
 
         total_labels = sum(label_counter.values())
         class_weights = {
-            label: total_labels / count for label, count in label_counter.items()
+            label: 0 if count == 0 else total_labels / count
+            for label, count in label_counter.items()
         }
         class_weights = torch.Tensor(list(class_weights.values()))
         self.statistics = {
@@ -359,13 +627,20 @@ class MultiXArrayDataset(Dataset):
             filter["labels"] = indices[3]
 
         sample = ds.isel(**filter)
+        if self.labram:
+            sample = sample.sel({"channels": self.sat2_chs})
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
 
         # fillna with masking_value
         sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
         # Swap samples and channels dims, since [time, features] is expected
-        sample_data = sample_data.transpose(1, 0)
+        # REMOVED FOR LaBraM
+        if not self.labram:
+            sample_data = sample_data.transpose(1, 0)
+        # TRUNCATED TO 200 FOR LaBraM
+        # sample_data = sample_data[:, :240]
+        # sample_data = sample_data[:, :200]
         # TODO: look into what to do when not using split
         sample_label = self.label_lookup[sample.labels.item()]
 
@@ -416,19 +691,24 @@ def parallelize_df(files, func, cpus):
     pool.join()
     return df
 
+
 def create_index_map(df_files):
-    index_map = {'path': [], 'participant': [], 'session': [], 'n_samples': []}
+    index_map = {"path": [], "participant": [], "session": [], "n_samples": []}
     for idx, row in df_files.iterrows():
         path = row.iloc[0]
         with h5py.File(path) as file:
-            for participant in file['participants']:
-                for session in file[f'participants/{participant}/sessions']:
-                    for dataset in file[f'participants/{participant}/sessions/{session}']:
-                        n_samples = file[f'participants/{participant}/sessions/{session}/{dataset}'].shape[0]
-                        index_map['path'].append(path)
-                        index_map['participant'].append(participant)
-                        index_map['session'].append(session)
-                        index_map['n_samples'].append(n_samples)
+            for participant in file["participants"]:
+                for session in file[f"participants/{participant}/sessions"]:
+                    for dataset in file[
+                        f"participants/{participant}/sessions/{session}"
+                    ]:
+                        n_samples = file[
+                            f"participants/{participant}/sessions/{session}/{dataset}"
+                        ].shape[0]
+                        index_map["path"].append(path)
+                        index_map["participant"].append(participant)
+                        index_map["session"].append(session)
+                        index_map["n_samples"].append(n_samples)
     return pd.DataFrame(index_map)
 
 

@@ -522,22 +522,24 @@ class MambaModel(nn.Module):
         self.global_pool = global_pool
         self.linear_in = nn.Linear(n_channels, embed_dim)
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=n_channels, out_channels=128, kernel_size=5, stride=1, padding=1),
+            nn.Conv1d(in_channels=n_channels, out_channels=128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.Conv1d(in_channels=128, out_channels=embed_dim, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
         )
+        self.linear_cnn = nn.Linear(embed_dim, embed_dim)
         self.linear_out = nn.Linear(embed_dim, n_classes)
 
     def forward(self, x):
-        mask = (x == MASKING_VALUE).all(dim=2).t()
-        max_idx = mask.float().argmax(dim=0).max()
-        mask = mask[:max_idx, :]
-        x = x[:, :max_idx, :]
-        # x = x.permute(0, 2, 1)
-        # x = self.cnn(x)
-        # x = x.permute(0, 2, 1)
-        x = self.linear_in(x)
+        # mask = (x == MASKING_VALUE).all(dim=2).t()
+        # max_idx = mask.float().argmax(dim=0).max()
+        # mask = mask[:max_idx, :]
+        # x = x[:, :max_idx, :]
+        # x = self.linear_in(x)
+        x = x.permute(0, 2, 1)
+        x = self.cnn(x)
+        x = x.permute(0, 2, 1)
+        x = self.linear_cnn(x)
         out = self.blocks(x) if not self.global_pool else torch.mean(self.blocks(x), dim=1)
         out = self.linear_out(out)
         return out

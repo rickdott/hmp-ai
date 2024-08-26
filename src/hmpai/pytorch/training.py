@@ -224,7 +224,7 @@ def train_and_test(
     # Set up optimizer and loss
     if use_class_weights:
         if class_weights is None:
-            calculate_class_weights(train_set, labels).to(DEVICE)
+            class_weights = calculate_class_weights(train_set, labels).to(DEVICE)
         else:
             class_weights = class_weights.to(DEVICE)
     else:
