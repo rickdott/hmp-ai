@@ -117,6 +117,53 @@ def pretrain_test(
             writer.add_text(f"Test results {i}", str(loss_per_batch), global_step=0)
     return test_results
 
+def random_masking(data: torch.Tensor, labels: torch.Tensor = None):
+    batch_size, n_samples, n_channels = data.shape
+    min_subsequence_length = 5
+    mask_size = n_samples // min_subsequence_length
+    pseudolabels = data.clone()
+
+
+    mask = torch.randint(0, 2, (batch_size, mask_size), dtype=torch.float32, device=data.device)
+    mask = mask.repeat_interleave(min_subsequence_length, dim=1)
+
+    mask = mask.unsqueeze(2).expand(-1, -1, n_channels)
+
+    data = mask * data
+
+    return data, pseudolabels
+
+# def random_masking(data: torch.Tensor, labels: torch.Tensor = None):
+#     # Take input data (batch_size, seq_len, channels)
+#     batch_size, n_samples, n_channels = data.shape
+#     n_subsequences = 8
+#     subseq_lengths = torch.tensor([11, 12, 13, 14, 15], device=data.device, dtype=torch.uint8)
+#     pseudolabels = data.clone()
+
+#     # Randomly choose subsequence lengths for each batch, channel, and subsequence
+#     length_indices = torch.randint(0, len(subseq_lengths), (batch_size, n_channels, n_subsequences), device=data.device)
+#     lengths = subseq_lengths[length_indices]
+
+#     # Randomly choose start points for each subsequence
+#     starts = torch.randint(0, n_samples, (batch_size, n_channels, n_subsequences), device=data.device)
+    
+#     # Calculate ends ensuring they don't go out of bounds
+#     ends = torch.min(starts + lengths, torch.tensor(n_samples, device=data.device))
+
+#     # Create a mask to apply the masking operation
+#     mask = torch.ones((batch_size, n_samples, n_channels), device=data.device)
+
+#     # Vectorized masking: Create ranges and apply the mask
+#     for i in range(n_subsequences):
+#         for j in range(batch_size):
+#             for k in range(n_channels):
+#                 mask[j, starts[j, k, i]:ends[j, k, i], k] = 0
+    
+#     # Apply the mask to the data
+#     data = data * mask
+
+#     return data, pseudolabels
+
 
 # def random_masking(data: torch.Tensor, labels: torch.Tensor = None):
 #     # Take input data (batch_size, seq_len, channels) and labels (batch_size, seq_len)
@@ -150,33 +197,33 @@ def pretrain_test(
 
 #     return data, labels
 
-def random_masking(data: torch.Tensor, labels: torch.Tensor = None):
-    # Take input data (batch_size, seq_len, channels) and labels (batch_size, seq_len)
-    # Mask out random parts and create pseudolabels
-    # Pseudolabels is same as data, but with non-masked values set to NaN
+# def random_masking(data: torch.Tensor, labels: torch.Tensor = None):
+#     # Take input data (batch_size, seq_len, channels) and labels (batch_size, seq_len)
+#     # Mask out random parts and create pseudolabels
+#     # Pseudolabels is same as data, but with non-masked values set to NaN
 
-    batch_size, seq_len, channels = data.shape
-    n_masks = 5
-    shortest_mask = 3
-    longest_mask = 30
+#     batch_size, seq_len, channels = data.shape
+#     n_masks = 5
+#     shortest_mask = 3
+#     longest_mask = 30
 
-    # Create mask tensor
-    mask = torch.zeros(data.shape, dtype=torch.bool, device=DEVICE)
+#     # Create mask tensor
+#     mask = torch.zeros(data.shape, dtype=torch.bool, device=DEVICE)
 
-    # Generate random starts and lengths for each batch
-    rt_idx = (data[:, :, 0] == MASKING_VALUE).int().argmax(dim=1)
-    rt_idx = torch.where(rt_idx == 0, torch.tensor(1, dtype=rt_idx.dtype), rt_idx)
-    starts = [torch.randint(0, rt_idx[i].item(), (n_masks,), device=DEVICE) for i in range(batch_size)]
-    lengths = torch.randint(shortest_mask, longest_mask, (batch_size, n_masks), device=DEVICE)
+#     # Generate random starts and lengths for each batch
+#     rt_idx = (data[:, :, 0] == MASKING_VALUE).int().argmax(dim=1)
+#     rt_idx = torch.where(rt_idx == 0, torch.tensor(1, dtype=rt_idx.dtype), rt_idx)
+#     starts = [torch.randint(0, rt_idx[i].item(), (n_masks,), device=DEVICE) for i in range(batch_size)]
+#     lengths = torch.randint(shortest_mask, longest_mask, (batch_size, n_masks), device=DEVICE)
 
-    for i in range(batch_size):
-        for start, length in zip(starts[i], lengths[i]):
-            if start + length > rt_idx[i]:
-                length = rt_idx[i] - start
-            mask[i, start:start + length, :] = True
+#     for i in range(batch_size):
+#         for start, length in zip(starts[i], lengths[i]):
+#             if start + length > rt_idx[i]:
+#                 length = rt_idx[i] - start
+#             mask[i, start:start + length, :] = True
 
-    data[mask] = 0
-    pseudolabels = data.clone()
-    pseudolabels[~mask] = float('nan')
+#     data[mask] = 0
+#     pseudolabels = data.clone()
+#     pseudolabels[~mask] = float('nan')
 
-    return data, pseudolabels
+#     return data, pseudolabels

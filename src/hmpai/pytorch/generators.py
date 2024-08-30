@@ -188,20 +188,84 @@ class MultiNumpyDataset(Dataset):
             # Only re-create index_map if ONLY data_paths is supplied
             if self.index_map is None:
                 self.index_map = self._create_index_map()
+        self.index_map["cumulative"] = self.index_map["length"].cumsum()
+
+    def _create_index_map(self):
+        all_files = []
+        # Contains all .csv's
+        for path in self.data_paths:
+            # TODO: Might need to remove index_col if ever resaved
+            file_info = pd.read_csv(path)
+            all_files.append(file_info)
+
+        index_map = pd.concat(all_files)
+        return index_map
+
+    def _get_dataset(self, file_path):
+        if file_path not in global_ds_cache:
+            global_ds_cache[file_path] = np.load(file_path, mmap_mode="r")
+        return global_ds_cache[file_path]
+
+    def _find_file_idx(self, idx):
+        return np.searchsorted(self.index_map["cumulative"], idx, side="right")
+
+    def __len__(self):
+        return self.index_map["cumulative"].iloc[-1]
+
+    def __getitem__(self, idx):
+        info_idx = self._find_file_idx(idx)
+        info_row = self.index_map.iloc[info_idx]
+        file_path = info_row["path"]
+        file = self._get_dataset(file_path)
+
+        sample_idx = (info_row["offset"] + info_row["length"]) - (info_row["cumulative"] - idx)
+        data = file[sample_idx]
+
+        sample_data = data.transpose(1, 0)
+
+        sample_data = np.clip(sample_data, -3.0, 3.0)
+
+        # if self.transform is not None:
+        #     sample_data, sample_label = self.transform((sample_data, sample_label))
+        return sample_data
+
+
+class MultiH5pyDataset(Dataset):
+    def __init__(
+        self,
+        data_paths: list[str | Path] = None,
+        transform: Compose = None,
+        index_map: list[tuple] = None,
+        cpus: int = None,
+    ):
+        self.data_paths = data_paths
+        self.transform = transform
+        self.index_map = index_map
+        self.cpus = cpus
+        if self.data_paths is None:
+            if self.index_map is None:
+                raise ValueError(
+                    "Either index_map or data_paths (or both) must be supplied"
+                )
+        else:
+            # Only re-create index_map if ONLY data_paths is supplied
+            if self.index_map is None:
+                self.index_map = self._create_index_map()
         self.cumulative_sizes = self.index_map["n_samples"].cumsum()
         # self.cumulative_sizes = np.cumsum([num_samples for _, num_samples in self.index_map])
 
     def _create_index_map(self):
         index_map = parallelize_df(
-            pd.DataFrame(self.data_paths), create_index_map, self.cpus
+            pd.DataFrame(self.data_paths), create_index_map_h5, self.cpus
         )
         return index_map
 
     def _get_dataset(self, file_path):
         if file_path not in global_ds_cache:
-            global_ds_cache[file_path] = h5py.File(
-                file_path, rdcc_nbytes=1024**2 * 4000, rdcc_nslots=1e7
-            )
+            # global_ds_cache[file_path] = h5py.File(
+            #     file_path, rdcc_nbytes=1024**2 * 4000, rdcc_nslots=1e7
+            # )
+            global_ds_cache[file_path] = h5py.File(file_path, driver="sec2")
         return global_ds_cache[file_path]
 
     def _find_file_idx(self, idx):
@@ -286,7 +350,7 @@ class MultiXArrayProbaDataset(Dataset):
                 # Indices where at least one location is found
                 mask = event_locs.sum(axis=2) != 0
                 # indices = np.argwhere(mask)
-                acc_indices = ds.event_name.str.contains('accuracy').to_numpy()
+                acc_indices = ds.event_name.str.contains("accuracy").to_numpy()
                 # acc_indices = np.repeat(acc_indices[:,:,np.newaxis], 5, axis=2)
                 # sp_indices = np.argwhere(sp_indices)
                 combined_indices = np.argwhere((mask) & (acc_indices))
@@ -448,7 +512,10 @@ class MultiXArrayProbaDataset(Dataset):
         if pad_left > 0 or pad_right > 0:
             # TODO: Currently doing right-pad all since pad-left is not implemented in training?
             sample_data = torch.nn.functional.pad(
-                sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
+                sample_data,
+                (pad_left, pad_right),
+                mode="constant",
+                value=torch.nan,
                 # sample_data, (0, pad_right + pad_left), mode="constant", value=torch.nan
             )
         sample_label = indices[4]
@@ -692,7 +759,7 @@ def parallelize_df(files, func, cpus):
     return df
 
 
-def create_index_map(df_files):
+def create_index_map_h5(df_files):
     index_map = {"path": [], "participant": [], "session": [], "n_samples": []}
     for idx, row in df_files.iterrows():
         path = row.iloc[0]

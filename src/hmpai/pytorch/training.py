@@ -38,8 +38,10 @@ def pretrain(
     lr: float = 0.002,
     seed: int = 42,
     pretrain_fn: Callable = None,
+    early_stopping: bool = True,
 ):
     set_global_seed(seed)
+    torch.cuda.empty_cache()
     train_loader = DataLoader(
         train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
     )
@@ -72,7 +74,7 @@ def pretrain(
             val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
             val_loss_list.append(val_losses)
             postfix_dict[f"val_loss"] = np.mean(val_losses)
-            postfix_dict["lr"] = lrs.get_last_lr()
+            postfix_dict["lr"] = round(lrs.get_last_lr()[0], 4)
             tepoch.set_postfix(postfix_dict)
             mean_train_loss = np.mean(batch_losses)
             mean_val_loss = np.mean(val_loss_list[-1])
@@ -92,11 +94,11 @@ def pretrain(
             if write_log:
                 writer.add_scalar("loss", mean_train_loss, global_step=epoch)
                 writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
-                writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
+                # writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
                 writer.flush()
 
             # Stop training if validation loss has not improved sufficiently
-            if stopper.check_stop(mean_val_loss):
+            if early_stopping and stopper.check_stop(mean_val_loss):
                 break
 
 

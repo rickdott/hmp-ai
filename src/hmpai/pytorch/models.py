@@ -53,40 +53,40 @@ class ClassTokenEmbedding(nn.Module):
         return self.class_token.expand(batch_size, sequence_length, -1)
 
 
-class MambaModel(nn.Module):
-    def __init__(self, d_model, num_classes, emb_dim):
-        super().__init__()
-        self.embedding = nn.Linear(d_model, emb_dim)
-        self.mamba_encoder = Mamba(d_model=emb_dim, d_state=16, d_conv=4, expand=2)
-        self.fc_translation = nn.Linear(emb_dim, d_model)
-        self.fc_output = nn.Linear(emb_dim, num_classes)
-        self.pretraining = True
-        # TESTING
+# class MambaModel(nn.Module):
+#     def __init__(self, d_model, num_classes, emb_dim):
+#         super().__init__()
+#         self.embedding = nn.Linear(d_model, emb_dim)
+#         self.mamba_encoder = Mamba(d_model=emb_dim, d_state=16, d_conv=4, expand=2)
+#         self.fc_translation = nn.Linear(emb_dim, d_model)
+#         self.fc_output = nn.Linear(emb_dim, num_classes)
+#         self.pretraining = True
+#         # TESTING
 
-    def set_pretraining(self, is_pretraining):
-        self.pretraining = is_pretraining
+#     def set_pretraining(self, is_pretraining):
+#         self.pretraining = is_pretraining
 
-    def forward(self, x):
-        mask = (x == MASKING_VALUE).all(dim=2)
-        max_idx = mask.float().argmax(dim=1).max().item()
-        mask = mask[:, :max_idx]
-        x = x[:, :max_idx, :]
-        x = self.embedding(x)
-        # x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
+#     def forward(self, x):
+#         mask = (x == MASKING_VALUE).all(dim=2)
+#         max_idx = mask.float().argmax(dim=1).max().item()
+#         mask = mask[:, :max_idx]
+#         x = x[:, :max_idx, :]
+#         x = self.embedding(x)
+#         # x = x.permute(1, 0, 2)  # Transformer expects (seq_len, batch_size, feature_dim)
 
-        # transformer_output = self.transformer_encoder(x)
-        transformer_output = self.mamba_encoder(x)
-        # print(transformer_output.isnan().any())
+#         # transformer_output = self.transformer_encoder(x)
+#         transformer_output = self.mamba_encoder(x)
+#         # print(transformer_output.isnan().any())
 
-        # transformer_output = transformer_output.permute(1, 0, 2)
+#         # transformer_output = transformer_output.permute(1, 0, 2)
 
-        output = (
-            self.fc_translation(transformer_output)
-            if self.pretraining
-            else self.fc_output(transformer_output)
-        )
-        # print(output.isnan().any())
-        return output
+#         output = (
+#             self.fc_translation(transformer_output)
+#             if self.pretraining
+#             else self.fc_output(transformer_output)
+#         )
+#         # print(output.isnan().any())
+#         return output
 
 
 class Seq2SeqTransformer(nn.Module):
@@ -132,7 +132,7 @@ class Seq2SeqTransformer(nn.Module):
             if self.pretraining
             else self.fc_output(transformer_output)
         )
-        print(output.isnan().any())
+        # print(output.isnan().any())
         return output
 
 
@@ -527,21 +527,22 @@ class MambaModel(nn.Module):
             nn.Conv1d(in_channels=128, out_channels=embed_dim, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
         )
-        self.linear_cnn = nn.Linear(embed_dim, embed_dim)
+        self.linear_translation = nn.Linear(embed_dim, n_channels)
         self.linear_out = nn.Linear(embed_dim, n_classes)
+        self.pretraining = False
 
     def forward(self, x):
         # mask = (x == MASKING_VALUE).all(dim=2).t()
         # max_idx = mask.float().argmax(dim=0).max()
         # mask = mask[:max_idx, :]
         # x = x[:, :max_idx, :]
-        # x = self.linear_in(x)
-        x = x.permute(0, 2, 1)
-        x = self.cnn(x)
-        x = x.permute(0, 2, 1)
-        x = self.linear_cnn(x)
+        x = self.linear_in(x)
+        # x = x.permute(0, 2, 1)
+        # x = self.cnn(x)
+        # x = x.permute(0, 2, 1)
+        # x = self.linear_cnn(x)
         out = self.blocks(x) if not self.global_pool else torch.mean(self.blocks(x), dim=1)
-        out = self.linear_out(out)
+        out = self.linear_out(out) if not self.pretraining else self.linear_translation(out)
         return out
 
 # https://github.com/apapiu/mamba_small_bench

@@ -12,6 +12,7 @@ from copy import deepcopy
 from hmpai.utilities import MASKING_VALUE
 from collections import defaultdict
 from pathlib import Path
+import pandas as pd
 
 
 def split_participants(
@@ -96,6 +97,21 @@ def split_data_on_participants(
 
     return train_data, val_data, test_data
 
+def split_index_map_tueg(index_map: pd.DataFrame, train_percentage: int = 60, include_test: bool = False):
+    participants = index_map["participant"].unique()
+
+    train_n = int(len(participants) * (train_percentage / 100))
+    testval_n = len(participants) - train_n
+    
+    testval_participants = np.random.choice(participants, testval_n)
+    train_participants = participants[~np.isin(participants, testval_participants)]
+
+    if include_test:
+        val_participants = testval_participants[: testval_n // 2]
+        test_participants = testval_participants[testval_n // 2 :]
+        return index_map[index_map["participant"].isin(train_participants)], index_map[index_map["participant"].isin(val_participants)], index_map[index_map["participant"].isin(test_participants)]
+    
+    return index_map[index_map["participant"].isin(train_participants)], index_map[index_map["participant"].isin(testval_participants)]
 
 def get_folds(
     data: xr.Dataset,
