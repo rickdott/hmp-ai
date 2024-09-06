@@ -122,6 +122,7 @@ def train_and_test(
     labels: list[str] = None,
     seed: int = 42,
     pretrain_fn: Callable = None,
+    whole_epoch: bool = False,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -235,12 +236,14 @@ def train_and_test(
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
     else:
-        # KLDivLoss for calculating loss between probability distributions
-        # loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
-        # TODO: Think about ignore_index
-        loss = torch.nn.CrossEntropyLoss(
-            weight=class_weights, label_smoothing=label_smoothing, ignore_index=-1
-        )
+        if whole_epoch:
+            # KLDivLoss for calculating loss between probability distributions
+            loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
+        else:
+            # TODO: Think about ignore_index
+            loss = torch.nn.CrossEntropyLoss(
+                weight=class_weights, label_smoothing=label_smoothing, ignore_index=-1
+            )
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
 
@@ -315,7 +318,7 @@ def train_and_test(
 
     # Test model
     if pretrain_fn is None:
-        results, _, _ = test(model, test_loaders, writer, labels)
+        results, _, _ = test(model, test_loaders, loss, writer, labels)
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -577,6 +580,7 @@ def validate(
 def test(
     model: torch.nn.Module,
     test_loader: DataLoader | list[DataLoader],
+    loss_fn: torch.nn.modules.loss._Loss,
     writer: SummaryWriter = None,
     class_labels: list[str] = None,
 ) -> dict:
@@ -594,6 +598,9 @@ def test(
         torch.Tensor: The true classes.
     """
     model.eval()
+
+    if isinstance(loss_fn, torch.nn.KLDivLoss):
+        softmax = torch.nn.LogSoftmax(dim=2)
     test_results = []
 
     if type(test_loader) is not list:
@@ -615,14 +622,15 @@ def test(
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        loader_results = classification_report(
-            true_labels, outputs, output_dict=True, zero_division=0.0
-        )
-        test_results.append(loader_results)
-        if writer is not None:
-            writer.add_text(
-                f"Test results {i}", pretty_json(loader_results), global_step=0
+        if not isinstance(loss_fn, torch.nn.KLDivLoss):
+            loader_results = classification_report(
+                true_labels, outputs, output_dict=True, zero_division=0.0
             )
+            test_results.append(loader_results)
+            if writer is not None:
+                writer.add_text(
+                    f"Test results {i}", pretty_json(loader_results), global_step=0
+                )
 
     return test_results, outputs, true_labels
 

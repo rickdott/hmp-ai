@@ -551,7 +551,7 @@ class MambaBlock(nn.Module):
         super().__init__()
 
         self.mamba = Mamba(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
-        # self.mamba = Mamba2(d_model=embed_dim, d_state=128, d_conv=4, expand=2)
+        # self.mamba = Mamba2(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
         self.norm = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
 

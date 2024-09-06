@@ -673,12 +673,14 @@ def plot_predictions_on_epoch(
     set_seaborn_style()
     empty = np.zeros((epoch.size()[0], len(labels)))
     rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
-
+    # Normalize probability labels
+    true = true[:rt_idx, 1:]
+    true = true / true.sum()
     if not sequence:
-        slices = get_padded_slices(epoch, window_size)
+        slices = get_padded_slices(epoch, window_size, include_start_end=False)
         stacked = torch.stack(slices).to(DEVICE)
         pred = model(stacked)
-        # pred = torch.nn.Softmax(dim=1)(pred)
+        pred = torch.nn.Softmax(dim=1)(pred)
     else:
         if random_perm:
             perm = torch.randperm(rt_idx)
@@ -698,20 +700,20 @@ def plot_predictions_on_epoch(
         empty = pred.squeeze()
     # print(true)
     fig, ax = plt.subplots()
-    for i in range(0, 5):
-        mask = torch.eq(true, i)
-        indices = torch.nonzero(mask, as_tuple=True)
-        if indices[0].numel() == 0:
-            continue
-        ax.barh(
-            0.9,
-            torch.sum(mask).item(),
-            left=indices[0][0],
-            align="center",
-            alpha=0.5,
-            height=0.05,
-            color=sns.color_palette()[i],
-        )
+    # for i in range(0, 5):
+    #     mask = torch.eq(true, i)
+    #     indices = torch.nonzero(mask, as_tuple=True)
+    #     if indices[0].numel() == 0:
+    #         continue
+    #     ax.barh(
+    #         0.9,
+    #         torch.sum(mask).item(),
+    #         left=indices[0][0],
+    #         align="center",
+    #         alpha=0.5,
+    #         height=0.05,
+    #         color=sns.color_palette()[i],
+    #     )
     for i in range(0, empty.shape[1]):
         sns.lineplot(
             x=range(len(empty[:, i])),
@@ -720,11 +722,20 @@ def plot_predictions_on_epoch(
             color=sns.color_palette()[i],
             label=labels[i],
         )
+    ax2 = ax.twinx()
+    for i in range(0, true.shape[1]):
+        sns.lineplot(
+            x=range(len(true[:rt_idx, i])),
+            y=true[:rt_idx, i],
+            ax=ax2,
+            color = sns.color_palette()[i + 4],
+            label=labels[i]
+        )
     # sns.lineplot(empty[:, 1:], ax=ax)
     # label=SAT_CLASSES_ACCURACY[1:]
     ax.legend()
     plt.xlim(0, rt_idx + (window_size // 2))
-    plt.ylim(0, 1.0)
+    # plt.ylim(0, 1.0)
     plt.xlabel("Samples")
     plt.ylabel("Softmax probability")
     plt.show()

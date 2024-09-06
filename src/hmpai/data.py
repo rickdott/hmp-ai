@@ -703,7 +703,7 @@ class StageFinder:
         dims = probs.dims
         participants = probs.participant.to_numpy()
         probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
-        epochs = list(probs.trials.to_numpy())
+        epochs = list(self.epoch_data.epochs.to_numpy())
         for participant in np.arange(probs.shape[0]):
             participant_id = participants[participant]
             print(f"Processing participant {participant_id}")
