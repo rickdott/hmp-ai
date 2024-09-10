@@ -309,6 +309,8 @@ class MultiXArrayProbaDataset(Dataset):
         window_size: tuple[int, int] = (5, 5),
         jiggle: int = 3,
         whole_epoch: bool = False,
+        subset_cond: str = None,  # 'speed' for speed, 'accuracy' for accuracy, empty for no filtering
+        statistics: dict = None
     ):
         self.data_paths = data_paths
         self.transform = transform
@@ -348,6 +350,8 @@ class MultiXArrayProbaDataset(Dataset):
         # Whether to put whole epochs in index map only, or split it up into events
         # Will return (n_events, samples) probability distribution as labels
         self.whole_epoch = whole_epoch
+        self.subset_cond = subset_cond
+        self.statistics = statistics
 
         self.index_map = (
             self._create_index_map()
@@ -364,9 +368,9 @@ class MultiXArrayProbaDataset(Dataset):
         # Open first dataset to check if split
         with xr.open_dataset(data_paths[0]) as ds:
             self.split = "labels" not in ds.data_vars and "probabilities" not in ds
-
         if norm_vars is None:
-            self._calc_global_statistics(4000)
+            if self.statistics is None:
+                self._calc_global_statistics(4000)
             norm_vars = get_norm_vars_from_global_statistics(
                 self.statistics, normalization_fn
             )
@@ -390,7 +394,8 @@ class MultiXArrayProbaDataset(Dataset):
                 # Indices where at least one location is found
                 mask_locs = event_locs.sum(axis=2) != 0
 
-                acc_indices = ds.event_name.str.contains("speed").to_numpy()
+                if self.subset_cond == "speed" or self.subset_cond == "accuracy":
+                    subset_indices = ds.event_name.str.contains(self.subset_cond).to_numpy()
 
                 participant_indices = np.arange(event_locs.shape[0])[:, None, None]
                 trial_indices = np.arange(event_locs.shape[1])[None, :, None]
@@ -400,8 +405,12 @@ class MultiXArrayProbaDataset(Dataset):
                     data[participant_indices, trial_indices, time_indices]
                 )
                 event_locs[nan_mask] = 0
+                combined_indices = (
+                    np.argwhere((mask_nan) & (mask_locs) & (subset_indices))
+                    if self.subset_cond is not None
+                    else np.argwhere((mask_nan) & (mask_locs))
+                )
 
-                combined_indices = np.argwhere((mask_nan) & (mask_locs) & (acc_indices))
                 if len(self.participants_to_keep) > 0:
                     participants_in_data = [
                         index
@@ -439,9 +448,9 @@ class MultiXArrayProbaDataset(Dataset):
                 # Select subset of data to check valid indices
                 data = data[..., 0, :]
                 mask = ~np.isnan(data).all(axis=-1)
-                # indices = np.argwhere(~mask)
-                acc_indices = ds.event_name.str.contains("accuracy").to_numpy()
-                combined_indices = np.argwhere((mask) & (acc_indices))
+                if self.subset_cond == "speed" or self.subset_cond == "accuracy":
+                    subset_indices = ds.event_name.str.contains(self.subset_cond).to_numpy()
+                combined_indices = np.argwhere((mask) & (subset_indices)) if self.subset_cond is not None else np.argwhere(mask)
 
                 if len(self.participants_to_keep) > 0:
                     participants_in_data = [
@@ -566,13 +575,14 @@ class MultiXArrayProbaDataset(Dataset):
             sample_data = torch.nn.functional.pad(
                 sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
             )
-        sample_label = (
-            indices[4]
-            if not self.whole_epoch
-            else torch.as_tensor(
-                sample.probabilities.values, dtype=torch.float32
-            ).transpose(1, 0)
-        )
+        if not self.whole_epoch:
+            sample_label = indices[4]
+        else:
+            sample_label = torch.as_tensor(sample.probabilities.values, dtype=torch.float32)
+            # sample_label = torch.nn.Softmax(dim=0)(sample_label)
+            sample_label[0,:] = 1 - sample_label.sum(axis=0)
+            sample_label = sample_label.transpose(1, 0)
+            # sample_label = sample_label / torch.sum(sample_label, dim=1, keepdim=True)
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
 
         # fillna with masking_value
@@ -583,7 +593,9 @@ class MultiXArrayProbaDataset(Dataset):
         if self.transform is not None:
             sample_data, sample_label = self.transform((sample_data, sample_label))
         if self.keep_info:
-            values_to_keep = [np.atleast_1d(sample[key].to_numpy()) for key in self.info_to_keep]
+            values_to_keep = [
+                np.atleast_1d(sample[key].to_numpy()) for key in self.info_to_keep
+            ]
             sample_info = [
                 dict(zip(self.info_to_keep, values)) for values in zip(*values_to_keep)
             ]

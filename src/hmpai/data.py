@@ -9,14 +9,14 @@ from tqdm.notebook import tqdm
 
 
 SAT_CLASSES_ACCURACY = [
-    "pre-attentive",
+    "negative",
     "encoding",
     "decision",
     "confirmation",
     "response",
 ]
 
-SAT_CLASSES_SPEED = ["pre-attentive", "encoding", "decision", "response"]
+SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
 
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",

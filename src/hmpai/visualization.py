@@ -19,6 +19,10 @@ import pandas as pd
 from scipy.stats import ttest_rel
 from typing import List, Optional
 import json
+from rpy2.robjects import conversion, default_converter
+from sklearn.preprocessing import StandardScaler
+from pymer4.models import Lmer
+import warnings
 
 
 def add_attribution(
@@ -699,45 +703,32 @@ def plot_predictions_on_epoch(
     else:
         empty = pred.squeeze()
     # print(true)
-    fig, ax = plt.subplots()
-    # for i in range(0, 5):
-    #     mask = torch.eq(true, i)
-    #     indices = torch.nonzero(mask, as_tuple=True)
-    #     if indices[0].numel() == 0:
-    #         continue
-    #     ax.barh(
-    #         0.9,
-    #         torch.sum(mask).item(),
-    #         left=indices[0][0],
-    #         align="center",
-    #         alpha=0.5,
-    #         height=0.05,
-    #         color=sns.color_palette()[i],
-    #     )
-    for i in range(0, empty.shape[1]):
+    fig, ax = plt.subplots(2, 1)
+    ax[0].set_ylabel('Softmax Probability')
+    ax[1].set_ylabel('HMP Probability')
+    for i in range(1, empty.shape[1]):
         sns.lineplot(
-            x=range(len(empty[:, i])),
-            y=empty[:, i],
-            ax=ax,
+            x=range(len(empty[:rt_idx, i])),
+            y=empty[:rt_idx, i],
+            ax=ax[0],
             color=sns.color_palette()[i],
             label=labels[i],
         )
-    ax2 = ax.twinx()
     for i in range(0, true.shape[1]):
         sns.lineplot(
             x=range(len(true[:rt_idx, i])),
             y=true[:rt_idx, i],
-            ax=ax2,
-            color = sns.color_palette()[i + 4],
-            label=labels[i]
+            ax=ax[1],
+            color = sns.color_palette()[i + 1],
+            label=labels[i + 1]
         )
     # sns.lineplot(empty[:, 1:], ax=ax)
     # label=SAT_CLASSES_ACCURACY[1:]
-    ax.legend()
-    plt.xlim(0, rt_idx + (window_size // 2))
+    # ax.legend()
+    # plt.xlim(0, rt_idx + (window_size // 2))
     # plt.ylim(0, 1.0)
     plt.xlabel("Samples")
-    plt.ylabel("Softmax probability")
+
     plt.show()
 
 def plot_stage_predictions(epoch: torch.Tensor, labels: list[str], window_size: int, model: torch.nn.Module): 
@@ -827,18 +818,19 @@ def predict_with_auc(
     torch.set_grad_enabled(False)
     data_list = []
     for batch in loader:
-        data = {info_key: batch[2][info_key] for info_key in info_to_keep}
+        data = {info_key: batch[2][0][info_key] for info_key in info_to_keep}
         pred = model(batch[0].to(DEVICE))
         pred = torch.nn.Softmax(dim=2)(pred)
         pred = pred.cpu().detach()
         batch_aucs = torch.sum(pred, dim=1)
-        predicted_labels = pred.argmax(dim=2) # (batch_size, seq_len)
+        # Ignore first dimension since negative class
+        predicted_labels = pred[..., 1:].argmax(dim=2) + 1 # (batch_size, seq_len), add 1 to compensate for lost negative class
         for i in range(predicted_labels.shape[0]):
             trial_predictions = predicted_labels[i,:]
             unique_counts = torch.unique(trial_predictions, return_counts=True)
             unique = list(unique_counts[0])
             counts = list(unique_counts[1])
-            for j, label in enumerate(labels):
+            for j, label in enumerate(labels[1:]):
                 if label + "_pred_samples" not in data:
                     data[label + "_pred_samples"] = []
                 try:
@@ -850,7 +842,7 @@ def predict_with_auc(
             unique_counts = torch.unique(trial_labels, return_counts=True)
             unique = list(unique_counts[0])
             counts = list(unique_counts[1])
-            for j, label in enumerate(labels):
+            for j, label in enumerate(labels[1:]):
                 if label + "_true_samples" not in data:
                     data[label + "_true_samples"] = []
                 try:
@@ -866,13 +858,13 @@ def predict_with_auc(
 
 def plot_median_split_error_rate(data: pd.DataFrame, operation: str):
     set_seaborn_style()
-    data["ratio"] = (data[f"{operation}_auc"] / 100) / data["rt_x"]
+    data["ratio"] = (data[f"{operation}_auc"] / 256) / data["rt_x"]
     median = data["ratio"].median()
     data["above_median"] = data["ratio"] >= median
     plt.figure(figsize=(4, 6))
     plot = sns.barplot(data=data, x="SAT", y="response", hue="above_median", legend=True)
     plt.ylabel("Proportion of correct responses")
-    plt.xlabel(f"Below or above median of {operation} AUC/RT\n(Median: {median:.2f})")
+    plt.xlabel(f"Below or above median of {operation} AUC/RT\n(Median: {median:.4f})")
     # plt.xticks(ticks=[0,1], labels=["Below", "Above"])
     plt.ylim(0, 1)
     plt.plot()
@@ -966,3 +958,61 @@ def plot_ratio_true_over_RT(data: pd.DataFrame, operation: str):
     plt.ylim(0, 1)
     plt.xlim(-0.5, 9.5)
     plt.plot()
+
+def show_lmer(labels: str, data: pd.DataFrame, formula: str):
+    warnings.filterwarnings('ignore')
+    data = data.copy()
+    fig, ax = plt.subplots(2, 2, figsize=(10,6))
+    set_seaborn_style()
+    plt.tight_layout()
+    # plt.setp(ax, xlim=(0, 0.05), ylabel='P(response == 1)')
+
+    plot_loc = {'encoding': ax[0][0], 'decision': ax[0][1], 'confirmation': ax[1][0], 'response': ax[1][1]}
+    for label in labels[1:]:
+        print(f"---{label.upper()}---")
+        # data["ratio"] = data[f"{label}_pred_samples"]
+        # data["ratio"] = (data[f"{label}_pred_samples"] / 100) / data["rt_x"]
+        data["ratio"] = (data[f"{label}_auc"] / 256) / data["rt_x"]
+        data['participant'] = data['participant'].astype('category')
+
+        with conversion.localconverter(default_converter):
+            # lmer_model = Lmer("response ~ ratio * SAT + (1 + ratio|participant)", data=data, family="binomial")
+            lmer_model = Lmer(formula, data=data, family="binomial")
+            result = lmer_model.fit()
+
+            # Generate a range of ratio values
+        print(lmer_model.summary())
+        # TODO: This was to predict probability of ratio over a large range! Should probably use this instead of real data
+        ratio_values = np.linspace(data['ratio'].min(), data['ratio'].max(), len(data))
+
+        # Create DataFrames for predictions for both conditions
+        predict_df = data[["response", "ratio", "SAT", "participant"]]
+        with conversion.localconverter(default_converter):
+            predict_df['predicted_prob'] = lmer_model.predict(predict_df, skip_data_checks=True, verify_predictions=False)
+        # predict_df_speed = pd.DataFrame({'ratio': ratio_values, 'SAT': 'speed', 'participant': data['participant']})
+        # predict_df_accuracy = pd.DataFrame({'ratio': ratio_values, 'SAT': 'accuracy', 'participant': data['participant']})
+
+        # # Predict the probabilities for both conditions
+        # # with conversion.localconverter(default_converter):
+        # predict_df_speed['predicted_prob'] = lmer_model.predict(predict_df_speed, skip_data_checks=True)
+        # predict_df_accuracy['predicted_prob'] = lmer_model.predict(predict_df_accuracy, skip_data_checks=True)
+
+        # Prepare the data for plotting
+        # Combine the prediction DataFrames
+        plot_data = predict_df
+        # predict_df_speed['SAT'] = 'speed'
+        # predict_df_accuracy['SAT'] = 'accuracy'
+        # plot_data = pd.concat([predict_df_speed, predict_df_accuracy])
+
+        # Create the plot
+        # plt.figure(figsize=(10, 6))
+        # plot_loc[label].set_xlabel(f'Ratio of {label} AUC over RT')
+        plot_loc[label].set_xlabel(f'Proportion of trial predicted as {label}')
+        sns.lineplot(data=plot_data, x='ratio', y='predicted_prob', hue='SAT', ax=plot_loc[label])
+        sns.scatterplot(data=data[data['SAT'] == 'speed'], x='ratio', y='response', alpha=0.1, label='Actual Data Speed', ax=plot_loc[label])
+        sns.scatterplot(data=data[data['SAT'] == 'accuracy'], x='ratio', y='response', alpha=0.1, label='Actual Data Accuracy', ax=plot_loc[label])
+
+        # Customize the plot
+        plt.legend(title='Condition')
+        # plt.xlim(0, 0.5)
+    plt.show()
