@@ -310,7 +310,7 @@ class MultiXArrayProbaDataset(Dataset):
         jiggle: int = 3,
         whole_epoch: bool = False,
         subset_cond: str = None,  # 'speed' for speed, 'accuracy' for accuracy, empty for no filtering
-        statistics: dict = None
+        statistics: dict = None,
     ):
         self.data_paths = data_paths
         self.transform = transform
@@ -395,7 +395,9 @@ class MultiXArrayProbaDataset(Dataset):
                 mask_locs = event_locs.sum(axis=2) != 0
 
                 if self.subset_cond == "speed" or self.subset_cond == "accuracy":
-                    subset_indices = ds.event_name.str.contains(self.subset_cond).to_numpy()
+                    subset_indices = ds.event_name.str.contains(
+                        self.subset_cond
+                    ).to_numpy()
 
                 participant_indices = np.arange(event_locs.shape[0])[:, None, None]
                 trial_indices = np.arange(event_locs.shape[1])[None, :, None]
@@ -449,8 +451,14 @@ class MultiXArrayProbaDataset(Dataset):
                 data = data[..., 0, :]
                 mask = ~np.isnan(data).all(axis=-1)
                 if self.subset_cond == "speed" or self.subset_cond == "accuracy":
-                    subset_indices = ds.event_name.str.contains(self.subset_cond).to_numpy()
-                combined_indices = np.argwhere((mask) & (subset_indices)) if self.subset_cond is not None else np.argwhere(mask)
+                    subset_indices = ds.event_name.str.contains(
+                        self.subset_cond
+                    ).to_numpy()
+                combined_indices = (
+                    np.argwhere((mask) & (subset_indices))
+                    if self.subset_cond is not None
+                    else np.argwhere(mask)
+                )
 
                 if len(self.participants_to_keep) > 0:
                     participants_in_data = [
@@ -578,9 +586,11 @@ class MultiXArrayProbaDataset(Dataset):
         if not self.whole_epoch:
             sample_label = indices[4]
         else:
-            sample_label = torch.as_tensor(sample.probabilities.values, dtype=torch.float32)
+            sample_label = torch.as_tensor(
+                sample.probabilities.values, dtype=torch.float32
+            )
             # sample_label = torch.nn.Softmax(dim=0)(sample_label)
-            sample_label[0,:] = 1 - sample_label.sum(axis=0)
+            sample_label[0, :] = 1 - sample_label.sum(axis=0)
             sample_label = sample_label.transpose(1, 0)
             # sample_label = sample_label / torch.sum(sample_label, dim=1, keepdim=True)
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
@@ -596,10 +606,15 @@ class MultiXArrayProbaDataset(Dataset):
             values_to_keep = [
                 np.atleast_1d(sample[key].to_numpy()) for key in self.info_to_keep
             ]
+            # sample_info = [
+            #     dict(zip(self.info_to_keep, values)) for values in zip(*values_to_keep)
+            # ]
             sample_info = [
-                dict(zip(self.info_to_keep, values)) for values in zip(*values_to_keep)
+                {key: value for key, value in zip(self.info_to_keep, values)}
+                for values in zip(*values_to_keep)
             ]
-            sample_info.append({"indices": indices})
+            # For debugging
+            # sample_info.append({"indices": indices})
             return sample_data, sample_label, sample_info
         return sample_data, sample_label
 
