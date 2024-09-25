@@ -311,6 +311,9 @@ class MultiXArrayProbaDataset(Dataset):
         whole_epoch: bool = False,
         subset_cond: str = None,  # 'speed' for speed, 'accuracy' for accuracy, empty for no filtering
         statistics: dict = None,
+        add_negative: bool = False,
+        probabilistic_labels: bool = False, # Return labels as probabilities over each class instead of categorical
+        skip_samples: int = 0, # Skip this amount of samples, used to skip pre-stimulus samples
     ):
         self.data_paths = data_paths
         self.transform = transform
@@ -352,6 +355,9 @@ class MultiXArrayProbaDataset(Dataset):
         self.whole_epoch = whole_epoch
         self.subset_cond = subset_cond
         self.statistics = statistics
+        self.add_negative = add_negative
+        self.probabilistic_labels = probabilistic_labels
+        self.skip_samples = skip_samples
 
         self.index_map = (
             self._create_index_map()
@@ -554,7 +560,7 @@ class MultiXArrayProbaDataset(Dataset):
             filter = {
                 "participant": indices[1],
                 "epochs": indices[2],
-                "samples": range(0, 622),
+                "samples": range(0, 634), # TODO: Make this dynamic
             }
         else:
             # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
@@ -583,14 +589,19 @@ class MultiXArrayProbaDataset(Dataset):
             sample_data = torch.nn.functional.pad(
                 sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
             )
-        if not self.whole_epoch:
+        if not self.whole_epoch and not self.probabilistic_labels:
             sample_label = indices[4]
         else:
             sample_label = torch.as_tensor(
                 sample.probabilities.values, dtype=torch.float32
             )
+            if pad_left > 0 or pad_right > 0:
+                sample_label = torch.nn.functional.pad(
+                    sample_label, (pad_left, pad_right), mode="constant", value=0
+                )
             # sample_label = torch.nn.Softmax(dim=0)(sample_label)
-            sample_label[0, :] = 1 - sample_label.sum(axis=0)
+            if self.add_negative:
+                sample_label[0, :] = 1 - sample_label.sum(axis=0)
             sample_label = sample_label.transpose(1, 0)
             # sample_label = sample_label / torch.sum(sample_label, dim=1, keepdim=True)
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
@@ -600,15 +611,16 @@ class MultiXArrayProbaDataset(Dataset):
         # Swap samples and channels dims, since [time, features] is expected
         sample_data = sample_data.transpose(1, 0)
 
+        sample_data = sample_data[self.skip_samples:, :]
+        sample_label = sample_label[self.skip_samples:, :]
+        
         if self.transform is not None:
             sample_data, sample_label = self.transform((sample_data, sample_label))
+
         if self.keep_info:
             values_to_keep = [
                 np.atleast_1d(sample[key].to_numpy()) for key in self.info_to_keep
             ]
-            # sample_info = [
-            #     dict(zip(self.info_to_keep, values)) for values in zip(*values_to_keep)
-            # ]
             sample_info = [
                 {key: value for key, value in zip(self.info_to_keep, values)}
                 for values in zip(*values_to_keep)

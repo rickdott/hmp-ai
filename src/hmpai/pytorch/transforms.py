@@ -154,6 +154,51 @@ class RandomCropTransform(object):
         padded_labels[: cropped_labels.shape[0]] = cropped_labels
 
         return padded_data, padded_labels
+    
+class FixedLengthCropTransform(object):
+    CROP_LENGTH = 50
+
+    def __init__(self):
+        pass
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        end_idx = (data[:, 0] != MASKING_VALUE).nonzero(as_tuple=True)[0][-1].item() + 1
+        start = torch.randint(0, max(end_idx - self.CROP_LENGTH, 1), (1,))
+        end = start + self.CROP_LENGTH
+        # print(start, end)
+        cropped_data = data[start:end, :]
+        cropped_labels = labels[start:end, :]
+
+        if cropped_data.shape[0] < self.CROP_LENGTH:
+            offset = self.CROP_LENGTH - cropped_data.shape[0]
+            cropped_data = torch.nn.functional.pad(cropped_data, (0, 0, 0, offset), value=MASKING_VALUE)
+            cropped_labels = torch.nn.functional.pad(cropped_labels, (0, 0, 0, offset), value=0)
+            cropped_labels[-offset:,0] = 1.0
+
+        return cropped_data, cropped_labels
+
+class StartJitterTransform(object):
+    def __init__(self, offset_before):
+        self.offset_before = offset_before
+    
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        offset = torch.randint(self.offset_before, (1,))
+
+        cropped_data = data[offset:, :]
+        cropped_labels = labels[offset:, :]
+
+        cropped_data = torch.nn.functional.pad(cropped_data, (0, 0, 0, offset), value=MASKING_VALUE)
+        cropped_labels = torch.nn.functional.pad(cropped_labels, (0, 0, 0, offset), value=0)
+        cropped_labels[-offset:,0] = 1.0
+
+        return cropped_data, cropped_labels
+
 
 
 class EegNoiseTransform(object):

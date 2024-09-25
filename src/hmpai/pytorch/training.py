@@ -1,4 +1,5 @@
 from collections import defaultdict, Counter
+from hmpai.pytorch.normalization import get_norm_vars_from_global_statistics
 from hmpai.utilities import pretty_json
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
@@ -8,10 +9,10 @@ from hmpai.pytorch.utilities import (
     save_model,
     load_model,
 )
-from hmpai.pytorch.generators import SAT1Dataset
+from hmpai.pytorch.generators import MultiXArrayProbaDataset, SAT1Dataset
 from hmpai.pytorch.pretraining import *
 import torch
-from hmpai.data import SAT1_STAGES_ACCURACY
+from hmpai.data import SAT1_STAGES_ACCURACY, SAT_CLASSES_ACCURACY
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 import netCDF4
@@ -23,7 +24,7 @@ from typing import Callable
 from hmpai.normalization import get_norm_vars, norm_dummy
 from copy import deepcopy
 import re
-from hmpai.training import get_folds
+from hmpai.training import get_folds, split_participants
 
 
 def pretrain(
@@ -66,7 +67,13 @@ def pretrain(
         with tqdm(total=len(train_loader), unit=" batch") as tepoch:
             tepoch.set_description(f"Epoch {epoch + 1}")
             batch_losses = pretrain_train(
-                model, train_loader, opt, loss, pretrain_fn, progress=tepoch, scheduler=lrs
+                model,
+                train_loader,
+                opt,
+                loss,
+                pretrain_fn,
+                progress=tepoch,
+                scheduler=lrs,
             )
             # Validate model and communicate results
             val_loss_list = []
@@ -123,6 +130,7 @@ def train_and_test(
     seed: int = 42,
     pretrain_fn: Callable = None,
     whole_epoch: bool = False,
+    probabilistic_labels: bool = False,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -236,9 +244,10 @@ def train_and_test(
     if pretrain_fn is not None:
         loss = torch.nn.MSELoss()
     else:
-        if whole_epoch:
+        if whole_epoch or probabilistic_labels:
             # KLDivLoss for calculating loss between probability distributions
-            loss = torch.nn.KLDivLoss(reduction='batchmean', log_target=False)
+            # loss = torch.nn.CrossEntropyLoss()
+            loss = torch.nn.KLDivLoss(reduction="batchmean", log_target=False)
         else:
             # TODO: Think about ignore_index
             loss = torch.nn.CrossEntropyLoss(
@@ -246,6 +255,7 @@ def train_and_test(
             )
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
+    whole_epoch = whole_epoch or probabilistic_labels
 
     lowest_mean_val_loss = np.inf
     for epoch in range(epochs):
@@ -261,6 +271,7 @@ def train_and_test(
                     loss,
                     progress=tepoch,
                     do_spectral_decoupling=do_spectral_decoupling,
+                    whole_epoch=whole_epoch,
                 )
             else:
                 batch_losses = pretrain_train(
@@ -273,7 +284,9 @@ def train_and_test(
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 if pretrain_fn is None:
-                    val_losses, val_accuracy = validate(model, val_loader, loss, labels)
+                    val_losses, val_accuracy = validate(
+                        model, val_loader, loss, whole_epoch
+                    )
                 else:
                     val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
                     val_accuracy = 0
@@ -318,7 +331,7 @@ def train_and_test(
 
     # Test model
     if pretrain_fn is None:
-        results, _, _ = test(model, test_loaders, loss, writer, labels)
+        results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch)
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -433,6 +446,7 @@ def train(
     loss_fn: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
     do_spectral_decoupling: bool = False,
+    whole_epoch: bool = False,
 ) -> list[float]:
     """Train model for all batches, one epoch.
 
@@ -464,19 +478,19 @@ def train(
             labels = labels[:, : predictions.shape[1]]
 
         if len(predictions.shape) == 3:
-            if isinstance(loss_fn, torch.nn.KLDivLoss):
+            if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
                 # Add small value to prevent log(0), re-normalize
                 labels = labels + 1e-8
                 labels = labels / labels.sum(dim=-1, keepdim=True)
                 loss = loss_fn(softmax(predictions), labels)
+            elif whole_epoch:
+                loss = -torch.sum(
+                    labels * torch.log(torch.nn.Softmax(dim=2)(predictions))
+                )
             else:
                 loss = loss_fn(
                     predictions.view(-1, predictions.shape[-1]), labels.flatten()
                 )
-                # loss = loss_fn(
-                #     predictions.reshape(-1, predictions.shape[-1]).flatten(),
-                #     labels.reshape(-1, labels.shape[-1]).flatten(),
-                # )
         else:
             loss = loss_fn(predictions, labels)
         if do_spectral_decoupling:
@@ -501,7 +515,7 @@ def validate(
     model: torch.nn.Module,
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
-    class_labels: list[str] = None,
+    whole_epoch: bool = False,
 ) -> (list[float], float):
     """Validate model.
 
@@ -536,7 +550,7 @@ def validate(
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
 
-            if not isinstance(loss_fn, torch.nn.KLDivLoss):
+            if not whole_epoch:
                 matches = predicted_labels == labels
                 correct_predictions = matches.sum().item()
             else:
@@ -546,11 +560,16 @@ def validate(
             total_instances += labels.numel()
             # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
             if len(predictions.shape) == 3:
-                if isinstance(loss_fn, torch.nn.KLDivLoss):
+                if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
                     labels = labels + 1e-8
                     labels = labels / labels.sum(dim=-1, keepdim=True)
                     loss = loss_fn(softmax(predictions), labels)
+                elif whole_epoch:
+                    labels = labels + 1e-8
+                    labels = labels / labels.sum(dim=-1, keepdim=True)
+                    # Cross entropy over two
+                    loss = -torch.sum(labels * torch.nn.LogSoftmax(dim=2)(predictions))
                 else:
                     loss = loss_fn(
                         predictions.view(-1, predictions.shape[-1]), labels.flatten()
@@ -562,7 +581,7 @@ def validate(
             loss_per_batch.append(loss.item())
 
         # Show test results for last batch
-        if not isinstance(loss_fn, torch.nn.KLDivLoss):
+        if not whole_epoch:
             all_labels = torch.cat(all_labels, dim=0)
             all_preds = torch.cat(all_preds, dim=0)
             test_results = classification_report(
@@ -583,6 +602,7 @@ def test(
     loss_fn: torch.nn.modules.loss._Loss,
     writer: SummaryWriter = None,
     class_labels: list[str] = None,
+    whole_epoch: bool = False,
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -599,8 +619,6 @@ def test(
     """
     model.eval()
 
-    if isinstance(loss_fn, torch.nn.KLDivLoss):
-        softmax = torch.nn.LogSoftmax(dim=2)
     test_results = []
 
     if type(test_loader) is not list:
@@ -622,7 +640,7 @@ def test(
                 outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
                 true_labels = torch.cat([true_labels, labels.flatten().cpu()])
 
-        if not isinstance(loss_fn, torch.nn.KLDivLoss):
+        if not whole_epoch:
             loader_results = classification_report(
                 true_labels, outputs, output_dict=True, zero_division=0.0
             )
@@ -700,3 +718,70 @@ class EarlyStopper:
             if self.counter >= self.tolerance:
                 return True
         return False
+
+
+def prepare_data(
+    paths: list[str | Path],
+    train_percentage: int,
+    normalization_fn: Callable[[torch.Tensor, float, float], torch.Tensor] = norm_dummy,
+    labels: list[str] = SAT_CLASSES_ACCURACY,
+    info_to_keep: list[str] = None,
+    whole_epoch: bool = False,
+    probabilistic_labels: bool = False,
+    subset_cond: str = None,
+    add_negative: bool = False,
+    window_size: tuple[int, int] = None,
+    jiggle: int = None,
+):
+    set_global_seed(42)
+    splits = split_participants(paths, train_percentage)
+
+    if info_to_keep is None:
+        info_to_keep = []
+    if jiggle is None:
+        jiggle = 0
+
+    train_data = MultiXArrayProbaDataset(
+        paths,
+        participants_to_keep=splits[0],
+        normalization_fn=normalization_fn,
+        window_size=window_size,
+        jiggle=jiggle,
+        labels=labels,
+        info_to_keep=info_to_keep,
+        subset_cond=subset_cond,
+        add_negative=add_negative,
+        probabilistic_labels=probabilistic_labels,
+        whole_epoch=whole_epoch,
+    )
+    norm_vars = get_norm_vars_from_global_statistics(train_data.statistics, normalization_fn)
+    class_weights = train_data.statistics["class_weights"]
+    test_data = MultiXArrayProbaDataset(
+        paths,
+        participants_to_keep=splits[1],
+        normalization_fn=normalization_fn,
+        norm_vars=norm_vars,
+        window_size=window_size,
+        jiggle=jiggle,
+        labels=labels,
+        info_to_keep=info_to_keep,
+        subset_cond=subset_cond,
+        add_negative=add_negative,
+        probabilistic_labels=probabilistic_labels,
+        whole_epoch=whole_epoch,
+    )
+    val_data = MultiXArrayProbaDataset(
+        paths,
+        participants_to_keep=splits[2],
+        normalization_fn=normalization_fn,
+        norm_vars=norm_vars,
+        window_size=window_size,
+        jiggle=jiggle,
+        labels=labels,
+        info_to_keep=info_to_keep,
+        subset_cond=subset_cond,
+        add_negative=add_negative,
+        probabilistic_labels=probabilistic_labels,
+        whole_epoch=whole_epoch,
+    )
+    return train_data, test_data, val_data, class_weights

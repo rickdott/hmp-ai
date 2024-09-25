@@ -675,21 +675,21 @@ def plot_predictions_on_epoch(
         return smoothed
 
     set_seaborn_style()
-    empty = np.zeros((epoch.size()[0], len(labels)))
+    empty = np.full((epoch.size()[0], epoch.size()[0], len(labels)), np.nan)
+    # empty = np.zeros((epoch.size()[0], len(labels)))
     rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
     # Normalize probability labels
+    # true = true[:rt_idx, 1:]
+    # true = true / true.sum()
     true = true[:rt_idx, 1:]
-    true = true / true.sum()
+
     if not sequence:
         slices = get_padded_slices(epoch, window_size, include_start_end=False)
         stacked = torch.stack(slices).to(DEVICE)
         pred = model(stacked)
-        pred = torch.nn.Softmax(dim=1)(pred)
+        # Dim = 2 works for proba prediction, probably should be dim=1 for class prediction?
+        pred = torch.nn.Softmax(dim=2)(pred)
     else:
-        if random_perm:
-            perm = torch.randperm(rt_idx)
-            epoch[:rt_idx] = epoch[perm]
-            true[:rt_idx] = true[perm]
         pred = model(epoch.unsqueeze(0).to(DEVICE))
         pred = torch.nn.Softmax(dim=2)(pred)
     pred = pred.cpu().detach().numpy()
@@ -698,37 +698,90 @@ def plot_predictions_on_epoch(
 
     if not sequence:
         for i, prediction in enumerate(pred):
-            empty[i, :] = prediction
+            # TODO: Handle global pool case
+            # empty[i,:] = prediction
+            empty[i, i:i+window_size, :] = prediction
             # empty[i + window_size // 2, :] = prediction
+        empty = np.nanmean(empty, axis=0)
     else:
         empty = pred.squeeze()
+    
     # print(true)
-    fig, ax = plt.subplots(2, 1)
-    ax[0].set_ylabel("Softmax Probability")
-    ax[1].set_ylabel("HMP Probability")
-    for i in range(1, empty.shape[1]):
-        sns.lineplot(
-            x=range(len(empty[:rt_idx, i])),
-            y=empty[:rt_idx, i],
-            ax=ax[0],
-            color=sns.color_palette()[i],
-            label=labels[i],
-        )
+    nrows = 3 if random_perm else 2
+    fig, ax = plt.subplots(nrows, 1, sharex=True)
+    ax[0].set_ylabel("HMP")
+    ax[1].set_ylabel("Model")
+    # plt.setp(ax, ylim=(0, 0.1))
+    fig.supylabel('Probability')
+    fig.supxlabel('Samples')
+    # HMP Probability
     for i in range(0, true.shape[1]):
         sns.lineplot(
             x=range(len(true[:rt_idx, i])),
             y=true[:rt_idx, i],
-            ax=ax[1],
+            ax=ax[0],
             color=sns.color_palette()[i + 1],
             label=labels[i + 1],
+            legend=False,
         )
-    # sns.lineplot(empty[:, 1:], ax=ax)
-    # label=SAT_CLASSES_ACCURACY[1:]
-    # ax.legend()
-    # plt.xlim(0, rt_idx + (window_size // 2))
-    # plt.ylim(0, 1.0)
-    plt.xlabel("Samples")
+    # Model probability
+    for i in range(1, empty.shape[1]):
+        sns.lineplot(
+            x=range(len(empty[:rt_idx, i])),
+            y=empty[:rt_idx, i],
+            ax=ax[1],
+            color=sns.color_palette()[i],
+            label=labels[i],
+            legend=False,
+        )
+    if random_perm:
+        n_shuffles = 100
+        shuffled_preds = np.full((n_shuffles, epoch.size()[0], len(labels)), np.nan)
 
+        for i_shuf in range(n_shuffles):
+            empty = np.full((epoch.size()[0], epoch.size()[0], len(labels)), np.nan)
+            perm = torch.randperm(rt_idx)
+            epoch[:rt_idx] = epoch[perm]
+            true[:rt_idx] = true[perm]
+            if not sequence:
+                slices = get_padded_slices(epoch, window_size, include_start_end=False)
+                stacked = torch.stack(slices).to(DEVICE)
+                pred = model(stacked)
+                # Dim = 2 works for proba prediction, probably should be dim=1 for class prediction?
+                pred = torch.nn.Softmax(dim=2)(pred)
+            else:
+                pred = model(epoch.unsqueeze(0).to(DEVICE))
+                pred = torch.nn.Softmax(dim=2)(pred)
+            pred = pred.cpu().detach().numpy()
+            if smoothing:
+                pred = smooth_predictions(pred, window_size)
+
+            if not sequence:
+                for i, prediction in enumerate(pred):
+                    # TODO: Handle global pool case
+                    # empty[i,:] = prediction
+                    empty[i, i:i+window_size, :] = prediction
+                    # empty[i + window_size // 2, :] = prediction
+                empty = np.nanmean(empty, axis=0)
+            else:
+                empty = pred.squeeze()
+            shuffled_preds[i_shuf, :, :] = empty
+        shuffled_preds = shuffled_preds.mean(axis=0)
+        # Shuffled probability
+        ax[2].set_ylabel('Shuffled')
+        for i in range(1, shuffled_preds.shape[1]):
+            sns.lineplot(
+                x=range(len(shuffled_preds[:rt_idx, i])),
+                y=shuffled_preds[:rt_idx, i],
+                ax=ax[2],
+                color=sns.color_palette()[i],
+                label=labels[i],
+                legend=False,
+            )
+    # plt.ylabel("Probability")
+    handles, _ = ax[1].get_legend_handles_labels()
+    fig.legend(handles, labels[1:])
+    plt.tight_layout()
     plt.show()
 
 
@@ -953,10 +1006,10 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
     data["sum_auc"] = data[auc_columns].sum(axis=1)
     # data['rt_x_norm'] = (data['rt_x'] - data['rt_x'].min()) / (data['rt_x'].max() - data['rt_x'].min())
     # Normalized operation certainty
-    for label in labels[1:]:
-        data[f"{label}_ratio"] = data[f"{label}_auc"] / data["sum_auc"]
     # for label in labels[1:]:
-    #     data[f"{label}_ratio"] = data[f"{label}_auc"] / data["rt_x"]
+    #     data[f"{label}_ratio"] = data[f"{label}_auc"] / data["sum_auc"]
+    for label in labels[1:]:
+        data[f"{label}_ratio"] = data[f"{label}_auc"] / data["rt_x"]
     # ratio_columns = [column for column in data.columns if column.endswith("_ratio")]
     # data[ratio_columns] = (data[ratio_columns] - data[ratio_columns].min()) / (
     #     data[ratio_columns].max() - data[ratio_columns].min()
@@ -965,8 +1018,8 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
     fig, ax = plt.subplots(2, 2, figsize=(10, 6))
     set_seaborn_style()
     plt.tight_layout()
-    # plt.setp(ax, ylabel='P(response == 1)')
-    plt.setp(ax, xlim=(0, 1), ylabel="P(response == 1)")
+    plt.setp(ax, ylabel='P(response == 1)')
+    # plt.setp(ax, xlim=(0, 1), ylabel="P(response == 1)")
 
     plot_loc = {
         "encoding": ax[0][0],

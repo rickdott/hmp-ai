@@ -532,10 +532,11 @@ class MambaModel(nn.Module):
         self.pretraining = False
 
     def forward(self, x):
-        # mask = (x == MASKING_VALUE).all(dim=2).t()
-        # max_idx = mask.float().argmax(dim=0).max()
-        # mask = mask[:max_idx, :]
-        # x = x[:, :max_idx, :]
+        mask = (x[:,:,0] == MASKING_VALUE).all(dim=1).t()
+        max_idx = mask.float().argmax(dim=0).max()
+        if max_idx != 0:
+            # mask = mask[:max_idx, :]
+            x = x[:, :max_idx, :]
         x = self.linear_in(x)
         # x = x.permute(0, 2, 1)
         # x = self.cnn(x)

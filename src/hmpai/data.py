@@ -402,7 +402,17 @@ class StageFinder:
         # will ask in a pop-up how many components to keep
         # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
         print("Transforming epoched data to principal component (PC) space")
-        hmp_data = hmp.utils.transform_data(self.epoch_data)
+        if "offset_before" in self.epoch_data.attrs:
+            # Filter out offset_before data so HMP does not use it when fitting
+            epoch_data_no_offset = self.epoch_data.sel(
+                samples=range(
+                    self.epoch_data.offset_before, len(self.epoch_data.samples)
+                )
+            )
+            epoch_data_no_offset['samples'] = range(0, len(epoch_data_no_offset.samples))
+            hmp_data = hmp.utils.transform_data(epoch_data_no_offset)
+        else:
+            hmp_data = hmp.utils.transform_data(self.epoch_data)
 
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
@@ -479,6 +489,7 @@ class StageFinder:
 
         # Add label information to stage_data: ['', '', 'stage1', 'stage1', 'stage2' ...]
         if not probabilistic:
+            # Add '' to front equal to self.epoch_data.offset_before
             stage_data = self.epoch_data.assign(
                 labels=(["participant", "epochs", "samples"], model_labels)
             )
@@ -646,17 +657,20 @@ class StageFinder:
             # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
             # Find first sample from the end for combination of participant + epoch where the value is NaN
             # this is the reaction time sample where the participant pressed the button and stage ends
-            RT_data = self.epoch_data.sel(
-                participant=data[0],
-                epochs=data[1],  # Use data[1] instead of epoch (.isel)?
-                channels=self.epoch_data.channels[0],
-            ).data.to_numpy()
-            RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
-            RT_sample = (
-                len(RT_data) - 1
-                if RT_idx_reverse == 0
-                else len(RT_data) - RT_idx_reverse
-            )
+            # RT_data = self.epoch_data.sel(
+            #     participant=data[0],
+            #     epochs=data[1],  # Use data[1] instead of epoch (.isel)?
+            #     channels=self.epoch_data.channels[0],
+            # ).data.to_numpy()
+            # RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
+            # RT_sample = (
+            #     len(RT_data) - 1
+            #     if RT_idx_reverse == 0
+            #     else len(RT_data) - RT_idx_reverse
+            # )
+
+            RT_data = self.epoch_data.sel(participant=data[0], epochs=data[1]).rt.item()
+            RT_sample = int(RT_data * self.epoch_data.sfreq)
 
             prev_participant = participant
 
@@ -715,7 +729,16 @@ class StageFinder:
                         # Assumes labels start with 'negative' (irrelevant for this method of labelling)
                         event_idx = self.main_labels.index(labels[event.item() + 1])
                         event_data = trial_data.sel(event=event).data
+                        if "offset_before" in self.epoch_data.attrs:
+                            # Left pad using offset
+                            event_data = np.pad(
+                                event_data,
+                                pad_width=((self.epoch_data.offset_before, 0)),
+                                mode="constant",
+                                constant_values=0,
+                            )
                         # TODO: Bad way to do this, this is true for everything in this condition
+                        # Right pad if condition samples is shorter than expected samples
                         if event_data.shape[-1] < labels_array.shape[-1]:
                             event_data = np.pad(
                                 event_data,
