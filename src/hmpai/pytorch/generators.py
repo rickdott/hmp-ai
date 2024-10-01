@@ -376,7 +376,7 @@ class MultiXArrayProbaDataset(Dataset):
             self.split = "labels" not in ds.data_vars and "probabilities" not in ds
         if norm_vars is None:
             if self.statistics is None:
-                self._calc_global_statistics(4000)
+                self._calc_global_statistics(1000)
             norm_vars = get_norm_vars_from_global_statistics(
                 self.statistics, normalization_fn
             )

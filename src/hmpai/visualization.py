@@ -11,7 +11,7 @@ from hmpai.pytorch.generators import SAT1Dataset
 from hmpai.pytorch.utilities import DEVICE
 from torch.utils.data import DataLoader
 import torch
-from hmpai.utilities import MASKING_VALUE
+from hmpai.utilities import MASKING_VALUE, get_masking_index, get_masking_indices
 from tqdm.notebook import tqdm
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
@@ -665,7 +665,8 @@ def plot_predictions_on_epoch(
     smoothing: bool = False,
     sequence: bool = False,
     random_perm: bool = False,
-):
+):  
+    epoch = epoch.clone()
     def smooth_predictions(predictions, window_size):
         smoothed = np.copy(predictions)
         for i in range(window_size // 2, len(predictions) - window_size // 2):
@@ -677,7 +678,7 @@ def plot_predictions_on_epoch(
     set_seaborn_style()
     empty = np.full((epoch.size()[0], epoch.size()[0], len(labels)), np.nan)
     # empty = np.zeros((epoch.size()[0], len(labels)))
-    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
+    rt_idx = get_masking_index(epoch)
     # Normalize probability labels
     # true = true[:rt_idx, 1:]
     # true = true / true.sum()
@@ -765,7 +766,7 @@ def plot_predictions_on_epoch(
                 empty = np.nanmean(empty, axis=0)
             else:
                 empty = pred.squeeze()
-            shuffled_preds[i_shuf, :, :] = empty
+            shuffled_preds[i_shuf, :empty.shape[0], :] = empty
         shuffled_preds = shuffled_preds.mean(axis=0)
         # Shuffled probability
         ax[2].set_ylabel('Shuffled')
@@ -790,7 +791,7 @@ def plot_stage_predictions(
 ):
     set_seaborn_style()
     empty = np.zeros((epoch.size()[0], len(labels)))
-    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
+    rt_idx = get_masking_index(epoch)
 
     slices = get_padded_slices(epoch, window_size, include_start_end=False)
     stacked = torch.stack(slices).to(DEVICE)
@@ -835,7 +836,7 @@ def get_padded_slices(
     epoch: torch.Tensor, window_size: int, include_start_end: bool = True
 ):
     # Get index where epoch ends
-    rt_idx = torch.nonzero(torch.eq(epoch[:, 0], MASKING_VALUE))[0, 0].item()
+    rt_idx = get_masking_index(epoch)
     slices = []
 
     # Right-pad beginning elements

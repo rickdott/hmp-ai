@@ -25,6 +25,7 @@ from hmpai.normalization import get_norm_vars, norm_dummy
 from copy import deepcopy
 import re
 from hmpai.training import get_folds, split_participants
+from hmpai.pytorch.loss import kl_div_loss_with_correlation_regularization
 
 
 def pretrain(
@@ -131,6 +132,7 @@ def train_and_test(
     pretrain_fn: Callable = None,
     whole_epoch: bool = False,
     probabilistic_labels: bool = False,
+    do_test_shuffled: bool = False,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -248,6 +250,7 @@ def train_and_test(
             # KLDivLoss for calculating loss between probability distributions
             # loss = torch.nn.CrossEntropyLoss()
             loss = torch.nn.KLDivLoss(reduction="batchmean", log_target=False)
+            # loss = kl_div_loss_with_correlation_regularization
         else:
             # TODO: Think about ignore_index
             loss = torch.nn.CrossEntropyLoss(
@@ -331,7 +334,10 @@ def train_and_test(
 
     # Test model
     if pretrain_fn is None:
-        results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch)
+        if do_test_shuffled:
+            results, _, _ = test_shuffled(model, test_loaders, loss, writer, labels, whole_epoch)
+        else:
+            results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch)
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -483,6 +489,8 @@ def train(
                 labels = labels + 1e-8
                 labels = labels / labels.sum(dim=-1, keepdim=True)
                 loss = loss_fn(softmax(predictions), labels)
+            elif loss_fn == kl_div_loss_with_correlation_regularization:
+                loss = kl_div_loss_with_correlation_regularization(predictions, labels, model, data)
             elif whole_epoch:
                 loss = -torch.sum(
                     labels * torch.log(torch.nn.Softmax(dim=2)(predictions))
@@ -565,6 +573,8 @@ def validate(
                     labels = labels + 1e-8
                     labels = labels / labels.sum(dim=-1, keepdim=True)
                     loss = loss_fn(softmax(predictions), labels)
+                elif loss_fn == kl_div_loss_with_correlation_regularization:
+                    loss = kl_div_loss_with_correlation_regularization(predictions, labels, model, data)
                 elif whole_epoch:
                     labels = labels + 1e-8
                     labels = labels / labels.sum(dim=-1, keepdim=True)
@@ -636,9 +646,16 @@ def test(
                     labels = labels[:, : predictions.shape[1]]
 
                 dim = len(predictions.shape) - 1
-                predicted_labels = torch.argmax(predictions, dim=dim)
-                outputs = torch.cat([outputs, predicted_labels.flatten().cpu()])
-                true_labels = torch.cat([true_labels, labels.flatten().cpu()])
+                if not whole_epoch:
+                    predictions = torch.argmax(predictions, dim=dim)
+                    outputs = torch.cat([outputs, predictions.flatten().cpu()])
+                    true_labels = torch.cat([true_labels, labels.flatten().cpu()])
+                elif isinstance(loss_fn, torch.nn.KLDivLoss):
+                    # Add small value to prevent log(0), re-normalize
+                    labels = labels + 1e-8
+                    labels = labels / labels.sum(dim=-1, keepdim=True)
+                    loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()), labels)
+                    outputs = torch.cat([outputs, loss.unsqueeze(0)])
 
         if not whole_epoch:
             loader_results = classification_report(
@@ -649,9 +666,95 @@ def test(
                 writer.add_text(
                     f"Test results {i}", pretty_json(loader_results), global_step=0
                 )
+        else:
+            loader_results = {"KLDivLoss": torch.mean(outputs).item()}
+            test_results.append(loader_results)
 
     return test_results, outputs, true_labels
 
+def test_shuffled(
+    model: torch.nn.Module,
+    test_loader: DataLoader | list[DataLoader],
+    loss_fn: torch.nn.modules.loss._Loss,
+    writer: SummaryWriter = None,
+    class_labels: list[str] = None,
+    whole_epoch: bool = False,
+) -> dict:
+    """
+    Test the PyTorch model on the given test data and return the classification report.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to test.
+        test_loader (DataLoader): The DataLoader containing the test data.
+        writer (SummaryWriter): The SummaryWriter to use for logging.
+
+    Returns:
+        dict: The classification report as a dictionary.
+        torch.Tensor: The predicted classes.
+        torch.Tensor: The true classes.
+    """
+    model.eval()
+
+    test_results = []
+
+    if type(test_loader) is not list:
+        # Assume type is DataLoader
+        test_loader = [test_loader]
+    for i, loader in enumerate(test_loader):
+        outputs = torch.Tensor()
+        true_labels = torch.Tensor()
+        with torch.no_grad():
+            for batch in loader:
+                data, labels = batch[0].to(DEVICE), batch[1]
+                predictions = model(data)
+                # Cut off labels if needed
+                if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
+                    labels = labels[:, : predictions.shape[1]]
+
+                dim = len(predictions.shape) - 1
+                if not whole_epoch:
+                    predictions = torch.argmax(predictions, dim=dim)
+                    outputs = torch.cat([outputs, predictions.flatten().cpu()])
+                    true_labels = torch.cat([true_labels, labels.flatten().cpu()])
+                elif isinstance(loss_fn, torch.nn.KLDivLoss):
+                    # Add small value to prevent log(0), re-normalize
+                    # Add loss to outputs (1, 1) shape
+                    labels = labels + 1e-8
+                    labels = labels / labels.sum(dim=-1, keepdim=True)
+                    # real_loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()[..., 1:]), labels[..., 1:])
+                    real_loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()), labels)
+
+                    shuffled_pred = torch.zeros_like(predictions)
+                    lengths = torch.sum(data[:, :, 0] != MASKING_VALUE, dim=1)
+                    data_clone = data.clone()
+                    for _ in range(5):
+                        for i_l, length in enumerate(lengths):
+                            data_clone[i_l, :length] = data_clone[i_l, torch.randperm(length)]
+                        # Softmax here so we are calculating with probas, not logits
+                        shuffled_pred += torch.nn.LogSoftmax(dim=2)(model(data_clone.to(DEVICE)))
+
+                    shuffled_pred = shuffled_pred / 5
+                    
+                    # shuffled_loss = loss_fn(shuffled_pred.cpu()[..., 1:], labels[..., 1:])
+                    shuffled_loss = loss_fn(shuffled_pred.cpu(), labels)
+                    outputs = torch.cat([outputs, (real_loss - shuffled_loss).unsqueeze(0)])
+
+
+
+        if not whole_epoch:
+            loader_results = classification_report(
+                true_labels, outputs, output_dict=True, zero_division=0.0
+            )
+            test_results.append(loader_results)
+            if writer is not None:
+                writer.add_text(
+                    f"Test results {i}", pretty_json(loader_results), global_step=0
+                )
+        else:
+            loader_results = {"KLDivDiff": torch.mean(outputs).item()}
+            test_results.append(loader_results)
+
+    return test_results, outputs, true_labels
 
 def calculate_global_class_weights(
     datasets: list[Dataset],

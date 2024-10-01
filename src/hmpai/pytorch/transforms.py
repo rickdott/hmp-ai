@@ -1,5 +1,5 @@
 import torch
-from hmpai.utilities import MASKING_VALUE
+from hmpai.utilities import MASKING_VALUE, get_masking_indices, get_masking_index
 import random
 import numpy as np
 import braindecode.augmentation as aug
@@ -44,9 +44,9 @@ class TimeMasking(object):
 
         if random.random() > self.probability:
             return data, labels
-        
-        rt_idx = (data[:, 0] != MASKING_VALUE).nonzero(as_tuple=True)[0][-1].item() + 1
-        max_length = rt_idx - self.mask_len_samples
+
+        end_idx = get_masking_index(data)
+        max_length = end_idx - self.mask_len_samples
         # TODO: Fix when max_length < 0 (short stages in segment pred)
         start = random.randint(0, max_length)
 
@@ -54,11 +54,16 @@ class TimeMasking(object):
         t = t.repeat(channels, 1)
 
         s = 1000 / length
-        mask = (torch.sigmoid(s * -(t - start)) +
-            torch.sigmoid(s * (t - start - self.mask_len_samples))
-            ).float().to(data.device)
+        mask = (
+            (
+                torch.sigmoid(s * -(t - start))
+                + torch.sigmoid(s * (t - start - self.mask_len_samples))
+            )
+            .float()
+            .to(data.device)
+        )
         data = data * mask.transpose(1, 0)
-        labels[start:start+self.mask_len_samples] = 0
+        labels[start : start + self.mask_len_samples] = 0
         # data = data.transpose(1, 0).unsqueeze(0)
         # data, labels = self.augment(data, labels, torch.Tensor(start), self.mask_len_samples)
         # data = data.squeeze().transpose(1, 0)
@@ -87,13 +92,13 @@ class ShuffleOperations(object):
         labels = data[1]
         data = data[0]
         length = data.shape[0]
-        rt_idx = (data[:, 0] != MASKING_VALUE).nonzero(as_tuple=True)[0][-1].item() + 1
+        end_idx = get_masking_index(data)
 
         current_label = labels[0]
         sequence_indices = []
         start_idx = 0
 
-        for i in range(1, rt_idx):
+        for i in range(1, end_idx):
             if labels[i] != current_label:
                 sequence_indices.append((start_idx, i, current_label))
                 start_idx = i
@@ -138,8 +143,8 @@ class RandomCropTransform(object):
         data = data[0]
         length = data.shape[0]
 
-        rt_idx = (data[:, 0] != MASKING_VALUE).nonzero(as_tuple=True)[0][-1].item() + 1
-        start = random.randint(0, rt_idx)
+        end_idx = get_masking_index(data)
+        start = random.randint(0, end_idx)
         crop_length = random.randint(5, 15)
         end = start + crop_length
         cropped_data = data[start:end, :]
@@ -154,7 +159,8 @@ class RandomCropTransform(object):
         padded_labels[: cropped_labels.shape[0]] = cropped_labels
 
         return padded_data, padded_labels
-    
+
+
 class FixedLengthCropTransform(object):
     CROP_LENGTH = 50
 
@@ -165,8 +171,10 @@ class FixedLengthCropTransform(object):
         data = data_in[0]
         labels = data_in[1]
 
-        end_idx = (data[:, 0] != MASKING_VALUE).nonzero(as_tuple=True)[0][-1].item() + 1
-        start = torch.randint(0, max(end_idx - self.CROP_LENGTH, 1), (1,))
+        end_idx = get_masking_index(data)
+        max_start = max(end_idx - self.CROP_LENGTH, 1)
+        beta_sample = torch.distributions.Beta(0.5, 0.5).sample()
+        start = int(beta_sample * max_start)
         end = start + self.CROP_LENGTH
         # print(start, end)
         cropped_data = data[start:end, :]
@@ -174,16 +182,94 @@ class FixedLengthCropTransform(object):
 
         if cropped_data.shape[0] < self.CROP_LENGTH:
             offset = self.CROP_LENGTH - cropped_data.shape[0]
-            cropped_data = torch.nn.functional.pad(cropped_data, (0, 0, 0, offset), value=MASKING_VALUE)
-            cropped_labels = torch.nn.functional.pad(cropped_labels, (0, 0, 0, offset), value=0)
-            cropped_labels[-offset:,0] = 1.0
+            cropped_data = torch.nn.functional.pad(
+                cropped_data, (0, 0, 0, offset), value=MASKING_VALUE
+            )
+            cropped_labels = torch.nn.functional.pad(
+                cropped_labels, (0, 0, 0, offset), value=0
+            )
+            cropped_labels[-offset:, 0] = 1.0
 
         return cropped_data, cropped_labels
+
+
+class ReverseTimeTransform(object):
+    def __init__(self, probability=0.5):
+        self.probability = probability
+        pass
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        # Always use after cropping
+        if random.random() > self.probability:
+            return data, labels
+
+        end_idx = get_masking_index(data)
+        data_flipped = torch.flip(data[:end_idx], dims=[0])
+        labels_flipped = torch.flip(labels[:end_idx], dims=[0])
+        data[:end_idx] = data_flipped
+        labels[:end_idx] = labels_flipped
+        # data = torch.flip(data, dims=[0])
+        # labels = torch.flip(labels, dims=[0])
+
+        return data, labels
+
+
+class TimeMaskTransform(object):
+    def __init__(self, probability=0.5, mask_length=50):
+        self.probability = probability
+        self.mask_length = mask_length
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        if random.random() > self.probability:
+            return data, labels
+
+        end_idx = get_masking_index(data)
+        max_start = max(end_idx - self.mask_length, 1)
+        beta_sample = torch.distributions.Beta(0.5, 0.5).sample()
+        start = int(beta_sample * max_start)
+        end = start + self.mask_length
+        # print(start, end)
+        data[start:end] = MASKING_VALUE
+        labels[start:end] = 0
+        labels[start:end, 0] = 1.0
+
+        return data, labels
+
+
+class StartEndMaskTransform(object):
+    def __init__(self, probability=0.5, mask_length=50):
+        self.probability = probability
+        self.mask_length = mask_length
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        if random.random() > self.probability:
+            return data, labels
+
+        if random.random() > 0.5:
+            data[-self.mask_length :] = MASKING_VALUE
+            labels[-self.mask_length :] = 0
+            labels[-self.mask_length :, 0] = 1
+        else:
+            data[: self.mask_length] = MASKING_VALUE
+            labels[: self.mask_length] = 0
+            labels[: self.mask_length, 0] = 1
+
+        return data, labels
+
 
 class StartJitterTransform(object):
     def __init__(self, offset_before):
         self.offset_before = offset_before
-    
+
     def __call__(self, data_in):
         data = data_in[0]
         labels = data_in[1]
@@ -193,13 +279,33 @@ class StartJitterTransform(object):
         cropped_data = data[offset:, :]
         cropped_labels = labels[offset:, :]
 
-        cropped_data = torch.nn.functional.pad(cropped_data, (0, 0, 0, offset), value=MASKING_VALUE)
-        cropped_labels = torch.nn.functional.pad(cropped_labels, (0, 0, 0, offset), value=0)
-        cropped_labels[-offset:,0] = 1.0
+        cropped_data = torch.nn.functional.pad(
+            cropped_data, (0, 0, 0, offset), value=MASKING_VALUE
+        )
+        cropped_labels = torch.nn.functional.pad(
+            cropped_labels, (0, 0, 0, offset), value=0
+        )
+        cropped_labels[-offset:, 0] = 1.0
 
         return cropped_data, cropped_labels
+    
 
+class EndJitterTransform(object):
+    def __init__(self, extra_offset):
+        self.extra_offset = extra_offset
 
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        offset = torch.randint(self.extra_offset, (1,))
+
+        end_idx = get_masking_index(data)
+        data[end_idx - offset:end_idx, :] = MASKING_VALUE
+        labels[end_idx - offset:end_idx, :] = 0
+        labels[end_idx - offset:end_idx, 0] = 1.0
+
+        return data, labels
 
 class EegNoiseTransform(object):
     def __init__(self, arg1, arg2):

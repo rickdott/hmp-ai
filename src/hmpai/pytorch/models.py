@@ -2,7 +2,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from hmpai.utilities import MASKING_VALUE
+from hmpai.utilities import MASKING_VALUE, get_masking_indices
 import math
 from hmpai.pytorch.utilities import DEVICE
 from mamba_ssm import Mamba2, Mamba
@@ -518,29 +518,25 @@ class SAT1Mamba(nn.Module):
 class MambaModel(nn.Module):
     def __init__(self, embed_dim, n_channels, n_classes, n_layers, global_pool=False, dropout=0):
         super().__init__()
-        self.blocks = nn.Sequential(*[MambaBlock(embed_dim, dropout) for _ in range(n_layers)])
+        self.blocks = nn.Sequential(*[MambaBlock(256, dropout) for _ in range(n_layers)])
         self.global_pool = global_pool
         self.linear_in = nn.Linear(n_channels, embed_dim)
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=n_channels, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(in_channels=128, out_channels=embed_dim, kernel_size=3, stride=1, padding=1),
+            nn.Conv1d(in_channels=embed_dim, out_channels=256, kernel_size=50, stride=1, padding='same'),
             nn.ReLU(),
         )
-        self.linear_translation = nn.Linear(embed_dim, n_channels)
-        self.linear_out = nn.Linear(embed_dim, n_classes)
+        self.linear_translation = nn.Linear(256, n_channels)
+        self.linear_out = nn.Linear(256, n_classes)
         self.pretraining = False
 
     def forward(self, x):
-        mask = (x[:,:,0] == MASKING_VALUE).all(dim=1).t()
-        max_idx = mask.float().argmax(dim=0).max()
-        if max_idx != 0:
-            # mask = mask[:max_idx, :]
-            x = x[:, :max_idx, :]
+        max_index = get_masking_indices(x).max()
+        x = x[:, :max_index, :]
+        
         x = self.linear_in(x)
-        # x = x.permute(0, 2, 1)
-        # x = self.cnn(x)
-        # x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1)
+        x = self.cnn(x)
+        x = x.permute(0, 2, 1)
         # x = self.linear_cnn(x)
         out = self.blocks(x) if not self.global_pool else torch.mean(self.blocks(x), dim=1)
         out = self.linear_out(out) if not self.pretraining else self.linear_translation(out)

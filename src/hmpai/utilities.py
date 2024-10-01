@@ -1,6 +1,6 @@
 import numpy as np
 import json
-
+import torch
 
 # Channel configuration for topological layout, "NA" means 'not available' and should not be used in training
 CHANNELS_2D = np.array(
@@ -130,3 +130,21 @@ def print_results(results: dict|list) -> str:
             print(f1s)
             print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
             print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")
+
+
+def get_masking_indices(t):
+    # Expects a batch as input: [batch_size, time, channels]
+    # Also use this one if epoch is unsqueezed
+    mask = (t[:,:,0] == MASKING_VALUE)
+    reversed_mask = torch.flip(mask, dims=[1])
+    last_block_start = (~reversed_mask).float().argmax(dim=1)
+    max_indices = mask.shape[1] - last_block_start
+    return max_indices
+
+def get_masking_index(t):
+    # Expects a single epoch as input: [time, channels]
+    mask = (t[:, 0] == MASKING_VALUE)
+    reversed_mask = torch.flip(mask, dims=[0])
+    last_block_start = (~reversed_mask).float().argmax(dim=0)
+    max_index = mask.shape[0] - last_block_start
+    return max_index

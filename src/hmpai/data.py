@@ -404,12 +404,16 @@ class StageFinder:
         print("Transforming epoched data to principal component (PC) space")
         if "offset_before" in self.epoch_data.attrs:
             # Filter out offset_before data so HMP does not use it when fitting
+            # Assumes that 'extra_offset' is also in attributes
             epoch_data_no_offset = self.epoch_data.sel(
                 samples=range(
-                    self.epoch_data.offset_before, len(self.epoch_data.samples)
+                    self.epoch_data.offset_before,
+                    len(self.epoch_data.samples) - self.epoch_data.extra_offset,
                 )
             )
-            epoch_data_no_offset['samples'] = range(0, len(epoch_data_no_offset.samples))
+            epoch_data_no_offset["samples"] = range(
+                0, len(epoch_data_no_offset.samples)
+            )
             hmp_data = hmp.utils.transform_data(epoch_data_no_offset)
         else:
             hmp_data = hmp.utils.transform_data(self.epoch_data)
@@ -734,6 +738,14 @@ class StageFinder:
                             event_data = np.pad(
                                 event_data,
                                 pad_width=((self.epoch_data.offset_before, 0)),
+                                mode="constant",
+                                constant_values=0,
+                            )
+                        if "extra_offset" in self.epoch_data.attrs:
+                            # Right pad using extra_offset
+                            event_data = np.pad(
+                                event_data,
+                                pad_width=((0, self.epoch_data.extra_offset)),
                                 mode="constant",
                                 constant_values=0,
                             )
