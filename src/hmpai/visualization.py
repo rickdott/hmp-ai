@@ -7,8 +7,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
 import captum
-from hmpai.pytorch.generators import SAT1Dataset
-from hmpai.pytorch.utilities import DEVICE
+from hmpai.pytorch.utilities import DEVICE, save_tensor
 from torch.utils.data import DataLoader
 import torch
 from hmpai.utilities import MASKING_VALUE, get_masking_index, get_masking_indices
@@ -25,53 +24,53 @@ from pymer4.models import Lmer
 import warnings
 
 
-def add_attribution(
-    dataset: xr.Dataset, analyzer: captum.attr.Attribution, model: torch.nn.Module
-) -> xr.Dataset:
-    """
-    Analyzes the given dataset using the provided attribution method and model, and adds the analysis
-    results to the dataset.
+# def add_attribution(
+#     dataset: xr.Dataset, analyzer: captum.attr.Attribution, model: torch.nn.Module
+# ) -> xr.Dataset:
+#     """
+#     Analyzes the given dataset using the provided attribution method and model, and adds the analysis
+#     results to the dataset.
 
-    Args:
-        dataset (xr.Dataset): The dataset to analyze.
-        analyzer (captum.attr.Attribution): The attribution method to use for analysis.
-        model (torch.nn.Module): The model to use for analysis.
+#     Args:
+#         dataset (xr.Dataset): The dataset to analyze.
+#         analyzer (captum.attr.Attribution): The attribution method to use for analysis.
+#         model (torch.nn.Module): The model to use for analysis.
 
-    Returns:
-        xr.Dataset: The analyzed dataset with the analysis results added.
-    """
-    test_set = preprocess(dataset)
-    test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
-    test_set = test_set.assign(
-        analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=128, shuffle=False, pin_memory=True
-    )
+#     Returns:
+#         xr.Dataset: The analyzed dataset with the analysis results added.
+#     """
+#     test_set = preprocess(dataset)
+#     test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
+#     test_set = test_set.assign(
+#         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
+#     )
+#     test_loader = DataLoader(
+#         test_dataset, batch_size=128, shuffle=False, pin_memory=True
+#     )
 
-    # Batch-wise analyzing of data and adding analysis to the dataset
-    for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
-        # print(f"Batch: {i + 1}/{batches}")
-        batch_data = batch[0].to(DEVICE)
-        baselines = torch.clone(batch_data)
-        mask = baselines != MASKING_VALUE
-        baselines[mask] = 0
-        baselines = baselines.to(DEVICE)
-        target = torch.argmax(model(batch_data), dim=1)
-        batch_analysis = analyzer.attribute(
-            batch_data,
-            baselines=baselines,
-            n_steps=50,
-            method="riemann_trapezoid",
-            # Change to batch[1] if true values should be used instead of model predictions
-            target=target,
-            internal_batch_size=128,
-        )
-        test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
-            batch_analysis.cpu()
-        )
+#     # Batch-wise analyzing of data and adding analysis to the dataset
+#     for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
+#         # print(f"Batch: {i + 1}/{batches}")
+#         batch_data = batch[0].to(DEVICE)
+#         baselines = torch.clone(batch_data)
+#         mask = baselines != MASKING_VALUE
+#         baselines[mask] = 0
+#         baselines = baselines.to(DEVICE)
+#         target = torch.argmax(model(batch_data), dim=1)
+#         batch_analysis = analyzer.attribute(
+#             batch_data,
+#             baselines=baselines,
+#             n_steps=50,
+#             method="riemann_trapezoid",
+#             # Change to batch[1] if true values should be used instead of model predictions
+#             target=target,
+#             internal_batch_size=128,
+#         )
+#         test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
+#             batch_analysis.cpu()
+#         )
 
-    return test_set
+#     return test_set
 
 
 def plot_max_activation_per_label(
@@ -665,6 +664,7 @@ def plot_predictions_on_epoch(
     smoothing: bool = False,
     sequence: bool = False,
     random_perm: bool = False,
+    save_tensors: bool = False,
 ):  
     epoch = epoch.clone()
     def smooth_predictions(predictions, window_size):
@@ -693,6 +693,7 @@ def plot_predictions_on_epoch(
     else:
         pred = model(epoch.unsqueeze(0).to(DEVICE))
         pred = torch.nn.Softmax(dim=2)(pred)
+        pred = pred / pred.sum(dim=2, keepdim=True)
     pred = pred.cpu().detach().numpy()
     if smoothing:
         pred = smooth_predictions(pred, window_size)
@@ -709,9 +710,11 @@ def plot_predictions_on_epoch(
     
     # print(true)
     nrows = 3 if random_perm else 2
-    fig, ax = plt.subplots(nrows, 1, sharex=True)
+    fig, ax = plt.subplots(nrows, 1)
+    # fig, ax = plt.subplots(nrows, 1, sharex=True)
     ax[0].set_ylabel("HMP")
-    ax[1].set_ylabel("Model")
+    ax[0].set_xlabel("Samples")
+    ax[1].set_ylabel("Mamba")
     # plt.setp(ax, ylim=(0, 0.1))
     fig.supylabel('Probability')
     fig.supxlabel('Samples')
@@ -725,6 +728,9 @@ def plot_predictions_on_epoch(
             label=labels[i + 1],
             legend=False,
         )
+    if save_tensors:
+        save_tensor(true[:rt_idx], 'hmp_pred.csv')
+        save_tensor(pred.squeeze()[:rt_idx, 1:], 'mamba_pred.csv')
     # Model probability
     for i in range(1, empty.shape[1]):
         sns.lineplot(
@@ -768,6 +774,10 @@ def plot_predictions_on_epoch(
                 empty = pred.squeeze()
             shuffled_preds[i_shuf, :empty.shape[0], :] = empty
         shuffled_preds = shuffled_preds.mean(axis=0)
+        shuffled_preds = shuffled_preds / shuffled_preds.sum(axis=1, keepdims=True)
+        if save_tensors:
+            save_tensor(shuffled_preds[:rt_idx, 1:], 'shuffled_pred.csv')
+
         # Shuffled probability
         ax[2].set_ylabel('Shuffled')
         for i in range(1, shuffled_preds.shape[1]):
@@ -1097,3 +1107,24 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
         # Customize the plot
         plt.legend(title="Condition")
     plt.show()
+
+
+def plot_epoch(item: tuple, title: str = ''):
+    # Input is (data, labels, ... (info))
+    data = item[0]
+    labels = item[1]
+
+    # Plot 1 channel and all (?) labels
+    fig, ax = plt.subplots(2, 1, sharex=True)
+    plt.title(title)
+
+    ax[0].set_ylim((-5, 5))
+
+    sns.lineplot(data[:,0], ax=ax[0])
+    for i in range(labels.shape[-1]):
+        if i == 0:
+            sns.lineplot(labels[:, i] * 0.1, ax=ax[1])
+        else:
+            sns.lineplot(labels[:,i], ax=ax[1])
+
+    plt.plot()

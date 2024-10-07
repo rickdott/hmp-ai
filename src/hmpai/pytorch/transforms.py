@@ -42,7 +42,7 @@ class TimeMasking(object):
         data = data[0]
         length, channels = data.shape
 
-        if random.random() > self.probability:
+        if random.random() < self.probability:
             return data, labels
 
         end_idx = get_masking_index(data)
@@ -143,7 +143,7 @@ class RandomCropTransform(object):
         data = data[0]
         length = data.shape[0]
 
-        end_idx = get_masking_index(data)
+        end_idx = get_masking_index(data, search_value=torch.nan)
         start = random.randint(0, end_idx)
         crop_length = random.randint(5, 15)
         end = start + crop_length
@@ -151,7 +151,7 @@ class RandomCropTransform(object):
         cropped_labels = labels[start:end]
 
         padded_data = torch.full(
-            (length, cropped_data.shape[1]), MASKING_VALUE, dtype=cropped_data.dtype
+            (length, cropped_data.shape[1]), torch.nan, dtype=cropped_data.dtype
         )
         padded_labels = torch.full((length,), 0, dtype=cropped_labels.dtype)
 
@@ -171,7 +171,7 @@ class FixedLengthCropTransform(object):
         data = data_in[0]
         labels = data_in[1]
 
-        end_idx = get_masking_index(data)
+        end_idx = get_masking_index(data, search_value=torch.nan)
         max_start = max(end_idx - self.CROP_LENGTH, 1)
         beta_sample = torch.distributions.Beta(0.5, 0.5).sample()
         start = int(beta_sample * max_start)
@@ -183,7 +183,7 @@ class FixedLengthCropTransform(object):
         if cropped_data.shape[0] < self.CROP_LENGTH:
             offset = self.CROP_LENGTH - cropped_data.shape[0]
             cropped_data = torch.nn.functional.pad(
-                cropped_data, (0, 0, 0, offset), value=MASKING_VALUE
+                cropped_data, (0, 0, 0, offset), value=torch.nan
             )
             cropped_labels = torch.nn.functional.pad(
                 cropped_labels, (0, 0, 0, offset), value=0
@@ -206,7 +206,7 @@ class ReverseTimeTransform(object):
         if random.random() > self.probability:
             return data, labels
 
-        end_idx = get_masking_index(data)
+        end_idx = get_masking_index(data, search_value=torch.nan)
         data_flipped = torch.flip(data[:end_idx], dims=[0])
         labels_flipped = torch.flip(labels[:end_idx], dims=[0])
         data[:end_idx] = data_flipped
@@ -229,17 +229,50 @@ class TimeMaskTransform(object):
         if random.random() > self.probability:
             return data, labels
 
-        end_idx = get_masking_index(data)
+        end_idx = get_masking_index(data, search_value=torch.nan)
         max_start = max(end_idx - self.mask_length, 1)
         beta_sample = torch.distributions.Beta(0.5, 0.5).sample()
         start = int(beta_sample * max_start)
         end = start + self.mask_length
         # print(start, end)
-        data[start:end] = MASKING_VALUE
+        data[start:end] = data.mean()
         labels[start:end] = 0
         labels[start:end, 0] = 1.0
 
         return data, labels
+    
+
+class TimeDropoutTransform(object):
+    def __init__(self, probability=0.5, mask_length=50):
+        self.probability = probability
+        self.mask_length = mask_length
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+
+        original_length = data.shape[0]
+
+        if random.random() > self.probability:
+            return data, labels
+
+        end_idx = get_masking_index(data, search_value=torch.nan)
+        max_start = max(end_idx - self.mask_length, 1)
+
+        beta_sample = torch.distributions.Beta(0.5, 0.5).sample()
+        start = int(beta_sample * max_start)
+        end = start + self.mask_length
+
+        # Cut out the data and stitch the remaining parts together
+        data_stitched = torch.cat((data[:start], data[end:]), dim=0)
+        labels_stitched = torch.cat((labels[:start], labels[end:]), dim=0)
+
+        padding_size = original_length - data_stitched.shape[0]
+        data_padded = torch.nn.functional.pad(data_stitched, (0, 0, 0, padding_size), value=torch.nan)
+        labels_padded = torch.nn.functional.pad(labels_stitched, (0, 0, 0, padding_size), value=0.0)
+        labels_padded[-padding_size:, 0] = 1.0
+
+        return data_padded, labels_padded
 
 
 class StartEndMaskTransform(object):
@@ -255,11 +288,11 @@ class StartEndMaskTransform(object):
             return data, labels
 
         if random.random() > 0.5:
-            data[-self.mask_length :] = MASKING_VALUE
+            data[-self.mask_length :] = torch.nan
             labels[-self.mask_length :] = 0
             labels[-self.mask_length :, 0] = 1
         else:
-            data[: self.mask_length] = MASKING_VALUE
+            data[: self.mask_length] = torch.nan
             labels[: self.mask_length] = 0
             labels[: self.mask_length, 0] = 1
 
@@ -280,7 +313,7 @@ class StartJitterTransform(object):
         cropped_labels = labels[offset:, :]
 
         cropped_data = torch.nn.functional.pad(
-            cropped_data, (0, 0, 0, offset), value=MASKING_VALUE
+            cropped_data, (0, 0, 0, offset), value=torch.nan
         )
         cropped_labels = torch.nn.functional.pad(
             cropped_labels, (0, 0, 0, offset), value=0
@@ -300,12 +333,20 @@ class EndJitterTransform(object):
 
         offset = torch.randint(self.extra_offset, (1,))
 
-        end_idx = get_masking_index(data)
-        data[end_idx - offset:end_idx, :] = MASKING_VALUE
-        labels[end_idx - offset:end_idx, :] = 0
-        labels[end_idx - offset:end_idx, 0] = 1.0
+        end_idx = get_masking_index(data, search_value=torch.nan)
+        data[end_idx - offset:, :] = torch.nan
+        labels[end_idx - offset:, :] = 0
+        labels[end_idx - offset:, 0] = 1.0
 
         return data, labels
+
+class ConcatenateTransform(object):
+    def __init__(self, concat_probability=0.5):
+        # Stub class for notifying the generator that concatenation is happening
+        self.concat_probability = concat_probability
+    
+    def __call__(self, data_in):
+        return data_in
 
 class EegNoiseTransform(object):
     def __init__(self, arg1, arg2):

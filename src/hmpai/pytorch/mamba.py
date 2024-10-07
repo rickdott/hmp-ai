@@ -46,6 +46,7 @@ class ConfigurableMamba(nn.Module):
         # Extract function if multiple mamba modules
         max_index = get_masking_indices(x).max()
         x = x[:, :max_index, :]
+        
         x = self.linear_in(x)
 
         if self.use_cnn:

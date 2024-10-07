@@ -1,6 +1,8 @@
 import numpy as np
 import json
+import math
 import torch
+
 
 # Channel configuration for topological layout, "NA" means 'not available' and should not be used in training
 CHANNELS_2D = np.array(
@@ -102,7 +104,7 @@ def pretty_json(data: dict) -> str:
     return "".join(f"\t{line}" for line in json_data.splitlines(True))
 
 
-def print_results(results: dict|list) -> str:
+def print_results(results: dict | list) -> str:
     # From a list of test results to an aggregated accuracy and F1-Score
     if type(results) is list:
         accuracies = []
@@ -110,9 +112,9 @@ def print_results(results: dict|list) -> str:
         for result in results:
             accuracies.append(result["accuracy"])
             f1s.append(result["macro avg"]["f1-score"])
-        print('Accuracies')
+        print("Accuracies")
         print(accuracies)
-        print('F1-Scores')
+        print("F1-Scores")
         print(f1s)
         print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
         print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")
@@ -124,26 +126,37 @@ def print_results(results: dict|list) -> str:
             for result in test_set_results:
                 accuracies.append(result["accuracy"])
                 f1s.append(result["macro avg"]["f1-score"])
-            print('Accuracies')
+            print("Accuracies")
             print(accuracies)
-            print('F1-Scores')
+            print("F1-Scores")
             print(f1s)
             print(f"Average Accuracy: {np.mean(accuracies)}, std: {np.std(accuracies)}")
             print(f"Average F1-Score: {np.mean(f1s)}, std: {np.std(f1s)}")
 
 
-def get_masking_indices(t):
+def get_masking_indices(t, search_value=MASKING_VALUE):
     # Expects a batch as input: [batch_size, time, channels]
     # Also use this one if epoch is unsqueezed
-    mask = (t[:,:,0] == MASKING_VALUE)
+    if isinstance(search_value, float) and math.isnan(search_value):
+        mask = torch.isnan(t[:, :, 0])
+    elif torch.is_tensor(search_value) and torch.isnan(search_value):
+        mask = torch.isnan(t[:, :, 0])
+    else:
+        mask = t[:, :, 0] == search_value
     reversed_mask = torch.flip(mask, dims=[1])
     last_block_start = (~reversed_mask).float().argmax(dim=1)
     max_indices = mask.shape[1] - last_block_start
     return max_indices
 
-def get_masking_index(t):
+
+def get_masking_index(t, search_value=MASKING_VALUE):
     # Expects a single epoch as input: [time, channels]
-    mask = (t[:, 0] == MASKING_VALUE)
+    if isinstance(search_value, float) and math.isnan(search_value):
+        mask = torch.isnan(t[:, 0])
+    elif torch.is_tensor(search_value) and torch.isnan(search_value):
+        mask = torch.isnan(t[:, 0])
+    else:
+        mask = t[:, 0] == search_value
     reversed_mask = torch.flip(mask, dims=[0])
     last_block_start = (~reversed_mask).float().argmax(dim=0)
     max_index = mask.shape[0] - last_block_start

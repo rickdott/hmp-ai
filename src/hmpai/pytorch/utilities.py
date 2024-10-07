@@ -1,3 +1,4 @@
+import pandas as pd
 import torch
 import random
 import numpy as np
@@ -47,3 +48,12 @@ def save_model(
 
 def load_model(path: Path) -> dict:
     return torch.load(path)
+
+
+def save_tensor(tensor: torch.Tensor, filename: str) -> None:
+    if type(tensor) != np.ndarray:
+        np_tensor = tensor.squeeze().numpy()
+    else:
+        np_tensor = np.squeeze(tensor)
+    df_tensor = pd.DataFrame(np_tensor)
+    df_tensor.to_csv(filename, index=False)

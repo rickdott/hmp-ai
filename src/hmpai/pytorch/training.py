@@ -1,4 +1,5 @@
 from collections import defaultdict, Counter
+from hmpai.pytorch.correlation import emd
 from hmpai.pytorch.normalization import get_norm_vars_from_global_statistics
 from hmpai.utilities import pretty_json
 from torch.utils.data import DataLoader, Dataset
@@ -26,6 +27,7 @@ from copy import deepcopy
 import re
 from hmpai.training import get_folds, split_participants
 from hmpai.pytorch.loss import kl_div_loss_with_correlation_regularization
+from hmpai.pytorch.soft_dtw_cuda import SoftDTW
 
 
 def pretrain(
@@ -250,6 +252,7 @@ def train_and_test(
             # KLDivLoss for calculating loss between probability distributions
             # loss = torch.nn.CrossEntropyLoss()
             loss = torch.nn.KLDivLoss(reduction="batchmean", log_target=False)
+            # loss = SoftDTW(use_cuda=True, gamma=0.1)
             # loss = kl_div_loss_with_correlation_regularization
         else:
             # TODO: Think about ignore_index
@@ -701,7 +704,7 @@ def test_shuffled(
         # Assume type is DataLoader
         test_loader = [test_loader]
     for i, loader in enumerate(test_loader):
-        outputs = torch.Tensor()
+        outputs = []
         true_labels = torch.Tensor()
         with torch.no_grad():
             for batch in loader:
@@ -719,27 +722,33 @@ def test_shuffled(
                 elif isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
                     # Add loss to outputs (1, 1) shape
-                    labels = labels + 1e-8
-                    labels = labels / labels.sum(dim=-1, keepdim=True)
+                    # labels = labels + 1e-8
+                    # labels = labels / labels.sum(dim=-1, keepdim=True)
                     # real_loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()[..., 1:]), labels[..., 1:])
-                    real_loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()), labels)
+                    # real_loss = loss_fn(torch.nn.LogSoftmax(dim=2)(predictions.cpu()), labels)
+                    pred_metric = emd(torch.nn.Softmax(dim=2)(predictions.cpu()), labels)
 
                     shuffled_pred = torch.zeros_like(predictions)
+                    shuffled_metric = torch.zeros((labels.shape[0], labels.shape[-1] - 1))
                     lengths = torch.sum(data[:, :, 0] != MASKING_VALUE, dim=1)
                     data_clone = data.clone()
-                    for _ in range(5):
+                    n_shuffles = 5
+                    for _ in range(n_shuffles):
                         for i_l, length in enumerate(lengths):
                             data_clone[i_l, :length] = data_clone[i_l, torch.randperm(length)]
                         # Softmax here so we are calculating with probas, not logits
-                        shuffled_pred += torch.nn.LogSoftmax(dim=2)(model(data_clone.to(DEVICE)))
+                        shuffled_pred = torch.nn.Softmax(dim=2)(model(data_clone.to(DEVICE)))
+                        shuffled_metric += emd(shuffled_pred, labels) # (batch_size, 4)
 
-                    shuffled_pred = shuffled_pred / 5
+                    # Average metric value per class over 5 shuffled predictions
+                    shuffled_metric = shuffled_metric / n_shuffles
+                    # (batch_size, 4)
+                    outputs.append(pred_metric - shuffled_metric)
                     
                     # shuffled_loss = loss_fn(shuffled_pred.cpu()[..., 1:], labels[..., 1:])
-                    shuffled_loss = loss_fn(shuffled_pred.cpu(), labels)
-                    outputs = torch.cat([outputs, (real_loss - shuffled_loss).unsqueeze(0)])
+                    # shuffled_loss = loss_fn(shuffled_pred.cpu(), labels)
 
-
+            outputs = torch.cat(outputs, dim=0).float()
 
         if not whole_epoch:
             loader_results = classification_report(
@@ -751,7 +760,7 @@ def test_shuffled(
                     f"Test results {i}", pretty_json(loader_results), global_step=0
                 )
         else:
-            loader_results = {"KLDivDiff": torch.mean(outputs).item()}
+            loader_results = {"EMD": outputs.mean(dim=0), "EMD_raw": outputs}
             test_results.append(loader_results)
 
     return test_results, outputs, true_labels

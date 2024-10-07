@@ -1,3 +1,5 @@
+import random
+from hmpai.visualization import plot_epoch
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose
 import netCDF4
@@ -7,6 +9,8 @@ import numpy as np
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess, MASKING_VALUE
 from hmpai.pytorch.normalization import *
 from hmpai.pytorch.utilities import DEVICE
+from hmpai.pytorch.transforms import ConcatenateTransform
+from hmpai.utilities import get_masking_index, get_masking_indices
 import pyedflib
 from pathlib import Path
 from functools import lru_cache
@@ -314,6 +318,7 @@ class MultiXArrayProbaDataset(Dataset):
         add_negative: bool = False,
         probabilistic_labels: bool = False, # Return labels as probabilities over each class instead of categorical
         skip_samples: int = 0, # Skip this amount of samples, used to skip pre-stimulus samples
+        cut_samples: int = 0, # Take this amount of samples from the end, used to skip extra post-response offset samples
     ):
         self.data_paths = data_paths
         self.transform = transform
@@ -358,6 +363,16 @@ class MultiXArrayProbaDataset(Dataset):
         self.add_negative = add_negative
         self.probabilistic_labels = probabilistic_labels
         self.skip_samples = skip_samples
+        self.cut_samples = cut_samples
+
+        if self.transform is not None:
+            for i, tf in enumerate(self.transform.transforms):
+                if isinstance(tf, ConcatenateTransform):
+                    self.concat_probability = tf.concat_probability
+                    self.transform.transforms.pop(i)
+                    break
+        else:
+            self.concat_probability = 0
 
         self.index_map = (
             self._create_index_map()
@@ -549,7 +564,7 @@ class MultiXArrayProbaDataset(Dataset):
             global_ds_cache[file_path] = xr.open_dataset(file_path)
         return global_ds_cache[file_path]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, concat=False, debug=False):
         indices = self.index_map[idx]
 
         ds = self._get_dataset(indices[0])
@@ -599,23 +614,56 @@ class MultiXArrayProbaDataset(Dataset):
                 sample_label = torch.nn.functional.pad(
                     sample_label, (pad_left, pad_right), mode="constant", value=0
                 )
-            # sample_label = torch.nn.Softmax(dim=0)(sample_label)
             if self.add_negative:
                 sample_label[0, :] = 1 - sample_label.sum(axis=0)
             sample_label = sample_label.transpose(1, 0)
             # sample_label = sample_label / torch.sum(sample_label, dim=1, keepdim=True)
+
+        # Swap samples and channels dims, since [time, features] is expected
+        sample_data = sample_data.transpose(1, 0)
+        if debug:
+            plot_epoch((sample_data, sample_label), "Raw")
+
+        end_idx = get_masking_index(sample_data, search_value=torch.nan)
+        sample_data[end_idx - self.cut_samples:end_idx,:] = torch.nan
+        sample_label[end_idx - self.cut_samples:end_idx,:] = 0
+        if self.add_negative:
+            sample_label[end_idx - self.cut_samples:end_idx, 0] = 1.0
+            
+        sample_data = sample_data[self.skip_samples:, :]
+        sample_label = sample_label[self.skip_samples:, :]
+
+        if self.transform is not None:
+            sample_data, sample_label = self.transform((sample_data, sample_label))
+            if debug:
+                plot_epoch((sample_data, sample_label), "Cut and transformed")
+        if concat:
+            return sample_data, sample_label
+        # Get concat data before normalizing?
+        elif self.concat_probability > 0:
+            if random.random() < self.concat_probability:
+                # Get random index (or make a pre-existing permutation so every concat is the same for every index?)
+                # Need concat=true to prevent infinite loop with 1 proba
+                concat_data, concat_label = self.__getitem__(random.randint(0, self.__len__() - 1), concat=True)
+                if self.transform is not None:
+                    concat_data, concat_label = self.transform((concat_data, concat_label))
+                    
+                end_idx = get_masking_index(sample_data, search_value=torch.nan)
+                sample_data = torch.concat((sample_data[:end_idx], concat_data), dim=0)[:634]
+                sample_label = torch.concat((sample_label[:end_idx], concat_label), dim=0)[:634]
+
+                if debug:
+                    plot_epoch((sample_data, sample_label), "Concat cut & transformed")
+
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
+        sample_label[:, 1:] = sample_label[:, 1:] / sample_label[:, 1:].sum(dim=0, keepdim=True)
+        if self.add_negative:
+            sample_label[:, 0] = 1 - sample_label[:, 1:].sum(axis=1)
 
         # fillna with masking_value
         sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
-        # Swap samples and channels dims, since [time, features] is expected
-        sample_data = sample_data.transpose(1, 0)
-
-        sample_data = sample_data[self.skip_samples:, :]
-        sample_label = sample_label[self.skip_samples:, :]
-        
-        if self.transform is not None:
-            sample_data, sample_label = self.transform((sample_data, sample_label))
+        if debug:
+            plot_epoch((sample_data, sample_label), "End result")
 
         if self.keep_info:
             values_to_keep = [
