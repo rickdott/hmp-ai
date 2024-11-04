@@ -371,6 +371,7 @@ class MultiXArrayProbaDataset(Dataset):
                     self.concat_probability = tf.concat_probability
                     self.transform.transforms.pop(i)
                     break
+            self.concat_probability = 0
         else:
             self.concat_probability = 0
 
@@ -641,7 +642,7 @@ class MultiXArrayProbaDataset(Dataset):
             return sample_data, sample_label
         # Get concat data before normalizing?
         elif self.concat_probability > 0:
-            if random.random() < self.concat_probability:
+            if torch.rand((1,)).item() < self.concat_probability:
                 # Get random index (or make a pre-existing permutation so every concat is the same for every index?)
                 # Need concat=true to prevent infinite loop with 1 proba
                 concat_data, concat_label = self.__getitem__(random.randint(0, self.__len__() - 1), concat=True)
@@ -734,6 +735,16 @@ class MultiXArrayProbaDataset(Dataset):
 
     def __len__(self):
         return len(self.index_map)
+    
+    def set_transform(self, compose: Compose):
+        self.transform = compose
+        for i, tf in enumerate(self.transform.transforms):
+            if isinstance(tf, ConcatenateTransform):
+                self.concat_probability = tf.concat_probability
+                self.transform.transforms.pop(i)
+                break
+        self.concat_probability = 0
+
 
 
 class MultiXArrayDataset(Dataset):

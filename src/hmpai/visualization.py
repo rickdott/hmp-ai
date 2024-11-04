@@ -15,13 +15,14 @@ from tqdm.notebook import tqdm
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 import pandas as pd
-from scipy.stats import ttest_rel
+from scipy.stats import ttest_rel, ttest_ind
 from typing import List, Optional
 import json
 from rpy2.robjects import conversion, default_converter
 from sklearn.preprocessing import StandardScaler
 from pymer4.models import Lmer
 import warnings
+from hmpai.utilities import set_seaborn_style
 
 
 # def add_attribution(
@@ -646,15 +647,6 @@ def plot_performance_from_file(
     plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos, ylim=ylim)
     return res
 
-
-def set_seaborn_style():
-    sns.set_style("ticks")
-    sns.set_context("paper")
-    sns.set_palette("tab10")
-    # Dutch field
-    # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))
-
-
 def plot_predictions_on_epoch(
     epoch: torch.Tensor,
     true: torch.Tensor,
@@ -665,8 +657,9 @@ def plot_predictions_on_epoch(
     sequence: bool = False,
     random_perm: bool = False,
     save_tensors: bool = False,
-):  
+):
     epoch = epoch.clone()
+
     def smooth_predictions(predictions, window_size):
         smoothed = np.copy(predictions)
         for i in range(window_size // 2, len(predictions) - window_size // 2):
@@ -702,12 +695,12 @@ def plot_predictions_on_epoch(
         for i, prediction in enumerate(pred):
             # TODO: Handle global pool case
             # empty[i,:] = prediction
-            empty[i, i:i+window_size, :] = prediction
+            empty[i, i : i + window_size, :] = prediction
             # empty[i + window_size // 2, :] = prediction
         empty = np.nanmean(empty, axis=0)
     else:
         empty = pred.squeeze()
-    
+
     # print(true)
     nrows = 3 if random_perm else 2
     fig, ax = plt.subplots(nrows, 1)
@@ -716,8 +709,8 @@ def plot_predictions_on_epoch(
     ax[0].set_xlabel("Samples")
     ax[1].set_ylabel("Mamba")
     # plt.setp(ax, ylim=(0, 0.1))
-    fig.supylabel('Probability')
-    fig.supxlabel('Samples')
+    fig.supylabel("Probability")
+    fig.supxlabel("Samples")
     # HMP Probability
     for i in range(0, true.shape[1]):
         sns.lineplot(
@@ -729,8 +722,8 @@ def plot_predictions_on_epoch(
             legend=False,
         )
     if save_tensors:
-        save_tensor(true[:rt_idx], 'hmp_pred.csv')
-        save_tensor(pred.squeeze()[:rt_idx, 1:], 'mamba_pred.csv')
+        save_tensor(true[:rt_idx], "hmp_pred.csv")
+        save_tensor(pred.squeeze()[:rt_idx, 1:], "mamba_pred.csv")
     # Model probability
     for i in range(1, empty.shape[1]):
         sns.lineplot(
@@ -749,7 +742,6 @@ def plot_predictions_on_epoch(
             empty = np.full((epoch.size()[0], epoch.size()[0], len(labels)), np.nan)
             perm = torch.randperm(rt_idx)
             epoch[:rt_idx] = epoch[perm]
-            true[:rt_idx] = true[perm]
             if not sequence:
                 slices = get_padded_slices(epoch, window_size, include_start_end=False)
                 stacked = torch.stack(slices).to(DEVICE)
@@ -767,19 +759,21 @@ def plot_predictions_on_epoch(
                 for i, prediction in enumerate(pred):
                     # TODO: Handle global pool case
                     # empty[i,:] = prediction
-                    empty[i, i:i+window_size, :] = prediction
+                    empty[i, i : i + window_size, :] = prediction
                     # empty[i + window_size // 2, :] = prediction
                 empty = np.nanmean(empty, axis=0)
             else:
                 empty = pred.squeeze()
-            shuffled_preds[i_shuf, :empty.shape[0], :] = empty
+            shuffled_preds[i_shuf, : empty.shape[0], :] = empty
         shuffled_preds = shuffled_preds.mean(axis=0)
         shuffled_preds = shuffled_preds / shuffled_preds.sum(axis=1, keepdims=True)
         if save_tensors:
-            save_tensor(shuffled_preds[:rt_idx, 1:], 'shuffled_pred.csv')
+            save_tensor(shuffled_preds[:rt_idx, 1:], "shuffled_pred.csv")
 
         # Shuffled probability
-        ax[2].set_ylabel('Shuffled')
+        ax[2].set_ylabel("Shuffled")
+        ax[1].set_ylim((0, 0.05))
+        ax[2].set_ylim((0, 0.05))
         for i in range(1, shuffled_preds.shape[1]):
             sns.lineplot(
                 x=range(len(shuffled_preds[:rt_idx, i])),
@@ -1011,7 +1005,11 @@ def plot_ratio_true_over_RT(data: pd.DataFrame, operation: str):
 def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
     warnings.filterwarnings("ignore")
     data = data.copy()
-    auc_columns = [column for column in data.columns if column.endswith('_auc') and not column.startswith('negative')]
+    auc_columns = [
+        column
+        for column in data.columns
+        if column.endswith("_auc") and not column.startswith("negative")
+    ]
     # auc_columns = [column for column in data.columns if column.endswith("_auc")]
     # data[auc_columns] = (data[auc_columns] - data[auc_columns].min()) / (data[auc_columns].max() - data[auc_columns].min())
     data["sum_auc"] = data[auc_columns].sum(axis=1)
@@ -1029,7 +1027,7 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
     fig, ax = plt.subplots(2, 2, figsize=(10, 6))
     set_seaborn_style()
     plt.tight_layout()
-    plt.setp(ax, ylabel='P(response == 1)')
+    plt.setp(ax, ylabel="P(response == 1)")
     # plt.setp(ax, xlim=(0, 1), ylabel="P(response == 1)")
 
     plot_loc = {
@@ -1109,7 +1107,7 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
     plt.show()
 
 
-def plot_epoch(item: tuple, title: str = ''):
+def plot_epoch(item: tuple, title: str = ""):
     # Input is (data, labels, ... (info))
     data = item[0]
     labels = item[1]
@@ -1120,11 +1118,151 @@ def plot_epoch(item: tuple, title: str = ''):
 
     ax[0].set_ylim((-5, 5))
 
-    sns.lineplot(data[:,0], ax=ax[0])
+    sns.lineplot(data[:, 0], ax=ax[0])
     for i in range(labels.shape[-1]):
         if i == 0:
             sns.lineplot(labels[:, i] * 0.1, ax=ax[1])
         else:
-            sns.lineplot(labels[:,i], ax=ax[1])
+            sns.lineplot(labels[:, i], ax=ax[1])
 
     plt.plot()
+
+
+def add_significance_annotations(p_value, group1, group2, y_position, ax):
+    """Adds significance stars based on p-value."""
+    if p_value < 0.001:
+        significance = "***"
+    elif p_value < 0.01:
+        significance = "**"
+    elif p_value < 0.05:
+        significance = "*"
+    else:
+        significance = "ns"  # Not significant
+
+    # Plot the annotation
+    x1, x2 = group1, group2
+    ax.plot(
+        [x1, x1, x2, x2],
+        [y_position, y_position + 0.01, y_position + 0.01, y_position],
+        lw=1.0,
+        color="black",
+        alpha=1.0,
+    )
+    ax.text(
+        (x1 + x2) / 2,
+        y_position + 0.02,
+        significance,
+        ha="center",
+        va="bottom",
+        color="black",
+        alpha=1.0,
+    )
+
+
+def plot_tertile_split(
+    data: pd.DataFrame,
+    column: str,
+    conditions: list[str],
+    calc_tertile_over_condition: bool = False,
+    normalize: str = "auc",
+):
+    pd.options.mode.chained_assignment = None
+    set_seaborn_style()
+    data = data.copy()
+
+    # Also do ratio here? Does not make sense since for non-confirmation operations we are certain that they exist?
+    if column.endswith("_ratio"):
+        if normalize == "auc":
+            auc_columns = [
+                column
+                for column in data.columns
+                if column.endswith("_auc") and not column.startswith("negative")
+            ]
+            data["sum_auc"] = data[auc_columns].sum(axis=1)
+            data[f"{column}"] = (
+                data[f"{column.replace('_ratio', '_auc')}"] / data["sum_auc"]
+            )
+        if normalize == "time":
+            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / data["rt_x"]
+        # column = f"{column}_ratio"
+
+    # Calculate tertiles per participant, over conditions
+    if calc_tertile_over_condition:
+        data["condition"] = data.groupby("participant")[column].transform(
+            lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"])
+        )
+
+    # Set up plot
+    fig, ax = plt.subplots(1, len(conditions), sharey=True, figsize=(8, 4))
+    plt.setp(ax, ylim=(0.5, 1.1))
+    ax[0].set_ylabel("P(response == 1)")
+
+    for i, condition in enumerate(conditions):
+        # Subset to condition
+        data_subset = data[data.SAT == condition]
+        if not calc_tertile_over_condition:
+            data_subset["condition"] = data_subset.groupby("participant")[
+                column
+            ].transform(lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"]))
+        # Calculate P(response == 1), per participant and per condition
+        participant_ratios = (
+            data_subset.groupby(["participant", "condition"], observed=True)
+            .response.mean()
+            .reset_index()
+        )
+
+        i_ax = ax[i]
+        sns.violinplot(
+            x="condition",
+            y="response",
+            data=participant_ratios,
+            hue="condition",
+            palette="mako_r",
+            ax=i_ax,
+            cut=0,
+        )
+
+        # Plot participant lines
+        # for participant in participant_ratios["participant"].unique():
+        #     participant_data = participant_ratios[
+        #         participant_ratios["participant"] == participant
+        #     ]
+        #     i_ax.plot(
+        #         participant_data["condition"],
+        #         participant_data["response"],
+        #         marker=".",
+        #         color="black",
+        #         alpha=0.3,
+        #     )
+
+        # i_ax.set_title(f"{condition.capitalize()} (n={len(data_subset)})")
+        i_ax.set_title(f"{condition.capitalize()}")
+        i_ax.set_xlabel("")
+        col_words = column.split("_")
+        fig.supxlabel(f"{col_words[0].capitalize()} ratio tertiles")
+        i_ax.set_ylabel(f"Probability of correct response")
+
+        # t-test subsets
+        low_data = participant_ratios[participant_ratios["condition"] == "Low"][
+            "response"
+        ]
+        medium_data = participant_ratios[participant_ratios["condition"] == "Medium"][
+            "response"
+        ]
+        high_data = participant_ratios[participant_ratios["condition"] == "High"][
+            "response"
+        ]
+
+        # Perform pairwise t-tests
+        ttest_low_medium = ttest_ind(low_data, medium_data)
+        ttest_medium_high = ttest_ind(medium_data, high_data)
+        ttest_low_high = ttest_ind(low_data, high_data)
+
+        # Add significance annotations to the plot
+        top = participant_ratios.response.max()
+        add_significance_annotations(ttest_low_medium.pvalue, 0, 1, top + 0.01, i_ax)
+        add_significance_annotations(ttest_medium_high.pvalue, 1, 2, top + 0.05, i_ax)
+        add_significance_annotations(ttest_low_high.pvalue, 0, 2, top + 0.09, i_ax)
+    plt.tight_layout()
+    plt.savefig(f"../../img/tertile_split_{column}.svg", transparent=True)
+    plt.show()

@@ -1,10 +1,12 @@
 from collections import defaultdict
+from hmpai.utilities import set_seaborn_style
+from matplotlib import pyplot as plt
 import netCDF4
 import xarray as xr
 import hmp
 import numpy as np
 from pathlib import Path, PosixPath
-from hmpai.utilities import MASKING_VALUE, CHANNELS_2D
+from hmpai.utilities import MASKING_VALUE, CHANNELS_2D, get_masking_indices_xr
 from tqdm.notebook import tqdm
 
 
@@ -344,8 +346,9 @@ class StageFinder:
         fit_function="fit",
         fit_args=dict(),
         verbose=False,
-        n_comp=4,
+        n_comp=None,
         fits_to_load=[],
+        event_width=50,
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -365,26 +368,63 @@ class StageFinder:
 
         # Load required data and set up paths
         if isinstance(epoched_data, Path) or type(epoched_data) is str:
-            self.epoch_data = xr.load_dataset(epoched_data)
+            self.epoch_data = xr.open_dataset(epoched_data)
+            # self.epoch_data = xr.load_dataset(epoched_data)
         else:
             self.epoch_data = epoched_data
+        self.n_comp = n_comp
 
+        # Transform data into principal component (PC) space
+        # will ask in a pop-up how many components to keep
+        # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
+        print("Transforming epoched data to principal component (PC) space")
+        if "offset_before" in self.epoch_data.attrs:
+            # Filter out offset_before data so HMP does not use it when fitting
+            # Assumes that 'extra_offset' is also in attributes
+            # TODO: extra_offset is dependent on RT?
+            # Cut off beginning using offset
+            epoch_data_no_offset = self.epoch_data.sel(
+                samples=range(
+                    self.epoch_data.offset_before, len(self.epoch_data.samples)
+                )
+            )
+            # For each epoch, remove last 'extra_offset' samples by setting data to NaN
+            reordered = epoch_data_no_offset.stack({'trial_x_participant': ['participant', 'epochs']}).transpose('trial_x_participant', ...)
+            indices = get_masking_indices_xr(reordered.data, search_value=np.nan)
+            for i, index in enumerate(indices):
+                reordered.data[i,:,index-reordered.extra_offset:index] = np.nan
+            epoch_data_no_offset = reordered.unstack().transpose('participant', 'epochs', ...)
+
+            epoch_data_no_offset["samples"] = range(
+                0, len(epoch_data_no_offset.samples)
+            )
+            self.epoch_data_offset = epoch_data_no_offset
+            self.hmp_data_offset = hmp.utils.transform_data(
+                epoch_data_no_offset, n_comp=self.n_comp, apply_zscore='all'
+            )
+        else:
+            self.epoch_data_offset = self.epoch_data
+            self.hmp_data_offset = hmp.utils.transform_data(
+                self.epoch_data, n_comp=self.n_comp, apply_zscore='all'
+            )
         self.verbose = verbose
         self.labels = labels
-        self.main_labels = self.labels[
-            max(self.labels, key=lambda k: len(self.labels[k]))
-        ]
+        self.main_labels = (
+            self.labels[max(self.labels, key=lambda k: len(self.labels[k]))]
+            if type(labels) is dict
+            else self.labels
+        )
         self.conditions = conditions
         self.condition_variable = condition_variable
         self.condition_method = condition_method
         self.cpus = cpus
         self.fit_function = fit_function
         self.fit_args = fit_args
-        self.n_comp = n_comp
         self.models = []
         self.fits = []
         self.hmp_data = []
         self.fits_to_load = fits_to_load
+        self.event_width = event_width
 
         if self.verbose:
             print("Epoch data used:")
@@ -398,32 +438,12 @@ class StageFinder:
     def fit_model(self):
         # Fits HMP model on dataset
 
-        # Transform data into principal component (PC) space
-        # will ask in a pop-up how many components to keep
-        # selection depends on data size, choose number at cutoff (90/99%) or at 'elbow' point
-        print("Transforming epoched data to principal component (PC) space")
-        if "offset_before" in self.epoch_data.attrs:
-            # Filter out offset_before data so HMP does not use it when fitting
-            # Assumes that 'extra_offset' is also in attributes
-            epoch_data_no_offset = self.epoch_data.sel(
-                samples=range(
-                    self.epoch_data.offset_before,
-                    len(self.epoch_data.samples) - self.epoch_data.extra_offset,
-                )
-            )
-            epoch_data_no_offset["samples"] = range(
-                0, len(epoch_data_no_offset.samples)
-            )
-            hmp_data = hmp.utils.transform_data(epoch_data_no_offset)
-        else:
-            hmp_data = hmp.utils.transform_data(self.epoch_data)
-
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
         if len(self.conditions) > 0:
             for idx, condition in enumerate(self.conditions):
                 condition_subset = hmp.utils.condition_selection(
-                    hmp_data,
+                    self.hmp_data_offset,
                     None,  # epoch_data deprecated
                     condition,
                     variable=self.condition_variable,
@@ -445,14 +465,16 @@ class StageFinder:
                         "trial_x_participant", "samples", "event"
                     )
                     model = hmp.models.hmp(
-                        hmp_data,
-                        self.epoch_data,
+                        condition_subset,
+                        self.epoch_data_offset,
                         cpus=self.cpus,
                         sfreq=self.epoch_data.sfreq,
+                        event_width=self.event_width,
                     )
                     self.models.append(model)
                 else:
                     print(f"Fitting HMP model for {condition} condition")
+                    # Add 
                     fit = self.__fit_model__(condition_subset)
 
                 self.fits.append(fit)
@@ -461,12 +483,32 @@ class StageFinder:
             print("Fitting HMP model")
             # Determine amount of expected events from number of supplied labels
             # Subtract 1 since pre-attentive stage does not have a peak
-            if self.fit_function == "fit_single":
-                self.fit_args["n_events"] = len(self.labels) - 1
-            fit = self.__fit_model__(hmp_data)
-            self.fits.append(fit)
-            self.hmp_data.append(hmp_data)
-            self.conditions.append("No condition")
+            if len(self.fits_to_load) > 0:
+                print(f"Loading fitted HMP model for No condition")
+                fit = self.fits_to_load[-1]
+                fit = hmp.utils.load_fit(fit)
+                # Manual transpose after loading https://github.com/GWeindel/hmp/issues/122
+                fit["eventprobs"] = fit.eventprobs.transpose(
+                    "trial_x_participant", "samples", "event"
+                )
+                self.fits.append(fit)
+                model = hmp.models.hmp(
+                    self.hmp_data_offset,
+                    self.epoch_data_offset,
+                    cpus=self.cpus,
+                    sfreq=self.epoch_data.sfreq,
+                    event_width=self.event_width,
+                )
+                self.hmp_data.append(self.hmp_data_offset)
+                self.models.append(model)
+                self.conditions.append("No condition")
+            else:
+                if self.fit_function == "fit_single":
+                    self.fit_args["n_events"] = len(self.labels) - 1
+                fit = self.__fit_model__(self.hmp_data_offset)
+                self.fits.append(fit)
+                self.hmp_data.append(self.hmp_data_offset)
+                self.conditions.append("No condition")
 
     def label_model(self, label_fn=None, label_fn_kwargs=None, probabilistic=False):
         model_labels = None
@@ -508,28 +550,79 @@ class StageFinder:
 
         return stage_data
 
-    def visualize_model(self, positions):
-        for condition in zip(
-            self.fits,
-            self.models,
-            self.hmp_data,
-            self.conditions,
-        ):
-            hmp.visu.plot_topo_timecourse(
-                self.epoch_data,
-                condition[0],
-                positions,
-                condition[1],
-                times_to_display=np.mean(condition[1].ends - condition[1].starts),
-                max_time=int(max([len(fit.samples) for fit in self.fits]) / 2),
-                figsize=(10, 1),
-                ylabels={"Condition": [condition[3]]},
+    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None):
+        set_seaborn_style()
+        if len(self.fits) > 1:
+            fig, ax = plt.subplots(len(self.fits), 1, figsize=(12, 3), sharex=True)
+            for i, condition in enumerate(
+                zip(
+                    self.fits,
+                    self.models,
+                    self.hmp_data,
+                    self.conditions,
+                )
+            ):
+                sfreq = self.epoch_data.sfreq
+                max_time = (
+                    max_time
+                    if max_time is not None
+                    else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
+                    * 1000
+                )
+                ax_i = hmp.visu.plot_topo_timecourse(
+                    self.epoch_data_offset,
+                    condition[0],
+                    positions,
+                    condition[1],
+                    times_to_display=(np.mean(condition[1].ends - condition[1].starts)),
+                    max_time=max_time,
+                    ylabels={"": [condition[3].capitalize()]},
+                    as_time=True,
+                    estimate_method="max",
+                    ax=ax[i],
+                    event_lines=None,
+                    vmin=-7e-6,
+                    vmax=7e-6,
+                    colorbar=colorbar,
+                )
+                ax[i] = ax_i
+            ax[-1].set_xlabel("Time (in ms)")
+            fig.supylabel("Condition")
+            return fig, ax
+        else:
+            sfreq = self.epoch_data.sfreq
+            max_time = (
+                max_time
+                if max_time is not None
+                else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
+                * 1000
             )
-
+            return hmp.visu.plot_topo_timecourse(
+                    self.epoch_data_offset,
+                    self.fits[0],
+                    positions,
+                    self.models[0],
+                    times_to_display=(np.mean(self.models[0].ends - self.models[0].starts)),
+                    max_time=max_time,
+                    ylabels={"": [self.conditions[0].capitalize()] if cond_label is None else [cond_label]},
+                    as_time=True,
+                    estimate_method="max",
+                    ax=ax,
+                    event_lines=None,
+                    vmin=-7e-6,
+                    vmax=7e-6,
+                    colorbar=colorbar,
+                    magnify=1.5,
+                )
+        
     def __fit_model__(self, hmp_data):
         # Initialize model
         model = hmp.models.hmp(
-            hmp_data, self.epoch_data, cpus=self.cpus, sfreq=self.epoch_data.sfreq
+            hmp_data,
+            self.epoch_data_offset,
+            cpus=self.cpus,
+            sfreq=self.epoch_data.sfreq,
+            event_width=self.event_width,
         )
         self.models.append(model)
 

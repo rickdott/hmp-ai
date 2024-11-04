@@ -3,6 +3,30 @@ from torch import nn
 from mamba_ssm import Mamba2, Mamba
 from hmpai.utilities import MASKING_VALUE, get_masking_indices
 
+def base_mamba():
+    embed_dim = 64
+    out_channels = 128
+    base_cnn = nn.Sequential(
+        nn.Conv1d(
+            in_channels=embed_dim,
+            out_channels=out_channels,
+            kernel_size=50,
+            stride=1,
+            padding='same',
+        ),
+        nn.ReLU(),
+    )
+    model_kwargs = {
+        "embed_dim": embed_dim,
+        "mamba_dim": out_channels,
+        "n_channels": 19,
+        "n_classes": 5, # TODO, get label length other way
+        "n_mamba_layers": 5,
+        "cnn_module": base_cnn,
+        "dropout": 0.1,
+    }
+    model = ConfigurableMamba(**model_kwargs)
+    return model
 
 class ConfigurableMamba(nn.Module):
     def __init__(

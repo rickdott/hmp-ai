@@ -2,6 +2,8 @@ import numpy as np
 import json
 import math
 import torch
+import xarray as xr
+import seaborn as sns
 
 
 # Channel configuration for topological layout, "NA" means 'not available' and should not be used in training
@@ -161,3 +163,40 @@ def get_masking_index(t, search_value=MASKING_VALUE):
     last_block_start = (~reversed_mask).float().argmax(dim=0)
     max_index = mask.shape[0] - last_block_start
     return max_index
+
+def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
+    # Check if search_value is NaN
+    if isinstance(search_value, float) and np.isnan(search_value):
+        mask = np.isnan(data.isel(channels=0))  # Select the first channel and apply NaN mask
+    else:
+        mask = data.isel(channels=0) == search_value  # Comparison for non-NaN search values
+
+    # Reverse mask along the time dimension
+    reversed_mask = mask.isel(samples=slice(None, None, -1))
+    
+    # Find the first occurrence of non-mask values in the reversed mask
+    last_block_start = (~reversed_mask).argmax(dim='samples')
+    
+    # Calculate the max indices based on the mask shape and block start positions
+    max_indices = mask.shape[1] - last_block_start.values  # Adjusting based on time dimension length
+
+    return max_indices
+
+def set_seaborn_style():
+    sns.set_style("ticks")
+    sns.set_context("paper")
+    # sns.set_palette("tab10")
+    # Mononoke
+    sns.set_palette(
+        sns.color_palette(
+            [
+                "#4477AA",
+                "#66CCEE",
+                "#228833",
+                "#CCBB44",
+                "#EE6677",
+                "#AA3377",
+            ]
+        )
+    )
+    # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))

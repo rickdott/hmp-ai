@@ -42,7 +42,7 @@ class TimeMasking(object):
         data = data[0]
         length, channels = data.shape
 
-        if random.random() < self.probability:
+        if torch.rand((1,)).item() < self.probability:
             return data, labels
 
         end_idx = get_masking_index(data)
@@ -203,7 +203,7 @@ class ReverseTimeTransform(object):
         labels = data_in[1]
 
         # Always use after cropping
-        if random.random() > self.probability:
+        if torch.rand((1,)).item() > self.probability:
             return data, labels
 
         end_idx = get_masking_index(data, search_value=torch.nan)
@@ -226,7 +226,7 @@ class TimeMaskTransform(object):
         data = data_in[0]
         labels = data_in[1]
 
-        if random.random() > self.probability:
+        if torch.rand((1,)).item() > self.probability:
             return data, labels
 
         end_idx = get_masking_index(data, search_value=torch.nan)
@@ -253,7 +253,7 @@ class TimeDropoutTransform(object):
 
         original_length = data.shape[0]
 
-        if random.random() > self.probability:
+        if torch.rand((1,)).item() > self.probability:
             return data, labels
 
         end_idx = get_masking_index(data, search_value=torch.nan)
@@ -284,10 +284,10 @@ class StartEndMaskTransform(object):
         data = data_in[0]
         labels = data_in[1]
 
-        if random.random() > self.probability:
+        if torch.rand((1,)).item() > self.probability:
             return data, labels
 
-        if random.random() > 0.5:
+        if torch.rand((1,)).item() > 0.5:
             data[-self.mask_length :] = torch.nan
             labels[-self.mask_length :] = 0
             labels[-self.mask_length :, 0] = 1
@@ -300,12 +300,16 @@ class StartEndMaskTransform(object):
 
 
 class StartJitterTransform(object):
-    def __init__(self, offset_before):
+    def __init__(self, offset_before, probability=0.5):
         self.offset_before = offset_before
+        self.probability = probability
 
     def __call__(self, data_in):
         data = data_in[0]
         labels = data_in[1]
+
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels
 
         offset = torch.randint(self.offset_before, (1,))
 
@@ -324,13 +328,17 @@ class StartJitterTransform(object):
     
 
 class EndJitterTransform(object):
-    def __init__(self, extra_offset):
+    def __init__(self, extra_offset, probability=0.5):
         self.extra_offset = extra_offset
+        self.probability = probability
 
     def __call__(self, data_in):
         data = data_in[0]
         labels = data_in[1]
 
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels
+        
         offset = torch.randint(self.extra_offset, (1,))
 
         end_idx = get_masking_index(data, search_value=torch.nan)
