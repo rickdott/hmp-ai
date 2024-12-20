@@ -2,6 +2,7 @@ from collections import defaultdict, Counter
 from hmpai.pytorch.correlation import correlate, emd
 from hmpai.pytorch.normalization import get_norm_vars_from_global_statistics
 from hmpai.utilities import pretty_json
+from hmpai.visualization import plot_loss
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
 from hmpai.pytorch.utilities import (
@@ -28,6 +29,8 @@ import re
 from hmpai.training import get_folds, split_participants
 from hmpai.pytorch.loss import kl_div_loss_with_correlation_regularization
 from hmpai.pytorch.soft_dtw_cuda import SoftDTW
+from Levenshtein import distance
+from scipy.stats import spearmanr
 
 
 def pretrain(
@@ -215,7 +218,8 @@ def train_and_test(
                     pin_memory=True,
                 )
             )
-
+    # Functions that take in predictions and labels and return a value
+    metrics = {"cum_mse": cum_mse, "emd": emd_loss, "spearman": spearman_corr}
     # Set up logging
     write_log = logs_path is not None
     if write_log:
@@ -278,6 +282,9 @@ def train_and_test(
                     progress=tepoch,
                     do_spectral_decoupling=do_spectral_decoupling,
                     whole_epoch=whole_epoch,
+                    writer=writer,
+                    epoch=epoch,
+                    metrics=metrics,
                 )
             else:
                 batch_losses = pretrain_train(
@@ -291,7 +298,7 @@ def train_and_test(
             for i, val_loader in enumerate(val_loaders):
                 if pretrain_fn is None:
                     val_losses, val_accuracy = validate(
-                        model, val_loader, loss, whole_epoch
+                        model, val_loader, loss, whole_epoch, metrics, epoch, writer
                     )
                 else:
                     val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
@@ -318,7 +325,7 @@ def train_and_test(
                         loss,
                     )
             if write_log:
-                writer.add_scalar("loss", mean_train_loss, global_step=epoch)
+                writer.add_scalar("train_loss", mean_train_loss, global_step=epoch)
                 writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
                 writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
                 writer.flush()
@@ -342,7 +349,7 @@ def train_and_test(
                 model, test_loaders, loss, writer, labels, whole_epoch
             )
         else:
-            results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch)
+            results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch, metrics, epoch)
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -458,6 +465,9 @@ def train(
     progress: tqdm = None,
     do_spectral_decoupling: bool = False,
     whole_epoch: bool = False,
+    writer: SummaryWriter = None,
+    epoch: int = None,
+    metrics: dict = None,
 ) -> list[float]:
     """Train model for all batches, one epoch.
 
@@ -490,8 +500,24 @@ def train(
 
         if len(predictions.shape) == 3:
             if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
-                # Add small value to prevent log(0), re-normalize
-                loss = kldiv_loss(predictions, labels)
+                loss, exp_loss = kldiv_loss(predictions.clone(), labels.clone())
+                # Calculate training metrics
+                if metrics is not None:
+                    for metric_name, metric_fn in metrics.items():
+                        metric_val = metric_fn(predictions.clone(), labels.clone())
+                        writer.add_scalar(
+                            f"train_{metric_name}",
+                            metric_val,
+                            (epoch * progress.total) + progress.n,
+                        )
+                # Class-wise loss
+                for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
+                    writer.add_scalar(
+                        f"train_loss_class{i_loss}",
+                        loss_class,
+                        (epoch * progress.total) + progress.n,
+                    )
+
             elif loss_fn == kl_div_loss_with_correlation_regularization:
                 loss = kl_div_loss_with_correlation_regularization(
                     predictions, labels, model, data
@@ -524,12 +550,15 @@ def train(
         if progress is not None:
             progress.update(1)
             if i % 5 == 0:
-                progress.set_postfix({"loss": round(np.mean(loss_per_batch), 5)})
+                progress.set_postfix(
+                    {
+                        "loss": round(np.mean(loss_per_batch), 5),
+                    }
+                )
 
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-
     return loss_per_batch
 
 
@@ -538,6 +567,9 @@ def validate(
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
     whole_epoch: bool = False,
+    metrics: dict = None,
+    epoch: int = None,
+    writer: SummaryWriter = None,
 ) -> (list[float], float):
     """Validate model.
 
@@ -561,7 +593,7 @@ def validate(
     with torch.no_grad():
         all_labels = []
         all_preds = []
-        for batch in validation_loader:
+        for batch_i, batch in enumerate(validation_loader):
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
             predictions = model(data)
@@ -581,10 +613,18 @@ def validate(
             total_correct += correct_predictions
             total_instances += labels.numel()
             # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
+            if metrics is not None:
+                for metric_name, metric_fn in metrics.items():
+                    metric_val = metric_fn(predictions.clone(), labels.clone())
+                    writer.add_scalar(
+                        f"val_{metric_name}",
+                        metric_val,
+                        (epoch * len(validation_loader)) + batch_i,
+                    )
             if len(predictions.shape) == 3:
                 if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
-                    loss = kldiv_loss(predictions, labels)
+                    loss, _ = kldiv_loss(predictions, labels)
                 elif loss_fn == kl_div_loss_with_correlation_regularization:
                     loss = kl_div_loss_with_correlation_regularization(
                         predictions, labels, model, data
@@ -630,6 +670,8 @@ def test(
     writer: SummaryWriter = None,
     class_labels: list[str] = None,
     whole_epoch: bool = False,
+    metrics: dict = None,
+    epoch: int = None,
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -655,7 +697,7 @@ def test(
         outputs = []
         true_labels = torch.Tensor()
         with torch.no_grad():
-            for batch in loader:
+            for batch_i, batch in enumerate(loader):
                 data, labels = batch[0].to(DEVICE), batch[1]
                 predictions = model(data)
                 # Cut off labels if needed
@@ -663,14 +705,22 @@ def test(
                     labels = labels[:, : predictions.shape[1]]
 
                 dim = len(predictions.shape) - 1
+                if metrics is not None:
+                    for metric_name, metric_fn in metrics.items():
+                        metric_val = metric_fn(predictions.clone(), labels.clone())
+                        writer.add_scalar(
+                            f"test_{metric_name}",
+                            metric_val,
+                            (epoch * len(test_loader)) + batch_i,
+                        )
                 if not whole_epoch:
                     predictions = torch.argmax(predictions, dim=dim)
                     outputs = torch.cat([outputs, predictions.flatten().cpu()])
                     true_labels = torch.cat([true_labels, labels.flatten().cpu()])
                 elif isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
-                    loss = kldiv_loss(predictions, labels)
-                    outputs.append(loss.to('cpu'))
+                    loss, _ = kldiv_loss(predictions, labels)
+                    outputs.append(loss.to("cpu"))
                 elif isinstance(loss_fn, SoftDTW):
                     loss = 0
                     labels = labels.to("cuda")
@@ -750,7 +800,7 @@ def test_shuffled(
                     true_labels = torch.cat([true_labels, labels.flatten().cpu()])
                 elif isinstance(loss_fn, torch.nn.KLDivLoss):
                     pred = torch.nn.Softmax(dim=2)(predictions.cpu())
-                    pred_metric = correlate("kldiv_symmetric", pred, labels)
+                    pred_metric = correlate("mse", pred, labels)
                     pred_peak = pred[..., 1:].max(dim=1).values.to("cpu")
 
                     shuffled_pred = torch.zeros_like(predictions)
@@ -772,7 +822,7 @@ def test_shuffled(
                             model(data_clone.to(DEVICE))
                         )
                         shuffled_metric += correlate(
-                            "kldiv_symmetric", shuffled_pred, labels
+                            "mse", shuffled_pred, labels
                         )  # (batch_size, 4)
                         shuffled_peak += (
                             shuffled_pred[..., 1:].max(dim=1).values.to("cpu")
@@ -950,9 +1000,27 @@ def prepare_data(
     )
     return train_data, test_data, val_data, class_weights
 
+
+def emd_loss(predictions: torch.Tensor, labels: torch.Tensor):
+    predictions = predictions.to(DEVICE)
+    labels = labels.to(DEVICE)
+    predictions = torch.nn.functional.softmax(predictions, dim=2)
+    # predictions = predictions / predictions.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+    labels = labels / labels.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+    # Create cumulative distributions
+    cdf_pred = torch.cumsum(predictions, dim=-1)
+    cdf_labels = torch.cumsum(labels, dim=-1)
+    # Compute the L1 distance between the cumulative distributions
+    emd = torch.abs(cdf_pred - cdf_labels).mean(
+        dim=-1
+    )  # Mean across the time dimension
+    return emd.mean().item()  # Mean across the batch
+
+
 def kldiv_loss(predictions: torch.Tensor, labels: torch.Tensor):
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
+
     # Predictions = model logits, non-softmaxed
     # labels = raw labels including negative, sums up to 1 at each time step
     # SYMMETRIC
@@ -961,19 +1029,73 @@ def kldiv_loss(predictions: torch.Tensor, labels: torch.Tensor):
     # predictions = torch.nn.functional.softmax(predictions, dim=2)
     # forward_kl_loss = torch.nn.functional.kl_div(predictions.log(), labels, reduction='batchmean')
     # reverse_kl_loss = torch.nn.functional.kl_div(labels.log(), predictions, reduction='batchmean')
-    # loss = (forward_kl_loss + reverse_kl_loss) / 2
+    # kldiv_loss = (forward_kl_loss + reverse_kl_loss) / 2
+    predictions = torch.nn.functional.softmax(predictions, dim=2)
 
-    # FORWARD
+    dtw = SoftDTW(use_cuda=True, gamma=1, normalize=True)
+    # # FORWARD
+    dtw_loss = dtw(labels, predictions).mean()
+
     labels = labels + 1e-8
     labels = labels / labels.sum(dim=-1, keepdim=True)
-    predictions = torch.nn.functional.softmax(predictions, dim=2)
-    forward_kl_loss = torch.nn.functional.kl_div(predictions.log(), labels, reduction='batchmean')
-    loss = forward_kl_loss
 
+    forward_kl_loss = torch.nn.functional.kl_div(
+        predictions.log(), labels, reduction="none"
+    )
+    # forward_kl_loss[:,:,0] *= 0.0001
+    # forward_kl_loss[:,:,5] *= 4
+    # batchmean normalization
+    loss = forward_kl_loss.sum() / predictions.shape[0]
+    loss += dtw_loss
+
+    # loss = cum_mse(predictions, labels)
+    # loss = torch.nn.functional.cross_entropy(predictions[:,:,1:], labels[:,:,1:])
     # BACKWARD
     # labels = labels + 1e-8
     # labels = labels / labels.sum(dim=-1, keepdim=True)
     # predictions = torch.nn.functional.softmax(predictions, dim=2)
     # reverse_kl_loss = torch.nn.functional.kl_div(labels.log(), predictions, reduction='batchmean')
-    # loss = reverse_kl_loss
-    return loss
+    # kldiv_loss = reverse_kl_loss
+
+    # Combine with MSE
+    # l1_loss = torch.norm(predictions[..., 1:], p=1)
+    # lambda_l1 = 0.001
+    # loss = kldiv_loss + lambda_l1 * l1_loss
+    return loss, forward_kl_loss
+
+
+def cum_mse(predictions: torch.Tensor, labels: torch.Tensor):
+    predictions = predictions.to(DEVICE)
+    labels = labels.to(DEVICE)
+
+    predictions = torch.nn.functional.softmax(predictions, dim=2)
+
+    pred_cum = torch.cumsum(predictions, dim=0)
+    true_cum = torch.cumsum(labels, dim=0)
+
+    sq_diff = (pred_cum - true_cum) ** 2
+    c_mse = sq_diff[:, :, 1:].mean()
+
+    return c_mse
+
+
+def spearman_corr(predictions: torch.Tensor, labels: torch.Tensor):
+    predictions = predictions.to(DEVICE)
+    labels = labels.to(DEVICE)
+    predictions = torch.nn.functional.softmax(predictions, dim=2)
+
+    # (batch_size, labels) tensor of predicted label order, excepting negative class
+    rankings = predictions[:, :, 1:].argmax(dim=1).argsort().argsort()
+    # Create ground truth ranks (vectorized truth) for comparison
+    # Assumes that amount of labels == the longest sequence possible, wont work if there are two classes that only occur in one condition
+    truth = torch.arange(0, rankings.size(-1))  # Truth: 0, 1, 2, ..., num_classes-1
+    truth_ranks = truth.expand(rankings.size(0), -1).to(rankings.device)
+
+    n = truth.size(0)
+
+    rank_diffs = truth_ranks - rankings
+    rank_diffs_squared = rank_diffs.pow(2).sum(dim=1)
+    spearman_corr = 1 - (6 * rank_diffs_squared) / (n * (n**2 - 1))
+
+    # Average Spearman correlations over the batch
+    return spearman_corr.mean().item()

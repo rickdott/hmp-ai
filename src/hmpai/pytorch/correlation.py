@@ -81,10 +81,13 @@ def kldiv(t1: torch.Tensor, t2: torch.Tensor, epsilon: float = 1e-10) -> float:
     if (t2 == epsilon).all():
         return torch.nan
 
-    divergence = F.kl_div(torch.log(t1), t2, reduction='batchmean')
+    divergence = F.kl_div(torch.log(t1), t2, reduction="batchmean")
     return divergence
 
-def kldiv_symmetric(t1: torch.Tensor, t2: torch.Tensor, epsilon: float = 1e-10) -> float:
+
+def kldiv_symmetric(
+    t1: torch.Tensor, t2: torch.Tensor, epsilon: float = 1e-10
+) -> float:
     # t1 = t1 + epsilon
     t2 = t2 + epsilon
     # Normalize to make sure they are valid distributions
@@ -96,8 +99,8 @@ def kldiv_symmetric(t1: torch.Tensor, t2: torch.Tensor, epsilon: float = 1e-10) 
     if (t2 == epsilon).all():
         return torch.nan
 
-    forward_divergence = F.kl_div(torch.log(t1), t2, reduction='batchmean')
-    backward_divergence = F.kl_div(torch.log(t2), t1, reduction='batchmean')
+    forward_divergence = F.kl_div(torch.log(t1), t2, reduction="batchmean")
+    backward_divergence = F.kl_div(torch.log(t2), t1, reduction="batchmean")
     return 0.5 * (forward_divergence + backward_divergence)
 
 
@@ -119,6 +122,20 @@ def multiply(t1: torch.Tensor, t2: torch.Tensor) -> float:
     return correlation.sum()
 
 
+def mse(t1: torch.Tensor, t2: torch.Tensor) -> float:
+    squared_error = (t1 - t2) ** 2
+    return squared_error.mean()
+
+def cum_mse(t1: torch.Tensor, t2: torch.Tensor) -> float:
+
+    t1_cum = torch.cumsum(t1, dim=0)
+    t2_cum = torch.cumsum(t2, dim=0)
+
+    sq_diff = (t1_cum - t2_cum) ** 2
+    c_mse = sq_diff.mean()
+
+    return c_mse
+
 def emd(t1: torch.Tensor, t2: torch.Tensor) -> float:
     if (t2 == 0).all():
         return torch.nan
@@ -130,7 +147,8 @@ def jsd(t1: torch.Tensor, t2: torch.Tensor) -> float:
         return torch.nan
 
     jsd = jensenshannon(t1, t2)
-    return jsd.mean()
+    # jensenshannon function returns distance (root of divergence), so we square
+    return jsd ** 2
 
 
 TYPES = {
@@ -141,5 +159,7 @@ TYPES = {
     "multiply": multiply,
     "emd": emd,
     "jsd": jsd,
-    "kldiv_symmetric": kldiv_symmetric
+    "kldiv_symmetric": kldiv_symmetric,
+    "mse": mse,
+    "cumulative_mse": cum_mse,
 }

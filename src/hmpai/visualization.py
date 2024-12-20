@@ -1,4 +1,5 @@
 from collections import defaultdict, Counter
+from hmpai.behaviour.sat2 import match_on_event_name
 from mne.viz import plot_topomap
 from mne import Info
 import numpy as np
@@ -657,6 +658,7 @@ def plot_predictions_on_epoch(
     sequence: bool = False,
     random_perm: bool = False,
     save_tensors: bool = False,
+    save: bool = False,
 ):
     epoch = epoch.clone()
 
@@ -707,7 +709,7 @@ def plot_predictions_on_epoch(
     # fig, ax = plt.subplots(nrows, 1, sharex=True)
     ax[0].set_ylabel("HMP")
     ax[0].set_xlabel("Samples")
-    ax[1].set_ylabel("Mamba")
+    ax[1].set_ylabel("S4")
     # plt.setp(ax, ylim=(0, 0.1))
     fig.supylabel("Probability")
     fig.supxlabel("Samples")
@@ -717,7 +719,7 @@ def plot_predictions_on_epoch(
             x=range(len(true[:rt_idx, i])),
             y=true[:rt_idx, i],
             ax=ax[0],
-            color=sns.color_palette()[i + 1],
+            color=sns.color_palette('tab10')[i + 1],
             label=labels[i + 1],
             legend=False,
         )
@@ -730,7 +732,7 @@ def plot_predictions_on_epoch(
             x=range(len(empty[:rt_idx, i])),
             y=empty[:rt_idx, i],
             ax=ax[1],
-            color=sns.color_palette()[i],
+            color=sns.color_palette('tab10')[i],
             label=labels[i],
             legend=False,
         )
@@ -772,14 +774,14 @@ def plot_predictions_on_epoch(
 
         # Shuffled probability
         ax[2].set_ylabel("Shuffled")
-        ax[1].set_ylim((0, 0.05))
-        ax[2].set_ylim((0, 0.05))
+        # ax[1].set_ylim((0, 0.1))
+        # ax[2].set_ylim((0, 0.1))
         for i in range(1, shuffled_preds.shape[1]):
             sns.lineplot(
                 x=range(len(shuffled_preds[:rt_idx, i])),
                 y=shuffled_preds[:rt_idx, i],
                 ax=ax[2],
-                color=sns.color_palette()[i],
+                color=sns.color_palette('tab10')[i],
                 label=labels[i],
                 legend=False,
             )
@@ -787,6 +789,8 @@ def plot_predictions_on_epoch(
     handles, _ = ax[1].get_legend_handles_labels()
     fig.legend(handles, labels[1:])
     plt.tight_layout()
+    if save:
+        plt.savefig("../../img/drieluik.svg", transparent=True)
     plt.show()
 
 
@@ -885,6 +889,8 @@ def predict_with_auc(
     for batch in loader:
         data = {info_key: batch[2][0][info_key] for info_key in info_to_keep}
         pred = model(batch[0].to(DEVICE))
+        rt_indices = get_masking_indices(batch[0])
+        data['rt_index_samples'] = rt_indices
         pred = torch.nn.Softmax(dim=2)(pred)
         pred = pred.cpu().detach()
         batch_aucs = torch.sum(pred, dim=1)
@@ -1106,6 +1112,17 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
         plt.legend(title="Condition")
     plt.show()
 
+def plot_eeg(epoch: torch.Tensor):
+    set_seaborn_style()
+    plt.figure(figsize=(6, 2))
+    epoch = epoch[:get_masking_index(epoch)]
+    for channel in range(epoch.shape[1]):
+        sns.lineplot(epoch[:, channel])
+    plt.xlabel("Samples")
+    plt.ylabel("Normalized EEG")
+    plt.tight_layout()
+    plt.savefig("../../img/eeg.svg", transparent=True)
+    plt.show()
 
 def plot_epoch(item: tuple, title: str = ""):
     # Input is (data, labels, ... (info))
@@ -1143,14 +1160,14 @@ def add_significance_annotations(p_value, group1, group2, y_position, ax):
     x1, x2 = group1, group2
     ax.plot(
         [x1, x1, x2, x2],
-        [y_position, y_position + 0.01, y_position + 0.01, y_position],
+        [y_position, y_position * 1.025, y_position * 1.025, y_position],
         lw=1.0,
         color="black",
         alpha=1.0,
     )
     ax.text(
         (x1 + x2) / 2,
-        y_position + 0.02,
+        y_position * 1.025,
         significance,
         ha="center",
         va="bottom",
@@ -1183,7 +1200,7 @@ def plot_tertile_split(
                 data[f"{column.replace('_ratio', '_auc')}"] / data["sum_auc"]
             )
         if normalize == "time":
-            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / data["rt_x"]
+            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / (data["rt_x"] / 1000)
         # column = f"{column}_ratio"
 
     # Calculate tertiles per participant, over conditions
@@ -1239,7 +1256,7 @@ def plot_tertile_split(
         i_ax.set_title(f"{condition.capitalize()}")
         i_ax.set_xlabel("")
         col_words = column.split("_")
-        fig.supxlabel(f"{col_words[0].capitalize()} ratio tertiles")
+        fig.supxlabel(f"Average {col_words[0]} probability tertile")
         i_ax.set_ylabel(f"Probability of correct response")
 
         # t-test subsets
@@ -1265,4 +1282,328 @@ def plot_tertile_split(
         add_significance_annotations(ttest_low_high.pvalue, 0, 2, top + 0.09, i_ax)
     plt.tight_layout()
     plt.savefig(f"../../img/tertile_split_{column}.svg", transparent=True)
+    plt.show()
+
+def display_trial(model, dataset, behaviour, idx: int, labels):
+    data = dataset.__getitem__(idx)
+    epoch, true, info = data[0], data[1], data[2][0]
+    print(info)
+    # plot_eeg(epoch)
+    p_trial_info = match_on_event_name(info['event_name'], behaviour, info['participant'], info['rt'])
+    print(p_trial_info)
+    rt_ratio = p_trial_info["rt"].item() / get_masking_index(epoch)
+    print(f'RT/masking index ratio: {rt_ratio}')
+    plot_predictions_on_epoch(
+        epoch,
+        true,
+        labels,
+        window_size=0,
+        model=model,
+        smoothing=False,
+        sequence=True,
+        random_perm=True,
+        save=True,
+    )
+
+def plot_distributions(data, process='confirmation'):
+    set_seaborn_style()
+    auc_columns = [column for column in data.columns if column.endswith('_auc') and not column.startswith('negative')]
+    data["sum_auc"] = data[auc_columns].sum(axis=1)
+    # data['rt_x_norm'] = (data['rt_x'] - data['rt_x'].min()) / (data['rt_x'].max() - data['rt_x'].min())
+    # Normalized operation certainty
+    data['rt_samples'] = data["rt_x"] * (250)
+    x_col = process + '_auc'
+    data['ratio'] = data[x_col] / data['rt_samples']
+    bins = 75
+    element = 'poly' # bars, step, poly
+    fig, ax = plt.subplots(1, 3, sharey=True, figsize=(10, 3))
+    sns.histplot(data, x='rt_samples', element=element, ax=ax[0], bins=bins, hue='SAT', palette=sns.color_palette()[1:], legend=False)
+    sns.histplot(data, x=x_col, element=element, ax=ax[1], bins=bins, hue='SAT', palette=sns.color_palette()[1:], legend=False)
+    sns.histplot(data, x='ratio', element=element, ax=ax[2], bins=bins, hue='SAT', palette=sns.color_palette()[1:])
+    # plt.legend()
+    plt.ylim(0, 1000)
+    ax[0].set_xlabel('RT (in samples)')
+    ax[0].set_ylabel('Count (trials)')
+    ax[1].set_xlabel(f'{process.capitalize()} AUC')
+    ax[2].set_xlabel(f'Average {process} probability')
+    plt.tight_layout()
+    plt.savefig('../../img/dists.svg', transparent=True)
+    plt.show()
+
+def plot_loss(losses, labels):
+    set_seaborn_style()
+    losses = torch.stack(losses)
+    df = pd.DataFrame(losses.detach().cpu().numpy()[:, 1:], columns=labels[1:])
+    df['x'] = df.index  # Add x-axis column (index represents the time points)
+    df_melted = df.melt(id_vars='x', var_name='Dimension', value_name='Value')
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=df_melted, x='x', y='Value', hue='Dimension')
+    plt.title('Tensor Visualization')
+    plt.xlabel('Time Steps')
+    plt.ylabel('Value')
+    plt.legend(title='Dimension')
+    plt.show()
+
+def plot_cumulative(model, loader, labels):
+    # SAT2
+    torch.cuda.empty_cache()
+
+    target_length = 100
+
+    speed_pred = torch.zeros((target_length, len(labels)))
+    speed_true = torch.zeros((target_length, len(labels)))
+    accuracy_pred = torch.zeros((target_length, len(labels)))
+    accuracy_true = torch.zeros((target_length, len(labels)))
+
+    n_speed = 0
+    n_accuracy = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            info = batch[2][0]
+
+            # Predict on batch
+            pred = model(batch[0].to(DEVICE))
+            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+            true = batch[1]
+
+            lengths = get_masking_indices(batch[0])
+
+            for i in range(pred.shape[0]):
+                is_speed = "speed" in info["event_name"][i]
+                pred_epoch = pred[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+                true_epoch = true[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+
+                pred_normalized = torch.nn.functional.interpolate(
+                    pred_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                true_normalized = torch.nn.functional.interpolate(
+                    true_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
+                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+
+                # true_normalized *= lengths[i] / 100
+                # pred_normalized *= lengths[i] / 100
+
+                # Additionally normalize over sum to create a valid probability distribution
+
+                pred_normalized = pred_normalized.squeeze().permute(1, 0)
+                true_normalized = true_normalized.squeeze().permute(1, 0)
+
+                if is_speed:
+                    speed_pred += pred_normalized
+                    speed_true += true_normalized
+                    n_speed += 1
+                else:
+                    accuracy_pred += pred_normalized
+                    accuracy_true += true_normalized
+                    n_accuracy += 1
+
+    speed_pred /= n_speed
+    speed_true /= n_speed
+    accuracy_pred /= n_accuracy
+    accuracy_true /= n_accuracy
+
+    # Set confirmation in speed to 0
+    speed_true[:, 4] = 0
+
+    set_seaborn_style()
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4), sharey=True)
+    fig.supylabel("Cumulative probability")
+    fig.supxlabel("Scaled time")
+
+    ax[0].set_title(f"Accuracy")
+    ax[1].set_title(f"Speed")
+    # ax[0].set_title(f"Accuracy (n={n_accuracy})")
+    # ax[1].set_title(f"Speed (n={n_speed})")
+    for i, label in enumerate(labels):
+        if i == 0:
+            continue
+        sns.lineplot(
+            accuracy_true[:, i].cumsum(dim=0),
+            ax=ax[0],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+        )
+        sns.lineplot(
+            accuracy_pred[:, i].cumsum(dim=0),
+            ax=ax[0],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+        )
+
+        sns.lineplot(
+            speed_true[:, i].cumsum(dim=0),
+            ax=ax[1],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+        )
+        sns.lineplot(
+            speed_pred[:, i].cumsum(dim=0),
+            ax=ax[1],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+        )
+
+    handles, ax_labels = ax[0].get_legend_handles_labels()
+    label_legend = ax[0].legend(
+        handles=handles[1::2], labels=ax_labels[1::2], title="Operation", loc="upper left"
+    )
+
+    # ax[1].legend(handles=handles, labels=ax_labels, title="Labels")
+    custom_lines = [
+        plt.Line2D([0], [0], color="black", linestyle="--"),  # Solid line
+        plt.Line2D([0], [0], color="black", linestyle="-"),  # Dashed line
+    ]
+
+    line_legend = ax[0].legend(
+        custom_lines, ["HMP", "S4"], loc="lower right", title="Source"
+    )
+    ax[0].add_artist(label_legend)
+
+    plt.legend([], [], frameon=False)
+    # ax[0].get_legend().remove()
+
+    # ax[0].add_artist(line_legend)
+
+    plt.tight_layout()
+    plt.savefig("../../img/perf_plot_cumulative.svg", transparent=True)
+
+    plt.show()
+
+def plot_density(model, loader, labels):
+    # SAT2
+    torch.cuda.empty_cache()
+
+    target_length = 100
+
+    speed_pred = torch.zeros((target_length, len(labels)))
+    speed_true = torch.zeros((target_length, len(labels)))
+    accuracy_pred = torch.zeros((target_length, len(labels)))
+    accuracy_true = torch.zeros((target_length, len(labels)))
+
+    n_speed = 0
+    n_accuracy = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            info = batch[2][0]
+
+            # Predict on batch
+            pred = model(batch[0].to(DEVICE))
+            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+            true = batch[1]
+
+            lengths = get_masking_indices(batch[0])
+
+            for i in range(pred.shape[0]):
+                is_speed = "speed" in info["event_name"][i]
+                pred_epoch = pred[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+                true_epoch = true[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+
+                pred_normalized = torch.nn.functional.interpolate(
+                    pred_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                true_normalized = torch.nn.functional.interpolate(
+                    true_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
+                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+
+                # Additionally normalize over sum to create a valid probability distribution
+                pred_normalized = pred_normalized.squeeze().permute(1, 0)
+                true_normalized = true_normalized.squeeze().permute(1, 0)
+
+                if is_speed:
+                    speed_pred += pred_normalized
+                    speed_true += true_normalized
+                    n_speed += 1
+                else:
+                    accuracy_pred += pred_normalized
+                    accuracy_true += true_normalized
+                    n_accuracy += 1
+
+    speed_pred /= n_speed
+    speed_true /= n_speed
+    accuracy_pred /= n_accuracy
+    accuracy_true /= n_accuracy
+
+    # Set confirmation in speed to 0
+    speed_true[:, 3] = 0
+
+    set_seaborn_style()
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4), sharey=True)
+    fig.supylabel("Probability density")
+    fig.supxlabel("Scaled time")
+
+    ax[0].set_title(f"Accuracy")
+    ax[1].set_title(f"Speed")
+    # ax[0].set_title(f"Accuracy (n={n_accuracy})")
+    # ax[1].set_title(f"Speed (n={n_speed})")
+    for i, label in enumerate(labels):
+        if i == 0:
+            continue
+        sns.lineplot(
+            accuracy_true[:, i],
+            ax=ax[0],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+        )
+        sns.lineplot(
+            accuracy_pred[:, i],
+            ax=ax[0],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+        )
+
+        sns.lineplot(
+            speed_true[:, i],
+            ax=ax[1],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+        )
+        sns.lineplot(
+            speed_pred[:, i],
+            ax=ax[1],
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+        )
+
+    handles, ax_labels = ax[0].get_legend_handles_labels()
+    label_legend = ax[0].legend(
+        handles=handles[1::2], labels=ax_labels[1::2], title="Operation", loc="upper left"
+    )
+    plt.ylim((0, 0.2))
+    # ax[1].legend(handles=handles, labels=ax_labels, title="Labels")
+    custom_lines = [
+        plt.Line2D([0], [0], color="black", linestyle="--"),  # Solid line
+        plt.Line2D([0], [0], color="black", linestyle="-"),  # Dashed line
+    ]
+
+    line_legend = ax[1].legend(
+        custom_lines, ["HMP", "S4"], loc="upper right", title="Source"
+    )
+    ax[0].add_artist(label_legend)
+
+    plt.legend([], [], frameon=False)
+    # ax[0].get_legend().remove()
+
+    ax[1].add_artist(line_legend)
+
+    plt.tight_layout()
+    plt.savefig("../../img/perf_plot_density.svg", transparent=True)
+
     plt.show()

@@ -8,17 +8,30 @@ import numpy as np
 from pathlib import Path, PosixPath
 from hmpai.utilities import MASKING_VALUE, CHANNELS_2D, get_masking_indices_xr
 from tqdm.notebook import tqdm
+from hmpai.behaviour.sat2 import read_behavioural_info, merge_data_xr
 
 
 SAT_CLASSES_ACCURACY = [
     "negative",
     "encoding",
+    "n200",    
     "decision",
     "confirmation",
-    "response",
+    "response"
 ]
 
-SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
+SAT_CLASSES_SPEED = ["negative", "encoding", "n200", "decision", "response"]
+
+SAT_CLASSES_ACCURACY_SPLIT = [
+    "negative",
+    "encoding",
+    "decision",
+    "confirmation",
+    "response_left",
+    "response_right",
+]
+
+SAT_CLASSES_SPEED_SPLIT = ["negative", "encoding", "decision", "response_left", "response_right"]
 
 SAT1_STAGES_ACCURACY = [
     "pre-attentive",
@@ -342,6 +355,7 @@ class StageFinder:
         conditions=[],
         condition_variable="cue",
         condition_method="equal",
+        extra_split=None,
         cpus=1,
         fit_function="fit",
         fit_args=dict(),
@@ -349,6 +363,9 @@ class StageFinder:
         n_comp=None,
         fits_to_load=[],
         event_width=50,
+        split_response=False,
+        behaviour_path=None,
+        behaviour_fn=read_behavioural_info,
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -372,6 +389,9 @@ class StageFinder:
             # self.epoch_data = xr.load_dataset(epoched_data)
         else:
             self.epoch_data = epoched_data
+        if behaviour_path is not None:
+            self.behaviour = behaviour_fn(behaviour_path)
+            self.epoch_data = merge_data_xr(self.epoch_data, self.behaviour)
         self.n_comp = n_comp
 
         # Transform data into principal component (PC) space
@@ -399,14 +419,26 @@ class StageFinder:
                 0, len(epoch_data_no_offset.samples)
             )
             self.epoch_data_offset = epoch_data_no_offset
+            del reordered
             self.hmp_data_offset = hmp.utils.transform_data(
-                epoch_data_no_offset, n_comp=self.n_comp, apply_zscore='all'
+                self.epoch_data_offset, n_comp=self.n_comp, apply_zscore='all'
             )
         else:
             self.epoch_data_offset = self.epoch_data
             self.hmp_data_offset = hmp.utils.transform_data(
                 self.epoch_data, n_comp=self.n_comp, apply_zscore='all'
             )
+        # Split on extra variables before fitting
+        if isinstance(extra_split, list):
+            for split in extra_split:
+                var, method, cond = split
+                self.hmp_data_offset = hmp.utils.condition_selection(
+                    self.hmp_data_offset,
+                    None,
+                    cond,
+                    variable=var,
+                    method=method,
+                )
         self.verbose = verbose
         self.labels = labels
         self.main_labels = (
@@ -425,6 +457,7 @@ class StageFinder:
         self.hmp_data = []
         self.fits_to_load = fits_to_load
         self.event_width = event_width
+        self.split_response = split_response
 
         if self.verbose:
             print("Epoch data used:")
@@ -449,7 +482,6 @@ class StageFinder:
                     variable=self.condition_variable,
                     method=self.condition_method,
                 )
-
                 # Determine amount of expected events from number of supplied labels
                 # Subtract 1 since pre-attentive stage does not have a peak
                 if self.fit_function == "fit_single":
@@ -550,45 +582,66 @@ class StageFinder:
 
         return stage_data
 
-    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None):
+    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None, model_index=None):
         set_seaborn_style()
         if len(self.fits) > 1:
-            fig, ax = plt.subplots(len(self.fits), 1, figsize=(12, 3), sharex=True)
-            for i, condition in enumerate(
-                zip(
-                    self.fits,
-                    self.models,
-                    self.hmp_data,
-                    self.conditions,
-                )
-            ):
-                sfreq = self.epoch_data.sfreq
-                max_time = (
-                    max_time
-                    if max_time is not None
-                    else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
-                    * 1000
-                )
-                ax_i = hmp.visu.plot_topo_timecourse(
+            if model_index is not None:
+                i = model_index
+                condition = (self.fits[model_index], self.models[model_index], self.hmp_data[model_index], self.conditions[model_index])
+                return hmp.visu.plot_topo_timecourse(
                     self.epoch_data_offset,
-                    condition[0],
+                    self.fits[model_index],
                     positions,
-                    condition[1],
-                    times_to_display=(np.mean(condition[1].ends - condition[1].starts)),
+                    self.models[model_index],
+                    times_to_display=(np.mean(self.models[model_index].ends - self.models[model_index].starts)),
                     max_time=max_time,
-                    ylabels={"": [condition[3].capitalize()]},
+                    ylabels={"": [self.conditions[model_index].capitalize()] if cond_label is None else [cond_label]},
                     as_time=True,
                     estimate_method="max",
-                    ax=ax[i],
+                    # ax=ax,
                     event_lines=None,
                     vmin=-7e-6,
                     vmax=7e-6,
                     colorbar=colorbar,
+                    magnify=1.5,
                 )
-                ax[i] = ax_i
-            ax[-1].set_xlabel("Time (in ms)")
-            fig.supylabel("Condition")
-            return fig, ax
+            else:
+                fig, ax = plt.subplots(len(self.fits), 1, figsize=(12, 3), sharex=True)
+                for i, condition in enumerate(
+                    zip(
+                        self.fits,
+                        self.models,
+                        self.hmp_data,
+                        self.conditions,
+                    )
+                ):
+                    sfreq = self.epoch_data.sfreq
+                    max_time = (
+                        max_time
+                        if max_time is not None
+                        else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
+                        * 1000
+                    )
+                    ax_i = hmp.visu.plot_topo_timecourse(
+                        self.epoch_data_offset,
+                        condition[0],
+                        positions,
+                        condition[1],
+                        times_to_display=(np.mean(condition[1].ends - condition[1].starts)),
+                        max_time=max_time,
+                        ylabels={"": [condition[3].capitalize()]},
+                        as_time=True,
+                        estimate_method="max",
+                        ax=ax[i],
+                        event_lines=None,
+                        vmin=-7e-6,
+                        vmax=7e-6,
+                        colorbar=colorbar,
+                    )
+                    ax[i] = ax_i
+                ax[-1].set_xlabel("Time (in ms)")
+                fig.supylabel("Condition")
+                return fig, ax
         else:
             sfreq = self.epoch_data.sfreq
             max_time = (
@@ -680,25 +733,6 @@ class StageFinder:
         participants = list(self.epoch_data.participant.values)
         prev_participant = None
 
-        # Mapping from trial_x_participant epoch numbers to dataset epoch numbers
-        if condition is None:
-            condition_epochs = self.epoch_data.epochs
-        elif self.condition_method == "equal":
-            condition_epochs = self.epoch_data.where(
-                condition == self.epoch_data[self.condition_variable], drop=True
-            ).epochs
-        elif self.condition_method == "contains":
-            condition_epochs = self.epoch_data.where(
-                self.epoch_data[self.condition_variable].str.contains(condition),
-                drop=True,
-            ).epochs
-        else:
-            raise ValueError(f"Condition method {self.condition_method} not supported")
-
-        if self.verbose:
-            print("Epochs used for current condition (if applicable):")
-            print(condition_epochs)
-
         # For every known set of event locations, find the EEG data belonging to that trial (epoch) and participant
         for locations, data in zip(event_locations, model.trial_x_participant):
             data = data.item()
@@ -712,23 +746,6 @@ class StageFinder:
             participant = participants.index(data[0])
             if participant != prev_participant:
                 print(f"Processing participant {data[0]}")
-                # Set up condition_epochs, must be done in loop since for SAT2, particicipant + epoch + condition is not unique, in SAT1 each epoch had the same condition across participatns
-                participant_data = self.epoch_data.sel(participant=data[0])
-                if condition is None:
-                    condition_epochs = self.epoch_data.epochs
-                elif self.condition_method == "equal":
-                    condition_epochs = participant_data.where(
-                        participant_data[self.condition_variable] == condition,
-                        drop=True,
-                    ).epochs
-                elif self.condition_method == "contains":
-                    condition_epochs = participant_data.where(
-                        participant_data[self.condition_variable].str.contains(
-                            condition
-                        ),
-                        drop=True,
-                    ).epochs
-                condition_epochs = condition_epochs.to_numpy().tolist()
 
             # Skip epoch if bumps are predicted to be at the same time
             unique, counts = np.unique(locations, return_counts=True)
@@ -744,8 +761,6 @@ class StageFinder:
             # epoch = data[1]
             epochs = list(self.epoch_data.epochs.to_numpy())
             epoch = epochs.index(data[1])
-            # epoch = condition_epochs.index(data[1])
-            # epoch = int(condition_epochs[data[1]])
 
             if epoch > shape[1]:
                 print("Epoch number exceeds shape of data, skipping")
@@ -797,11 +812,11 @@ class StageFinder:
         if condition == "No condition":
             condition = None
         labels = self.labels if condition is None else self.labels[condition]
-
-        if len(labels) - 1 != n_events:
-            raise ValueError(
-                "Amount of labels is not equal to amount of events, adjust labels parameter"
-            )
+        # Handle case where response_left/response_right are same event but labels is longer
+        # if len(labels) - 1 != n_events:
+        #     raise ValueError(
+        #         "Amount of labels is not equal to amount of events, adjust labels parameter"
+        #     )
         shape = list(self.epoch_data.data.shape)
         # Instead of channels, create a dim for label probabilities
         shape[-2] = len(self.main_labels)
@@ -855,8 +870,11 @@ class StageFinder:
                             )
                         # Index from premade list of epochs
                         # : dimension (samples) differs across condition
+                        epoch = epochs.index(trial.item())
+                        if self.split_response and event_idx == 4 and self.epoch_data.sel(participant=participant_id, epochs=epoch).event_name.str.contains('right'):
+                            event_idx += 1
                         labels_array[
-                            participant, epochs.index(trial.item()), event_idx, :
+                            participant, epoch, event_idx, :
                         ] = event_data
 
         return np.copy(labels_array)

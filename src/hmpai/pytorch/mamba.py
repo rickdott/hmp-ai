@@ -20,7 +20,7 @@ def base_mamba():
         "embed_dim": embed_dim,
         "mamba_dim": out_channels,
         "n_channels": 19,
-        "n_classes": 5, # TODO, get label length other way
+        "n_classes": 6, # TODO, get label length other way
         "n_mamba_layers": 5,
         "cnn_module": base_cnn,
         "dropout": 0.1,
@@ -98,6 +98,90 @@ class ConfigurableMamba(nn.Module):
             else self.linear_translation(out)
         )
         return out
+
+class TestMamba(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int, # (b, samples, n_channels) -> (b, samples, embed_dim)
+        mamba_dim: int, # (b, samples, mamba_dim) -> (b, samples, mamba_dim), must be equal to output feature space of cnn_module
+        n_channels: int,
+        n_classes: int,
+        n_mamba_layers: int,
+        global_pool: bool = False,
+        dropout: float = 0,
+    ):
+        super().__init__()
+
+        # Define sequence of Mamba blocks
+        self.blocks = nn.Sequential(
+            *[MambaBlock(mamba_dim, dropout) for _ in range(n_mamba_layers)]
+        )
+
+        # Linear embedding from feature space (n_channels), to embed_dim
+        self.linear_in = nn.Linear(n_channels, embed_dim)
+
+        self.conv_in = nn.Conv2d(in_channels=1, out_channels=embed_dim, kernel_size=(n_channels, 1), padding=0)
+        self.conv_over_linear = nn.Conv1d(in_channels=64, out_channels=mamba_dim, kernel_size=3, padding="same")
+
+        self.norm = nn.LayerNorm(mamba_dim)
+
+        self.global_pool = global_pool
+        self.linear_translation = nn.Linear(mamba_dim, n_channels)
+        self.linear_out = nn.Linear(mamba_dim, n_classes)
+        self.pretraining = False
+
+    def forward(self, x):
+        # Extract function if multiple mamba modules
+        # Do with mask and multiplication?
+        max_index = get_masking_indices(x).max()
+        # [64, 634, 19]
+        # [B, T, C]
+        x = x[:, :max_index, :]
+        # [64, 634-max_index, 19]
+        # [B, T-max_index, 19]
+
+        x = self.linear_in(x)
+        # x = x.permute(0, 2, 1).unsqueeze(1)
+        # # [64, 19, 634-max_index]
+        # x = self.conv_in(x)
+        # # [64, mamba_dim, 634-max_index]
+        # x = x.squeeze(2).permute(0, 2, 1)
+        x = nn.functional.silu(x)
+        # [64, 634-max_index, 128] (mamba_dim/embed_dim)
+
+        # Linear (64 > 64), Conv (64 > 128)
+        x_forward = x
+        # x_backward = torch.flip(x.clone(), dims=[1])
+        x_forward = x_forward.permute(0, 2, 1)
+        x_forward = self.conv_over_linear(x_forward)
+        x_forward = x_forward.permute(0, 2, 1)
+        x_forward = nn.functional.silu(x_forward)
+        
+        # x_backward = x_backward.permute(0, 2, 1)
+        # x_backward = self.conv_over_linear(x_backward)
+        # x_backward = x_backward.permute(0, 2, 1)
+        # x_backward = nn.functional.silu(x_backward)
+
+        out_forward = (
+            self.blocks(x_forward)
+            if not self.global_pool
+            else torch.mean(self.blocks(x_forward), dim=1)
+        )
+        # out_backward = (
+        #     self.blocks(x_backward)
+        #     if not self.global_pool
+        #     else torch.mean(self.blocks(x_backward), dim=1)
+        # )
+        # out = out_forward + torch.flip(out_backward, dims=[1])
+        out = out_forward
+        out = self.norm(out)
+        out = (
+            self.linear_out(out)
+            if not self.pretraining
+            else self.linear_translation(out)
+        )
+        return out
+
 
 
 # https://github.com/apapiu/mamba_small_bench

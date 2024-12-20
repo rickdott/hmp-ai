@@ -313,20 +313,32 @@ class MultiXArrayProbaDataset(Dataset):
         window_size: tuple[int, int] = (5, 5),
         jiggle: int = 3,
         whole_epoch: bool = False,
-        subset_cond: str = None,  # 'speed' for speed, 'accuracy' for accuracy, empty for no filtering
+        subset_cond: tuple = None,  # (variable, method, value), examples: ('event_name', 'contains', 'speed') or ('condition', 'equal', 'long')
         statistics: dict = None,
         add_negative: bool = False,
-        probabilistic_labels: bool = False, # Return labels as probabilities over each class instead of categorical
-        skip_samples: int = 0, # Skip this amount of samples, used to skip pre-stimulus samples
-        cut_samples: int = 0, # Take this amount of samples from the end, used to skip extra post-response offset samples
+        probabilistic_labels: bool = False,  # Return labels as probabilities over each class instead of categorical
+        skip_samples: int = 0,  # Skip this amount of samples, used to skip pre-stimulus samples
+        cut_samples: int = 0,  # Take this amount of samples from the end, used to skip extra post-response offset samples
+        data_labels: list[
+            list
+        ] = None,  # List of equal length as data_paths in case datasets have different labels, labels param should in this case be a list containing the intersection of all of these
     ):
         self.data_paths = data_paths
+        self.data_labels = data_labels
         self.transform = transform
         self.info_to_keep = info_to_keep
         self.keep_info = len(self.info_to_keep) > 0
         self.participants_to_keep = (
             participants_to_keep if participants_to_keep is not None else []
         )
+
+        # Find max length in datasets
+        self.max_length = 0
+        for data_path in data_paths:
+            ds = xr.open_dataset(data_path)
+            if len(ds.samples) > self.max_length:
+                self.max_length = len(ds.samples)
+            ds.close()
 
         electrode_mapping = {
             "EEG FP1": "Fp1",
@@ -392,7 +404,7 @@ class MultiXArrayProbaDataset(Dataset):
             self.split = "labels" not in ds.data_vars and "probabilities" not in ds
         if norm_vars is None:
             if self.statistics is None:
-                self._calc_global_statistics(1000)
+                self._calc_global_statistics(min(1000, self.__len__()))
             norm_vars = get_norm_vars_from_global_statistics(
                 self.statistics, normalization_fn
             )
@@ -416,10 +428,12 @@ class MultiXArrayProbaDataset(Dataset):
                 # Indices where at least one location is found
                 mask_locs = event_locs.sum(axis=2) != 0
 
-                if self.subset_cond == "speed" or self.subset_cond == "accuracy":
-                    subset_indices = ds.event_name.str.contains(
-                        self.subset_cond
-                    ).to_numpy()
+                if self.subset_cond is not None:
+                    if self.subset_cond[1] == 'contains':
+                        subset_indices = ds[self.subset_cond[0]].str.contains(self.subset_cond[2])
+                    elif self.subset_cond[1] == 'equal':
+                        subset_indices = ds[self.subset_cond[0]] == self.subset_cond[2]
+                    subset_indices = subset_indices.to_numpy()
 
                 participant_indices = np.arange(event_locs.shape[0])[:, None, None]
                 trial_indices = np.arange(event_locs.shape[1])[None, :, None]
@@ -472,10 +486,13 @@ class MultiXArrayProbaDataset(Dataset):
                 # Select subset of data to check valid indices
                 data = data[..., 0, :]
                 mask = ~np.isnan(data).all(axis=-1)
-                if self.subset_cond == "speed" or self.subset_cond == "accuracy":
-                    subset_indices = ds.event_name.str.contains(
-                        self.subset_cond
-                    ).to_numpy()
+                if self.subset_cond is not None:
+                    if self.subset_cond[1] == 'contains':
+                        subset_indices = ds[self.subset_cond[0]].str.contains(self.subset_cond[2])
+                    elif self.subset_cond[1] == 'equal':
+                        subset_indices = ds[self.subset_cond[0]] == self.subset_cond[2]
+                    subset_indices = subset_indices.to_numpy()
+                    
                 combined_indices = (
                     np.argwhere((mask) & (subset_indices))
                     if self.subset_cond is not None
@@ -576,7 +593,6 @@ class MultiXArrayProbaDataset(Dataset):
             filter = {
                 "participant": indices[1],
                 "epochs": indices[2],
-                "samples": range(0, 634), # TODO: Make this dynamic
             }
         else:
             # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
@@ -598,6 +614,9 @@ class MultiXArrayProbaDataset(Dataset):
                 "samples": range(min_sample, max_sample),
             }
         sample = ds.isel(**filter)
+        if len(sample.samples) < self.max_length:
+            pad_right += self.max_length - len(sample.samples)
+
         # Subset TUEG channels
         sample = sample.sel({"channels": self.sat2_chs})
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
@@ -615,10 +634,23 @@ class MultiXArrayProbaDataset(Dataset):
                 sample_label = torch.nn.functional.pad(
                     sample_label, (pad_left, pad_right), mode="constant", value=0
                 )
+
+            # Convert label probabilities to correct order
+            if self.data_labels is not None:
+                ds_labels = self.data_labels[indices[0]]
+                ds_label_indices = [self.labels.index(label) for label in ds_labels]
+                new_labels = torch.zeros(
+                    (len(self.labels), sample_label.shape[1]), dtype=torch.float32
+                )
+                for old_idx, new_idx in enumerate(ds_label_indices):
+                    new_labels[new_idx] = sample_label[old_idx]
+                sample_label = new_labels
+
             if self.add_negative:
                 sample_label[0, :] = 1 - sample_label.sum(axis=0)
             sample_label = sample_label.transpose(1, 0)
-            # sample_label = sample_label / torch.sum(sample_label, dim=1, keepdim=True)
+
+            # Reorder sample.probabilities so that each value corresponds to their label's position in self.labels
 
         # Swap samples and channels dims, since [time, features] is expected
         sample_data = sample_data.transpose(1, 0)
@@ -626,13 +658,13 @@ class MultiXArrayProbaDataset(Dataset):
             plot_epoch((sample_data, sample_label), "Raw")
 
         end_idx = get_masking_index(sample_data, search_value=torch.nan)
-        sample_data[end_idx - self.cut_samples:end_idx,:] = torch.nan
-        sample_label[end_idx - self.cut_samples:end_idx,:] = 0
+        sample_data[end_idx - self.cut_samples : end_idx, :] = torch.nan
+        sample_label[end_idx - self.cut_samples : end_idx, :] = 0
         if self.add_negative:
-            sample_label[end_idx - self.cut_samples:end_idx, 0] = 1.0
-            
-        sample_data = sample_data[self.skip_samples:, :]
-        sample_label = sample_label[self.skip_samples:, :]
+            sample_label[end_idx - self.cut_samples : end_idx, 0] = 1.0
+
+        sample_data = sample_data[self.skip_samples :, :]
+        sample_label = sample_label[self.skip_samples :, :]
 
         if self.transform is not None:
             sample_data, sample_label = self.transform((sample_data, sample_label))
@@ -645,19 +677,27 @@ class MultiXArrayProbaDataset(Dataset):
             if torch.rand((1,)).item() < self.concat_probability:
                 # Get random index (or make a pre-existing permutation so every concat is the same for every index?)
                 # Need concat=true to prevent infinite loop with 1 proba
-                concat_data, concat_label = self.__getitem__(random.randint(0, self.__len__() - 1), concat=True)
+                concat_data, concat_label = self.__getitem__(
+                    random.randint(0, self.__len__() - 1), concat=True
+                )
                 if self.transform is not None:
-                    concat_data, concat_label = self.transform((concat_data, concat_label))
-                    
+                    concat_data, concat_label = self.transform(
+                        (concat_data, concat_label)
+                    )
+
                 end_idx = get_masking_index(sample_data, search_value=torch.nan)
-                sample_data = torch.concat((sample_data[:end_idx], concat_data), dim=0)[:634]
-                sample_label = torch.concat((sample_label[:end_idx], concat_label), dim=0)[:634]
+                sample_data = torch.concat((sample_data[:end_idx], concat_data), dim=0)[
+                    :634
+                ]
+                sample_label = torch.concat(
+                    (sample_label[:end_idx], concat_label), dim=0
+                )[:634]
 
                 if debug:
                     plot_epoch((sample_data, sample_label), "Concat cut & transformed")
 
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
-        sample_label[:, 1:] = sample_label[:, 1:] / sample_label[:, 1:].sum(dim=0, keepdim=True)
+        # sample_label[:, 1:] = sample_label[:, 1:] / sample_label[:, 1:].sum(dim=0, keepdim=True)
         if self.add_negative:
             sample_label[:, 0] = 1 - sample_label[:, 1:].sum(axis=1)
 
@@ -691,7 +731,7 @@ class MultiXArrayProbaDataset(Dataset):
             filter = {
                 "participant": indices[1],
                 "epochs": indices[2],
-                "samples": range(0, 622),
+                # "samples": range(0, 622),
             }
         else:
             # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
@@ -735,7 +775,7 @@ class MultiXArrayProbaDataset(Dataset):
 
     def __len__(self):
         return len(self.index_map)
-    
+
     def set_transform(self, compose: Compose):
         self.transform = compose
         for i, tf in enumerate(self.transform.transforms):
@@ -744,7 +784,6 @@ class MultiXArrayProbaDataset(Dataset):
                 self.transform.transforms.pop(i)
                 break
         self.concat_probability = 0
-
 
 
 class MultiXArrayDataset(Dataset):
