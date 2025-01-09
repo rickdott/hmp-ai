@@ -28,7 +28,9 @@ from copy import deepcopy
 import re
 from hmpai.training import get_folds, split_participants
 from hmpai.pytorch.loss import kl_div_loss_with_correlation_regularization
-from hmpai.pytorch.soft_dtw_cuda import SoftDTW
+
+# from hmpai.pytorch.soft_dtw_cuda import SoftDTW
+from hmpai.pytorch.sdtw_cuda_loss import SoftDTW
 from Levenshtein import distance
 from scipy.stats import spearmanr
 
@@ -349,7 +351,9 @@ def train_and_test(
                 model, test_loaders, loss, writer, labels, whole_epoch
             )
         else:
-            results, _, _ = test(model, test_loaders, loss, writer, labels, whole_epoch, metrics, epoch)
+            results, _, _ = test(
+                model, test_loaders, loss, writer, labels, whole_epoch, metrics, epoch
+            )
     else:
         results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
     return results
@@ -486,6 +490,7 @@ def train(
     if isinstance(loss_fn, torch.nn.KLDivLoss):
         softmax = torch.nn.LogSoftmax(dim=2)
     loss_per_batch = []
+    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
 
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
@@ -500,7 +505,9 @@ def train(
 
         if len(predictions.shape) == 3:
             if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
-                loss, exp_loss = kldiv_loss(predictions.clone(), labels.clone())
+                loss, exp_loss, indiv_loss = kldiv_loss(
+                    predictions.clone(), labels.clone(), dtw, mask=data == MASKING_VALUE
+                )
                 # Calculate training metrics
                 if metrics is not None:
                     for metric_name, metric_fn in metrics.items():
@@ -510,6 +517,13 @@ def train(
                             metric_val,
                             (epoch * progress.total) + progress.n,
                         )
+                # Individual loss metrics
+                for metric_name, metric_batch_loss in indiv_loss.items():
+                    writer.add_scalar(
+                        f"train_{metric_name}",
+                        metric_batch_loss,
+                        (epoch * progress.total) + progress.n,
+                    )
                 # Class-wise loss
                 for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
                     writer.add_scalar(
@@ -589,6 +603,7 @@ def validate(
     loss_per_batch = []
     total_correct = 0
     total_instances = 0
+    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
 
     with torch.no_grad():
         all_labels = []
@@ -624,7 +639,9 @@ def validate(
             if len(predictions.shape) == 3:
                 if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
-                    loss, _ = kldiv_loss(predictions, labels)
+                    loss, _, _ = kldiv_loss(
+                        predictions, labels, dtw, mask=data == MASKING_VALUE
+                    )
                 elif loss_fn == kl_div_loss_with_correlation_regularization:
                     loss = kl_div_loss_with_correlation_regularization(
                         predictions, labels, model, data
@@ -687,7 +704,7 @@ def test(
         torch.Tensor: The true classes.
     """
     model.eval()
-
+    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
     test_results = []
 
     if type(test_loader) is not list:
@@ -719,7 +736,9 @@ def test(
                     true_labels = torch.cat([true_labels, labels.flatten().cpu()])
                 elif isinstance(loss_fn, torch.nn.KLDivLoss):
                     # Add small value to prevent log(0), re-normalize
-                    loss, _ = kldiv_loss(predictions, labels)
+                    loss, _, _ = kldiv_loss(
+                        predictions, labels, dtw, mask=data == MASKING_VALUE
+                    )
                     outputs.append(loss.to("cpu"))
                 elif isinstance(loss_fn, SoftDTW):
                     loss = 0
@@ -1017,51 +1036,45 @@ def emd_loss(predictions: torch.Tensor, labels: torch.Tensor):
     return emd.mean().item()  # Mean across the batch
 
 
-def kldiv_loss(predictions: torch.Tensor, labels: torch.Tensor):
+def kldiv_loss(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    dtw: SoftDTW = None,
+    mask: torch.Tensor = None,
+):
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
+    mask = ~mask[:, : predictions.shape[1], 0].unsqueeze(-1).to(DEVICE)
 
     # Predictions = model logits, non-softmaxed
     # labels = raw labels including negative, sums up to 1 at each time step
-    # SYMMETRIC
-    # labels = labels + 1e-8
-    # labels = labels / labels.sum(dim=-1, keepdim=True)
-    # predictions = torch.nn.functional.softmax(predictions, dim=2)
-    # forward_kl_loss = torch.nn.functional.kl_div(predictions.log(), labels, reduction='batchmean')
-    # reverse_kl_loss = torch.nn.functional.kl_div(labels.log(), predictions, reduction='batchmean')
-    # kldiv_loss = (forward_kl_loss + reverse_kl_loss) / 2
+
     predictions = torch.nn.functional.softmax(predictions, dim=2)
 
-    dtw = SoftDTW(use_cuda=True, gamma=1, normalize=True)
     # # FORWARD
-    dtw_loss = dtw(labels, predictions).mean()
+    # Subset to 1024 since this dtw implementation does not support sequence length > 1024
+    # dtw_loss = dtw(predictions[:, :1024, :], labels[:, :1024, :]).mean()
 
-    labels = labels + 1e-8
-    labels = labels / labels.sum(dim=-1, keepdim=True)
+    # labels = labels + 1e-8
+    # labels = labels / labels.sum(dim=-1, keepdim=True)
 
     forward_kl_loss = torch.nn.functional.kl_div(
         predictions.log(), labels, reduction="none"
     )
-    # forward_kl_loss[:,:,0] *= 0.0001
-    # forward_kl_loss[:,:,5] *= 4
+
     # batchmean normalization
-    loss = forward_kl_loss.sum() / predictions.shape[0]
-    loss += dtw_loss
+    # loss = forward_kl_loss.sum() / mask.sum()
+    forward_kl_loss_norm = forward_kl_loss.sum() / predictions.shape[0]
+    # 
+    # mae_loss = torch.abs(predictions - labels).mean() * 1000
+    # alpha = 0.7
+    # loss = alpha * forward_kl_loss_norm + (1 - alpha) * mae_loss
+    # loss = 0.5 * forward_kl_loss_norm + 0.5 * dtw_loss
+    loss = forward_kl_loss_norm
 
-    # loss = cum_mse(predictions, labels)
+    # Cross Entropy loss
     # loss = torch.nn.functional.cross_entropy(predictions[:,:,1:], labels[:,:,1:])
-    # BACKWARD
-    # labels = labels + 1e-8
-    # labels = labels / labels.sum(dim=-1, keepdim=True)
-    # predictions = torch.nn.functional.softmax(predictions, dim=2)
-    # reverse_kl_loss = torch.nn.functional.kl_div(labels.log(), predictions, reduction='batchmean')
-    # kldiv_loss = reverse_kl_loss
-
-    # Combine with MSE
-    # l1_loss = torch.norm(predictions[..., 1:], p=1)
-    # lambda_l1 = 0.001
-    # loss = kldiv_loss + lambda_l1 * l1_loss
-    return loss, forward_kl_loss
+    return loss, forward_kl_loss, {"kldiv": forward_kl_loss_norm}
 
 
 def cum_mse(predictions: torch.Tensor, labels: torch.Tensor):

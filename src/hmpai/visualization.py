@@ -677,7 +677,9 @@ def plot_predictions_on_epoch(
     # Normalize probability labels
     # true = true[:rt_idx, 1:]
     # true = true / true.sum()
-    true = true[:rt_idx, 1:]
+    plot_true = true is not None
+    if plot_true:
+        true = true[:rt_idx, 1:]
 
     if not sequence:
         slices = get_padded_slices(epoch, window_size, include_start_end=False)
@@ -714,17 +716,19 @@ def plot_predictions_on_epoch(
     fig.supylabel("Probability")
     fig.supxlabel("Samples")
     # HMP Probability
-    for i in range(0, true.shape[1]):
-        sns.lineplot(
-            x=range(len(true[:rt_idx, i])),
-            y=true[:rt_idx, i],
-            ax=ax[0],
-            color=sns.color_palette('tab10')[i + 1],
-            label=labels[i + 1],
-            legend=False,
-        )
+    if plot_true:
+        for i in range(0, true.shape[1]):
+            sns.lineplot(
+                x=range(len(true[:rt_idx, i])),
+                y=true[:rt_idx, i],
+                ax=ax[0],
+                color=sns.color_palette('tab10')[i + 1],
+                label=labels[i + 1],
+                legend=False,
+            )
     if save_tensors:
-        save_tensor(true[:rt_idx], "hmp_pred.csv")
+        if plot_true:
+            save_tensor(true[:rt_idx], "hmp_pred.csv")
         save_tensor(pred.squeeze()[:rt_idx, 1:], "mamba_pred.csv")
     # Model probability
     for i in range(1, empty.shape[1]):

@@ -618,14 +618,16 @@ class MultiXArrayProbaDataset(Dataset):
             pad_right += self.max_length - len(sample.samples)
 
         # Subset TUEG channels
-        sample = sample.sel({"channels": self.sat2_chs})
+        # sample = sample.sel({"channels": self.sat2_chs})
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
                 sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
             )
-        if not self.whole_epoch and not self.probabilistic_labels:
+        if not self.whole_epoch and self.split:
             sample_label = indices[4]
+        elif self.split:
+            sample_label = 0
         else:
             sample_label = torch.as_tensor(
                 sample.probabilities.values, dtype=torch.float32
@@ -650,8 +652,6 @@ class MultiXArrayProbaDataset(Dataset):
                 sample_label[0, :] = 1 - sample_label.sum(axis=0)
             sample_label = sample_label.transpose(1, 0)
 
-            # Reorder sample.probabilities so that each value corresponds to their label's position in self.labels
-
         # Swap samples and channels dims, since [time, features] is expected
         sample_data = sample_data.transpose(1, 0)
         if debug:
@@ -659,12 +659,14 @@ class MultiXArrayProbaDataset(Dataset):
 
         end_idx = get_masking_index(sample_data, search_value=torch.nan)
         sample_data[end_idx - self.cut_samples : end_idx, :] = torch.nan
-        sample_label[end_idx - self.cut_samples : end_idx, :] = 0
-        if self.add_negative:
-            sample_label[end_idx - self.cut_samples : end_idx, 0] = 1.0
+
+        if not self.split:
+            sample_label[end_idx - self.cut_samples : end_idx, :] = 0
+            if self.add_negative:
+                sample_label[end_idx - self.cut_samples : end_idx, 0] = 1.0
+            sample_label = sample_label[self.skip_samples :, :]
 
         sample_data = sample_data[self.skip_samples :, :]
-        sample_label = sample_label[self.skip_samples :, :]
 
         if self.transform is not None:
             sample_data, sample_label = self.transform((sample_data, sample_label))
@@ -672,7 +674,6 @@ class MultiXArrayProbaDataset(Dataset):
                 plot_epoch((sample_data, sample_label), "Cut and transformed")
         if concat:
             return sample_data, sample_label
-        # Get concat data before normalizing?
         elif self.concat_probability > 0:
             if torch.rand((1,)).item() < self.concat_probability:
                 # Get random index (or make a pre-existing permutation so every concat is the same for every index?)
@@ -687,19 +688,19 @@ class MultiXArrayProbaDataset(Dataset):
 
                 end_idx = get_masking_index(sample_data, search_value=torch.nan)
                 sample_data = torch.concat((sample_data[:end_idx], concat_data), dim=0)[
-                    :634
+                    :self.max_length
                 ]
                 sample_label = torch.concat(
                     (sample_label[:end_idx], concat_label), dim=0
-                )[:634]
+                )[:self.max_length]
 
                 if debug:
                     plot_epoch((sample_data, sample_label), "Concat cut & transformed")
 
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
         # sample_label[:, 1:] = sample_label[:, 1:] / sample_label[:, 1:].sum(dim=0, keepdim=True)
-        if self.add_negative:
-            sample_label[:, 0] = 1 - sample_label[:, 1:].sum(axis=1)
+        # if self.add_negative:
+        #     sample_label[:, 0] = 1 - sample_label[:, 1:].sum(axis=1)
 
         # fillna with masking_value
         sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
@@ -731,7 +732,6 @@ class MultiXArrayProbaDataset(Dataset):
             filter = {
                 "participant": indices[1],
                 "epochs": indices[2],
-                # "samples": range(0, 622),
             }
         else:
             # Jiggle event idx to ensure that the model learns from samples where transition is not in the middle of the window
@@ -763,13 +763,14 @@ class MultiXArrayProbaDataset(Dataset):
                 value=torch.nan,
                 # sample_data, (0, pad_right + pad_left), mode="constant", value=torch.nan
             )
-        sample_label = (
-            indices[4]
-            if not self.whole_epoch
-            else torch.as_tensor(
+        if not self.whole_epoch:
+            sample_label = indices[4]
+        elif self.split:
+            sample_label = 0
+        else:
+            sample_label = torch.as_tensor(
                 sample.probabilities.values, dtype=torch.float32
             ).transpose(1, 0)
-        )
 
         return sample_data, sample_label
 

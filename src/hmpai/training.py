@@ -44,6 +44,8 @@ def split_participants(
     for data_path in data_paths:
         with xr.open_dataset(data_path) as ds:
             participants.extend(ds.participant.values)
+    # Ensure no duplication of participants
+    participants = list(dict.fromkeys(participants))
     # Find amounts of train and test/val participants
     train_n = int(len(participants) * (train_percentage / 100))
     testval_n = len(participants) - train_n

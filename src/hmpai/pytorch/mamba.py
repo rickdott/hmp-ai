@@ -111,17 +111,20 @@ class TestMamba(nn.Module):
         dropout: float = 0,
     ):
         super().__init__()
+        mamba_dim = n_channels * 4 * 3
 
         # Define sequence of Mamba blocks
         self.blocks = nn.Sequential(
             *[MambaBlock(mamba_dim, dropout) for _ in range(n_mamba_layers)]
         )
-
         # Linear embedding from feature space (n_channels), to embed_dim
-        self.linear_in = nn.Linear(n_channels, embed_dim)
+        # self.linear_in = nn.Linear(n_channels, embed_dim)
 
-        self.conv_in = nn.Conv2d(in_channels=1, out_channels=embed_dim, kernel_size=(n_channels, 1), padding=0)
-        self.conv_over_linear = nn.Conv1d(in_channels=64, out_channels=mamba_dim, kernel_size=3, padding="same")
+        self.pointconv = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=1)
+        # self.conv_in = nn.Conv2d(in_channels=1, out_channels=embed_dim, kernel_size=(n_channels, 1), padding=0)
+        self.conv1 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding="same")
+        self.conv2 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=9, padding="same")
+        self.conv3 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=27, padding="same")
 
         self.norm = nn.LayerNorm(mamba_dim)
 
@@ -139,40 +142,32 @@ class TestMamba(nn.Module):
         x = x[:, :max_index, :]
         # [64, 634-max_index, 19]
         # [B, T-max_index, 19]
-
-        x = self.linear_in(x)
-        # x = x.permute(0, 2, 1).unsqueeze(1)
-        # # [64, 19, 634-max_index]
-        # x = self.conv_in(x)
-        # # [64, mamba_dim, 634-max_index]
-        # x = x.squeeze(2).permute(0, 2, 1)
-        x = nn.functional.silu(x)
-        # [64, 634-max_index, 128] (mamba_dim/embed_dim)
+        # Linear with same size to learn relationships between electrodes
+        # x = self.linear_in(x)
 
         # Linear (64 > 64), Conv (64 > 128)
-        x_forward = x
-        # x_backward = torch.flip(x.clone(), dims=[1])
-        x_forward = x_forward.permute(0, 2, 1)
-        x_forward = self.conv_over_linear(x_forward)
-        x_forward = x_forward.permute(0, 2, 1)
-        x_forward = nn.functional.silu(x_forward)
-        
-        # x_backward = x_backward.permute(0, 2, 1)
-        # x_backward = self.conv_over_linear(x_backward)
-        # x_backward = x_backward.permute(0, 2, 1)
-        # x_backward = nn.functional.silu(x_backward)
+        # 1D point-wise convolution to convert 64 channels into 64 features, including correlation across electrodes
+        x = x.permute(0, 2, 1)
+        x = self.pointconv(x)
+        # Dropout on time dimension to decrease dependence on temporal information
+        x = nn.Dropout1d(p=0.4)(x)
+        x = nn.functional.silu(x)
 
+        # Three conv layers with gradually increasing kernel sizes to capture temporal relationships at different time scales
+        x1 = self.conv1(x)
+        x2 = self.conv2(x)
+        x3 = self.conv3(x)
+        x = torch.cat([x1, x2, x3], dim=1)
+        x = nn.functional.silu(x)
+
+        x = x.permute(0, 2, 1)
+        
         out_forward = (
-            self.blocks(x_forward)
+            self.blocks(x)
             if not self.global_pool
-            else torch.mean(self.blocks(x_forward), dim=1)
+            else torch.mean(self.blocks(x), dim=1)
         )
-        # out_backward = (
-        #     self.blocks(x_backward)
-        #     if not self.global_pool
-        #     else torch.mean(self.blocks(x_backward), dim=1)
-        # )
-        # out = out_forward + torch.flip(out_backward, dims=[1])
+
         out = out_forward
         out = self.norm(out)
         out = (
@@ -189,8 +184,8 @@ class MambaBlock(nn.Module):
     def __init__(self, embed_dim, dropout=0):
         super().__init__()
 
-        self.mamba = Mamba(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
-        # self.mamba = Mamba2(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
+        # self.mamba = Mamba(d_model=embed_dim, d_state=16, d_conv=4, expand=2)
+        self.mamba = Mamba2(d_model=embed_dim, d_state=64, d_conv=4, expand=2)
         self.norm = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
 
