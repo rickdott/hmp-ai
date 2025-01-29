@@ -1,5 +1,5 @@
 import torch
-from hmpai.utilities import MASKING_VALUE, get_masking_indices, get_masking_index
+from hmpai.utilities import MASKING_VALUE, get_masking_indices, get_masking_index, get_trial_start_end
 import random
 import numpy as np
 import braindecode.augmentation as aug
@@ -405,29 +405,3 @@ class ConcatenateTransform(object):
     
     def __call__(self, data_in):
         return data_in
-
-class EegNoiseTransform(object):
-    def __init__(self, arg1, arg2):
-        self.arg1 = arg1
-        self.arg2 = arg2
-
-    def __call__(self, segment):
-        return segment
-
-
-class EegTimeWarpingTransform(object):
-    def __init__(self, arg1, arg2):
-        self.arg1 = arg1
-        self.arg2 = arg2
-
-    def __call__(self, segment):
-        return segment
-
-
-class EegChannelShufflingTransform(object):
-    def __init__(self, arg1, arg2):
-        self.arg1 = arg1
-        self.arg2 = arg2
-
-    def __call__(self, segment):
-        return segment

@@ -582,7 +582,11 @@ class StageFinder:
 
         return stage_data
 
-    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None, model_index=None):
+    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None, model_index=None, figsize=None):
+        if figsize is not None:
+            figsize = figsize
+        else:
+            figsize = (12, 3)
         set_seaborn_style()
         if len(self.fits) > 1:
             if model_index is not None:
@@ -606,7 +610,7 @@ class StageFinder:
                     magnify=1.5,
                 )
             else:
-                fig, ax = plt.subplots(len(self.fits), 1, figsize=(12, 3), sharex=True)
+                fig, ax = plt.subplots(len(self.fits), 1, figsize=figsize, sharex=True, dpi=300)
                 for i, condition in enumerate(
                     zip(
                         self.fits,

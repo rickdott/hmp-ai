@@ -4,6 +4,7 @@ import math
 import torch
 import xarray as xr
 import seaborn as sns
+import matplotlib
 
 
 # Channel configuration for topological layout, "NA" means 'not available' and should not be used in training
@@ -164,25 +165,52 @@ def get_masking_index(t, search_value=MASKING_VALUE):
     max_index = mask.shape[0] - last_block_start
     return max_index
 
+
 def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     # Check if search_value is NaN
     if isinstance(search_value, float) and np.isnan(search_value):
-        mask = np.isnan(data.isel(channels=0))  # Select the first channel and apply NaN mask
+        mask = np.isnan(
+            data.isel(channels=0)
+        )  # Select the first channel and apply NaN mask
     else:
-        mask = data.isel(channels=0) == search_value  # Comparison for non-NaN search values
+        mask = (
+            data.isel(channels=0) == search_value
+        )  # Comparison for non-NaN search values
 
     # Reverse mask along the time dimension
     reversed_mask = mask.isel(samples=slice(None, None, -1))
-    
+
     # Find the first occurrence of non-mask values in the reversed mask
-    last_block_start = (~reversed_mask).argmax(dim='samples')
-    
+    last_block_start = (~reversed_mask).argmax(dim="samples")
+
     # Calculate the max indices based on the mask shape and block start positions
-    max_indices = mask.shape[1] - last_block_start.values  # Adjusting based on time dimension length
+    max_indices = (
+        mask.shape[1] - last_block_start.values
+    )  # Adjusting based on time dimension length
 
     return max_indices
 
+
+def get_trial_start_end(probabilities: torch.Tensor):
+    # Create a mask where any non-zero value exists along the channels
+    # Any non-negative class
+    mask = (probabilities[:, 1:] != 0).any(dim=1)
+
+    # Find the first and last non-zero indices
+    if mask.any():
+        nonzero_mask = torch.nonzero(mask, as_tuple=False)
+        first_nonzero = nonzero_mask[0].item()
+        last_nonzero = nonzero_mask[-1].item()
+    else:
+        first_nonzero, last_nonzero = -1, -1  # Default if all values are zero
+
+    lowest_highest = (first_nonzero, last_nonzero)
+
+    return lowest_highest
+
+
 def set_seaborn_style():
+    matplotlib.rcParams['pdf.fonttype']=42
     sns.set_style("ticks")
     sns.set_context("paper")
     # sns.set_palette("tab10")

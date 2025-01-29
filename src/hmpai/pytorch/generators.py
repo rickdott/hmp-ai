@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from hmpai.data import SAT1_STAGES_ACCURACY, preprocess, MASKING_VALUE
 from hmpai.pytorch.normalization import *
-from hmpai.pytorch.utilities import DEVICE
+from hmpai.pytorch.utilities import DEVICE, add_relative_positional_encoding
 from hmpai.pytorch.transforms import ConcatenateTransform
 from hmpai.utilities import get_masking_index, get_masking_indices
 import pyedflib
@@ -322,6 +322,7 @@ class MultiXArrayProbaDataset(Dataset):
         data_labels: list[
             list
         ] = None,  # List of equal length as data_paths in case datasets have different labels, labels param should in this case be a list containing the intersection of all of these
+        add_pe: bool = False,
     ):
         self.data_paths = data_paths
         self.data_labels = data_labels
@@ -376,6 +377,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.probabilistic_labels = probabilistic_labels
         self.skip_samples = skip_samples
         self.cut_samples = cut_samples
+        self.add_pe = add_pe
 
         if self.transform is not None:
             for i, tf in enumerate(self.transform.transforms):
@@ -547,7 +549,7 @@ class MultiXArrayProbaDataset(Dataset):
             nan_mask = np.isnan(data)
             global_sum += np.sum(valid_data)
             global_sum_squares += np.sum(valid_data**2)
-            n_samples += np.sum(nan_mask)
+            n_samples += np.sum(~nan_mask)
 
             all_data.append(valid_data[~nan_mask])
 
@@ -704,6 +706,10 @@ class MultiXArrayProbaDataset(Dataset):
 
         # fillna with masking_value
         sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
+
+        # Add positional encoding
+        if self.add_pe:
+            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label))
         if debug:
             plot_epoch((sample_data, sample_label), "End result")
 

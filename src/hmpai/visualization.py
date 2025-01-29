@@ -26,55 +26,6 @@ import warnings
 from hmpai.utilities import set_seaborn_style
 
 
-# def add_attribution(
-#     dataset: xr.Dataset, analyzer: captum.attr.Attribution, model: torch.nn.Module
-# ) -> xr.Dataset:
-#     """
-#     Analyzes the given dataset using the provided attribution method and model, and adds the analysis
-#     results to the dataset.
-
-#     Args:
-#         dataset (xr.Dataset): The dataset to analyze.
-#         analyzer (captum.attr.Attribution): The attribution method to use for analysis.
-#         model (torch.nn.Module): The model to use for analysis.
-
-#     Returns:
-#         xr.Dataset: The analyzed dataset with the analysis results added.
-#     """
-#     test_set = preprocess(dataset)
-#     test_dataset = SAT1Dataset(test_set, do_preprocessing=False)
-#     test_set = test_set.assign(
-#         analysis=(("index", "samples", "channels"), np.zeros_like(test_set.data))
-#     )
-#     test_loader = DataLoader(
-#         test_dataset, batch_size=128, shuffle=False, pin_memory=True
-#     )
-
-#     # Batch-wise analyzing of data and adding analysis to the dataset
-#     for i, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
-#         # print(f"Batch: {i + 1}/{batches}")
-#         batch_data = batch[0].to(DEVICE)
-#         baselines = torch.clone(batch_data)
-#         mask = baselines != MASKING_VALUE
-#         baselines[mask] = 0
-#         baselines = baselines.to(DEVICE)
-#         target = torch.argmax(model(batch_data), dim=1)
-#         batch_analysis = analyzer.attribute(
-#             batch_data,
-#             baselines=baselines,
-#             n_steps=50,
-#             method="riemann_trapezoid",
-#             # Change to batch[1] if true values should be used instead of model predictions
-#             target=target,
-#             internal_batch_size=128,
-#         )
-#         test_set.analysis[i * len(batch[1]) : (i + 1) * len(batch[1])] = torch.squeeze(
-#             batch_analysis.cpu()
-#         )
-
-#     return test_set
-
-
 def plot_max_activation_per_label(
     dataset: xr.Dataset,
     positions: Info,
@@ -707,7 +658,7 @@ def plot_predictions_on_epoch(
 
     # print(true)
     nrows = 3 if random_perm else 2
-    fig, ax = plt.subplots(nrows, 1)
+    fig, ax = plt.subplots(nrows, 1, figsize=(9, 15), dpi=50)
     # fig, ax = plt.subplots(nrows, 1, sharex=True)
     ax[0].set_ylabel("HMP")
     ax[0].set_xlabel("Samples")
@@ -722,7 +673,7 @@ def plot_predictions_on_epoch(
                 x=range(len(true[:rt_idx, i])),
                 y=true[:rt_idx, i],
                 ax=ax[0],
-                color=sns.color_palette('tab10')[i + 1],
+                color=sns.color_palette()[i + 1],
                 label=labels[i + 1],
                 legend=False,
             )
@@ -736,7 +687,7 @@ def plot_predictions_on_epoch(
             x=range(len(empty[:rt_idx, i])),
             y=empty[:rt_idx, i],
             ax=ax[1],
-            color=sns.color_palette('tab10')[i],
+            color=sns.color_palette()[i],
             label=labels[i],
             legend=False,
         )
@@ -785,7 +736,7 @@ def plot_predictions_on_epoch(
                 x=range(len(shuffled_preds[:rt_idx, i])),
                 y=shuffled_preds[:rt_idx, i],
                 ax=ax[2],
-                color=sns.color_palette('tab10')[i],
+                color=sns.color_palette()[i],
                 label=labels[i],
                 legend=False,
             )
@@ -1325,7 +1276,7 @@ def plot_distributions(data, process='confirmation'):
     sns.histplot(data, x=x_col, element=element, ax=ax[1], bins=bins, hue='SAT', palette=sns.color_palette()[1:], legend=False)
     sns.histplot(data, x='ratio', element=element, ax=ax[2], bins=bins, hue='SAT', palette=sns.color_palette()[1:])
     # plt.legend()
-    plt.ylim(0, 1000)
+    plt.ylim(0, 3000)
     ax[0].set_xlabel('RT (in samples)')
     ax[0].set_ylabel('Count (trials)')
     ax[1].set_xlabel(f'{process.capitalize()} AUC')
@@ -1611,3 +1562,380 @@ def plot_density(model, loader, labels):
     plt.savefig("../../img/perf_plot_density.svg", transparent=True)
 
     plt.show()
+
+def plot_peak_timing(model, loader, labels, ax_ac, ax_sp):
+    output = []
+    torch.cuda.empty_cache()
+
+    with torch.no_grad():
+        for batch in loader:
+            info = batch[2][0]  # Contains RT
+
+            pred = model(batch[0].to(DEVICE))
+            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+
+            true = batch[1]
+
+            lengths = get_masking_indices(batch[0])
+
+            pred_peaks = pred[..., 1:].argmax(dim=1).float()
+            true_peaks = true[..., 1:].argmax(dim=1).float()
+
+            pred_peaks /= lengths.unsqueeze(1)
+            true_peaks /= lengths.unsqueeze(1)
+            data = {"condition": info["condition"]}
+            for i, label in enumerate(labels):
+                if i == 0:
+                    continue
+                label_pred_peaks = pred_peaks[:, i - 1]
+                label_true_peaks = true_peaks[:, i - 1]
+                data[f"{label}_pred"] = label_pred_peaks
+                data[f"{label}_true"] = label_true_peaks
+            output.append(data)
+    df = pd.concat([pd.DataFrame(data) for data in output])
+    
+    for label in labels:
+        if label == "negative":
+            continue
+        # sns.scatterplot(
+        #     data=df[df["condition"] == "accuracy"],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     alpha=0.7,
+        #     ax=ax[0],
+        # )
+
+        # sns.scatterplot(
+        #     data=df[df["condition"] == "speed"],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     alpha=0.7,
+        #     ax=ax[1],
+        # )
+        sns.regplot(
+            data=df[df["condition"] == "accuracy"],
+            x=f"{label}_pred",
+            y=f"{label}_true",
+            # alpha=0.7,
+            ax=ax_ac,
+            scatter_kws={'alpha': 0.05},
+        )
+
+        sns.regplot(
+            data=df[df["condition"] == "speed"],
+            x=f"{label}_pred",
+            y=f"{label}_true",
+            # alpha=0.7,
+            ax=ax_sp,
+            scatter_kws={'alpha': 0.05},
+        )
+        # ax[0].set_title("Accuracy")
+        # ax[1].set_title("Speed")
+        # ax[0].set_xlabel("")
+        # ax[1].set_xlabel("")
+        # ax[0].set_ylabel("")
+        # ax[1].set_ylabel("")
+        # ax[0].set_xlim((0, 1))
+        # ax[0].set_ylim((0, 1))
+        # ax[1].set_xlim((0, 1))
+        # ax[1].set_ylim((0, 1))
+        
+        # fig.supxlabel("Predicted peak timing (normalized)")
+        # fig.supylabel("True peak timing (normalized)")
+
+def plot_single_epoch(data,
+    labels: list[str],
+    model: torch.nn.Module,
+    ax):
+    # Pass in result of dataset.__getitem__(idx)
+    epoch, true = data[0], data[1]
+    rt_idx = get_masking_index(epoch)
+
+    # Cut to RT and remove negative class
+    true = true[:rt_idx, 1:]
+    set_seaborn_style()
+
+    pred = model(epoch.unsqueeze(0).to(DEVICE))
+    pred = torch.nn.Softmax(dim=2)(pred).squeeze()
+    # Necessary?
+    # pred = pred / pred.sum(dim=2, keepdim=True)
+
+    pred = pred.cpu().detach().numpy()
+    pred = pred[:rt_idx, 1:]
+
+    # Plot HMP
+    for i in range(0, true.shape[1]):
+        sns.lineplot(x=range(len(true[:, i])),
+                     y=true[:, i],
+                     ax=ax,
+                     color=sns.color_palette()[i + 1],
+                     label=labels[i + 1],
+                     legend=False,
+                     alpha=0.5,
+                     linestyle='--')
+    
+    # Plot predictions
+    for i in range(0, pred.shape[1]):
+        sns.lineplot(            x=range(len(pred[:, i])),
+            y=pred[:, i],
+            ax=ax,
+            color=sns.color_palette()[i + 1],
+            label=labels[i],
+            legend=False,)
+
+def plot_density_single(model, loader, labels, ax_ac, ax_sp):
+        # SAT2
+    torch.cuda.empty_cache()
+
+    target_length = 100
+
+    speed_pred = torch.zeros((target_length, len(labels)))
+    speed_true = torch.zeros((target_length, len(labels)))
+    accuracy_pred = torch.zeros((target_length, len(labels)))
+    accuracy_true = torch.zeros((target_length, len(labels)))
+
+    n_speed = 0
+    n_accuracy = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            info = batch[2][0]
+
+            # Predict on batch
+            pred = model(batch[0].to(DEVICE))
+            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+            true = batch[1]
+
+            lengths = get_masking_indices(batch[0])
+
+            for i in range(pred.shape[0]):
+                is_speed = "speed" in info["event_name"][i]
+                pred_epoch = pred[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+                true_epoch = true[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+
+                pred_normalized = torch.nn.functional.interpolate(
+                    pred_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                true_normalized = torch.nn.functional.interpolate(
+                    true_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
+                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+
+                # Additionally normalize over sum to create a valid probability distribution
+                pred_normalized = pred_normalized.squeeze().permute(1, 0)
+                true_normalized = true_normalized.squeeze().permute(1, 0)
+
+                if is_speed:
+                    speed_pred += pred_normalized
+                    speed_true += true_normalized
+                    n_speed += 1
+                else:
+                    accuracy_pred += pred_normalized
+                    accuracy_true += true_normalized
+                    n_accuracy += 1
+
+    speed_pred /= n_speed
+    speed_true /= n_speed
+    accuracy_pred /= n_accuracy
+    accuracy_true /= n_accuracy
+
+    # Set confirmation in speed to 0
+    speed_true[:, 3] = 0    # SAT2
+    torch.cuda.empty_cache()
+
+    target_length = 100
+
+    speed_pred = torch.zeros((target_length, len(labels)))
+    speed_true = torch.zeros((target_length, len(labels)))
+    accuracy_pred = torch.zeros((target_length, len(labels)))
+    accuracy_true = torch.zeros((target_length, len(labels)))
+
+    n_speed = 0
+    n_accuracy = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            info = batch[2][0]
+
+            # Predict on batch
+            pred = model(batch[0].to(DEVICE))
+            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+            true = batch[1]
+
+            lengths = get_masking_indices(batch[0])
+
+            for i in range(pred.shape[0]):
+                is_speed = "speed" in info["event_name"][i]
+                pred_epoch = pred[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+                true_epoch = true[i, : lengths[i]].permute(1, 0).unsqueeze(0)
+
+                pred_normalized = torch.nn.functional.interpolate(
+                    pred_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                true_normalized = torch.nn.functional.interpolate(
+                    true_epoch, size=target_length, mode="linear", align_corners=False
+                )
+                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
+                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+
+                # Additionally normalize over sum to create a valid probability distribution
+                pred_normalized = pred_normalized.squeeze().permute(1, 0)
+                true_normalized = true_normalized.squeeze().permute(1, 0)
+
+                if is_speed:
+                    speed_pred += pred_normalized
+                    speed_true += true_normalized
+                    n_speed += 1
+                else:
+                    accuracy_pred += pred_normalized
+                    accuracy_true += true_normalized
+                    n_accuracy += 1
+
+    speed_pred /= n_speed
+    speed_true /= n_speed
+    accuracy_pred /= n_accuracy
+    accuracy_true /= n_accuracy
+
+    # Set confirmation in speed to 0
+    speed_true[:, 3] = 0
+
+    for i, label in enumerate(labels):
+        if i == 0:
+            continue
+        sns.lineplot(
+            accuracy_true[:, i],
+            ax=ax_ac,
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+            legend=False,
+        )
+        sns.lineplot(
+            accuracy_pred[:, i],
+            ax=ax_ac,
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+            legend=False,
+        )
+
+        sns.lineplot(
+            speed_true[:, i],
+            ax=ax_sp,
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="--",
+            alpha=0.5,
+            legend=False,
+        )
+        sns.lineplot(
+            speed_pred[:, i],
+            ax=ax_sp,
+            label=label,
+            color=sns.color_palette()[i],
+            linestyle="-",
+            legend=False,
+        )
+
+def plot_tertile_split_single(data: pd.DataFrame, column: str, conditions: list[str],
+                              calc_tertile_over_condition: bool = False,
+                              normalize: str = 'auc', axes: list=[]):
+    pd.options.mode.chained_assignment = None
+    data = data.copy()
+
+    # Also do ratio here? Does not make sense since for non-confirmation operations we are certain that they exist?
+    if column.endswith("_ratio"):
+        if normalize == "auc":
+            auc_columns = [
+                column
+                for column in data.columns
+                if column.endswith("_auc") and not column.startswith("negative")
+            ]
+            data["sum_auc"] = data[auc_columns].sum(axis=1)
+            data[f"{column}"] = (
+                data[f"{column.replace('_ratio', '_auc')}"] / data["sum_auc"]
+            )
+        if normalize == "time":
+            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / (data["rt_x"] / 1000)
+
+    # Calculate tertiles per participant, over conditions
+    if calc_tertile_over_condition:
+        data["condition"] = data.groupby("participant")[column].transform(
+            lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"])
+        )
+    
+    for i, condition in enumerate(conditions):
+        data_subset = data[data.SAT == condition]
+        if not calc_tertile_over_condition:
+            data_subset["condition"] = data_subset.groupby("participant")[
+                column
+            ].transform(lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"]))
+        # Calculate P(response == 1), per participant and per condition
+        participant_ratios = (
+            data_subset.groupby(["participant", "condition"], observed=True)
+            .response.mean()
+            .reset_index()
+        )
+        sns.violinplot(x="condition", y="response", data=participant_ratios, hue="condition", palette="mako_r", ax=axes[i], cut=0)
+
+
+def plot_emg_sequence_combined(data, n, ax):
+    # Combine EMG_sequence groups
+    group_mapping = {
+        "IR": "IR/CR",
+        "CR": "IR/CR",
+        "ICR": "ICR/CIR",
+        "CIR": "ICR/CIR",
+        "CCR": "CCR/IIR",
+        "IIR": "CCR/IIR",
+    }
+    data["EMG_group"] = data["EMG_sequence"].map(group_mapping)
+
+    # Filter based on occurrences
+    filtered_data = data[
+        data["EMG_group"].isin(
+            data["EMG_group"].value_counts()[data["EMG_group"].value_counts() > n].index
+        )
+    ].copy()
+    # print(filtered_data["EMG_group"].value_counts())
+    # Calculate ratio
+    filtered_data["ratio"] = filtered_data["confirmation_auc"] / (
+        filtered_data["rt_x"] * 250
+    )
+
+    # Compute sorted categories
+    sorted_categories = (
+        filtered_data.groupby("EMG_group")["ratio"].median().sort_values().index
+    )
+
+    ir_cr = filtered_data[filtered_data["EMG_group"] == "IR/CR"]["ratio"]
+    icr_cir = filtered_data[filtered_data["EMG_group"] == "ICR/CIR"]["ratio"]
+    ccr_iir = filtered_data[filtered_data["EMG_group"] == "CCR/IIR"]["ratio"]
+
+    # p_1 = ttest_ind(ir_cr, icr_cir, equal_var=False)
+    # p_2 = ttest_ind(ir_cr, ccr_iir, equal_var=False)
+    # p_3 = ttest_ind(icr_cir, ccr_iir, equal_var=False)
+    # p_1 = mannwhitneyu(ir_cr, icr_cir)
+    # p_2 = mannwhitneyu(ir_cr, ccr_iir)
+    # p_3 = mannwhitneyu(icr_cir, ccr_iir)
+    # print(p_1, p_2, p_3)
+
+
+    # Create the violin plot
+    sns.violinplot(
+        x="EMG_group", y="ratio", data=filtered_data, order=sorted_categories, cut=0, ax=ax
+    )
+
+    # Add titles and labels
+    # plt.xlabel("EMG Sequence Groups")
+    # plt.ylabel("Average Confirmation Probability")
+    # plt.legend(title="SAT", loc="upper right")
+    # add_significance_annotations(p_1.pvalue, 0, 1, ir_cr.max() * 1.1, fig.axes[0])
+    # add_significance_annotations(p_2.pvalue, 0, 2, ir_cr.max() * 1.25, fig.axes[0])
+    # add_significance_annotations(p_3.pvalue, 1, 2, ir_cr.max() * 1.4, fig.axes[0])
+
+    # Optional: Rotate x-axis labels for better readability
+    # plt.ylim(0, 0.01)
+    # plt.xticks(rotation=45)

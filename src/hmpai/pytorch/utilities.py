@@ -4,6 +4,7 @@ import random
 import numpy as np
 from torchinfo import summary
 from pathlib import Path
+from hmpai.utilities import get_trial_start_end
 
 DEVICE = (
     "cuda:0"
@@ -47,7 +48,7 @@ def save_model(
 
 
 def load_model(path: Path) -> dict:
-    return torch.load(path)
+    return torch.load(path, weights_only=False)
 
 
 def save_tensor(tensor: torch.Tensor, filename: str) -> None:
@@ -57,3 +58,23 @@ def save_tensor(tensor: torch.Tensor, filename: str) -> None:
         np_tensor = np.squeeze(tensor)
     df_tensor = pd.DataFrame(np_tensor)
     df_tensor.to_csv(filename, index=False)
+
+def add_relative_positional_encoding(data):
+    # Data is tuple (data, labels)
+    data, probabilities = data
+    start, end = get_trial_start_end(probabilities)
+    length = data.shape[0]
+
+    encoding_feature = torch.zeros(length)
+
+    pe = torch.arange(length - start).float()
+    pe /= end - start
+    encoding_feature[start:] = pe.clamp(max=1)
+    encoding_feature = encoding_feature.unsqueeze(-1)
+    # from matplotlib import pyplot as plt
+    # plt.figure()
+    # plt.plot(encoding_feature)
+    # plt.vlines([start, end], ymin=0, ymax=1, linestyles="--")
+    # plt.show()
+    data = torch.cat([data, encoding_feature], dim=1)
+    return data, probabilities
