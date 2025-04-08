@@ -16,12 +16,15 @@ import pandas as pd
 
 
 def split_participants_into_folds(
-    data_paths: list[str | Path], n_folds: int, shuffle: bool = True
+    data_paths: list[str | Path], n_folds: int, shuffle: bool = True, participants_to_use: list[str] = None
 ):
     participants = []
     for data_path in data_paths:
         with xr.open_dataset(data_path) as ds:
-            participants.extend(ds.participant.values)
+            participants.extend(ds.participant.values.tolist())
+
+    if participants_to_use is not None:
+        participants = [p for p in participants if p in participants_to_use]
 
     if n_folds > len(participants):
         raise ValueError(

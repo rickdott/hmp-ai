@@ -14,13 +14,14 @@ from hmpai.behaviour.sat2 import read_behavioural_info, merge_data_xr
 SAT_CLASSES_ACCURACY = [
     "negative",
     "encoding",
-    "n200",    
+    # "n200",    
     "decision",
     "confirmation",
     "response"
 ]
 
-SAT_CLASSES_SPEED = ["negative", "encoding", "n200", "decision", "response"]
+SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
+# SAT_CLASSES_SPEED = ["negative", "encoding", "n200", "decision", "response"]
 
 SAT_CLASSES_ACCURACY_SPLIT = [
     "negative",
@@ -366,6 +367,7 @@ class StageFinder:
         split_response=False,
         behaviour_path=None,
         behaviour_fn=read_behavioural_info,
+        pca_weights=None,
     ):
         # Check for faulty input
         if len(conditions) > 0:
@@ -421,12 +423,12 @@ class StageFinder:
             self.epoch_data_offset = epoch_data_no_offset
             del reordered
             self.hmp_data_offset = hmp.utils.transform_data(
-                self.epoch_data_offset, n_comp=self.n_comp, apply_zscore='all'
+                self.epoch_data_offset, n_comp=self.n_comp, apply_zscore='all', pca_weights=pca_weights
             )
         else:
             self.epoch_data_offset = self.epoch_data
             self.hmp_data_offset = hmp.utils.transform_data(
-                self.epoch_data, n_comp=self.n_comp, apply_zscore='all'
+                self.epoch_data, n_comp=self.n_comp, apply_zscore='all', pca_weights=pca_weights
             )
         # Split on extra variables before fitting
         if isinstance(extra_split, list):
@@ -468,15 +470,32 @@ class StageFinder:
 
         return
 
-    def fit_model(self):
+    # fit_args to optionally give additional arguments when re-fitting in same StageFinder instance
+    # extra_split to split on other conditions for just this fit
+    def fit_model(self, fit_args: dict = None, extra_split: list = None):
         # Fits HMP model on dataset
-
+        if isinstance(extra_split, list):
+            hmp_data_offset = self.hmp_data_offset.copy()
+            for split in extra_split:
+                var, method, cond = split
+                hmp_data_offset = hmp.utils.condition_selection(
+                    hmp_data_offset,
+                    None,
+                    cond,
+                    variable=var,
+                    method=method,
+                )
+        else:
+            hmp_data_offset = self.hmp_data_offset
         # Keep conditions empty to train HMP model on all data, add conditions to separate them
         # this is useful when conditions cause different stages or stage lengths
-        if len(self.conditions) > 0:
+        fit_args_tmp = self.fit_args
+        if fit_args is not None:
+            self.fit_args = self.fit_args | fit_args
+        if len(self.conditions) > 0 and extra_split is None:
             for idx, condition in enumerate(self.conditions):
                 condition_subset = hmp.utils.condition_selection(
-                    self.hmp_data_offset,
+                    hmp_data_offset,
                     None,  # epoch_data deprecated
                     condition,
                     variable=self.condition_variable,
@@ -508,6 +527,7 @@ class StageFinder:
                     print(f"Fitting HMP model for {condition} condition")
                     # Add 
                     fit = self.__fit_model__(condition_subset)
+                    self.fit_args = fit_args_tmp
 
                 self.fits.append(fit)
                 self.hmp_data.append(condition_subset)
@@ -525,21 +545,22 @@ class StageFinder:
                 )
                 self.fits.append(fit)
                 model = hmp.models.hmp(
-                    self.hmp_data_offset,
+                    hmp_data_offset,
                     self.epoch_data_offset,
                     cpus=self.cpus,
                     sfreq=self.epoch_data.sfreq,
                     event_width=self.event_width,
                 )
-                self.hmp_data.append(self.hmp_data_offset)
+                self.hmp_data.append(hmp_data_offset)
                 self.models.append(model)
                 self.conditions.append("No condition")
             else:
                 if self.fit_function == "fit_single":
-                    self.fit_args["n_events"] = len(self.labels) - 1
-                fit = self.__fit_model__(self.hmp_data_offset)
+                    fit_args["n_events"] = len(self.labels) - 1
+                fit = self.__fit_model__(hmp_data_offset)
+                self.fit_args = fit_args_tmp
                 self.fits.append(fit)
-                self.hmp_data.append(self.hmp_data_offset)
+                self.hmp_data.append(hmp_data_offset)
                 self.conditions.append("No condition")
 
     def label_model(self, label_fn=None, label_fn_kwargs=None, probabilistic=False):
@@ -588,89 +609,87 @@ class StageFinder:
         else:
             figsize = (12, 3)
         set_seaborn_style()
-        if len(self.fits) > 1:
-            if model_index is not None:
-                i = model_index
-                condition = (self.fits[model_index], self.models[model_index], self.hmp_data[model_index], self.conditions[model_index])
-                return hmp.visu.plot_topo_timecourse(
-                    self.epoch_data_offset,
-                    self.fits[model_index],
-                    positions,
-                    self.models[model_index],
-                    times_to_display=(np.mean(self.models[model_index].ends - self.models[model_index].starts)),
-                    max_time=max_time,
-                    ylabels={"": [self.conditions[model_index].capitalize()] if cond_label is None else [cond_label]},
-                    as_time=True,
-                    estimate_method="max",
-                    # ax=ax,
-                    event_lines=None,
-                    vmin=-7e-6,
-                    vmax=7e-6,
-                    colorbar=colorbar,
-                    magnify=1.5,
-                )
-            else:
-                fig, ax = plt.subplots(len(self.fits), 1, figsize=figsize, sharex=True, dpi=300)
-                for i, condition in enumerate(
-                    zip(
-                        self.fits,
-                        self.models,
-                        self.hmp_data,
-                        self.conditions,
-                    )
-                ):
-                    sfreq = self.epoch_data.sfreq
-                    max_time = (
-                        max_time
-                        if max_time is not None
-                        else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
-                        * 1000
-                    )
-                    ax_i = hmp.visu.plot_topo_timecourse(
-                        self.epoch_data_offset,
-                        condition[0],
-                        positions,
-                        condition[1],
-                        times_to_display=(np.mean(condition[1].ends - condition[1].starts)),
-                        max_time=max_time,
-                        ylabels={"": [condition[3].capitalize()]},
-                        as_time=True,
-                        estimate_method="max",
-                        ax=ax[i],
-                        event_lines=None,
-                        vmin=-7e-6,
-                        vmax=7e-6,
-                        colorbar=colorbar,
-                    )
-                    ax[i] = ax_i
-                ax[-1].set_xlabel("Time (in ms)")
-                fig.supylabel("Condition")
-                return fig, ax
-        else:
-            sfreq = self.epoch_data.sfreq
-            max_time = (
-                max_time
-                if max_time is not None
-                else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
-                * 1000
+        if model_index is not None:
+            hmp.visu.plot_topo_timecourse(
+                self.epoch_data_offset,
+                self.fits[model_index],
+                positions,
+                self.models[model_index],
+                times_to_display=(np.mean(self.models[model_index].ends - self.models[model_index].starts)),
+                max_time=max_time,
+                ylabels={"": [self.conditions[model_index].capitalize()] if cond_label is None else [cond_label]},
+                as_time=True,
+                estimate_method="max",
+                ax=ax,
+                event_lines=None,
+                vmin=-7e-6,
+                vmax=7e-6,
+                colorbar=colorbar,
+                magnify=2.5,
             )
-            return hmp.visu.plot_topo_timecourse(
+        else:
+            fig, ax = plt.subplots(len(self.fits), 1, figsize=figsize, sharex=True, dpi=300)
+            for i, condition in enumerate(
+                zip(
+                    self.fits,
+                    self.models,
+                    self.hmp_data,
+                    self.conditions,
+                )
+            ):
+                sfreq = self.epoch_data.sfreq
+                max_time = (
+                    max_time
+                    if max_time is not None
+                    else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
+                    * 1000
+                )
+                ax_i = hmp.visu.plot_topo_timecourse(
                     self.epoch_data_offset,
-                    self.fits[0],
+                    condition[0],
                     positions,
-                    self.models[0],
-                    times_to_display=(np.mean(self.models[0].ends - self.models[0].starts)),
+                    condition[1],
+                    times_to_display=(np.mean(condition[1].ends - condition[1].starts)),
                     max_time=max_time,
-                    ylabels={"": [self.conditions[0].capitalize()] if cond_label is None else [cond_label]},
+                    ylabels={"": [condition[3].capitalize()]},
                     as_time=True,
                     estimate_method="max",
-                    ax=ax,
+                    ax=ax[i],
                     event_lines=None,
                     vmin=-7e-6,
                     vmax=7e-6,
                     colorbar=colorbar,
-                    magnify=1.5,
+                    magnify=2.5,
                 )
+                ax[i] = ax_i
+            ax[-1].set_xlabel("Time (in ms)")
+            fig.supylabel("Condition")
+            return fig, ax
+        # else:
+        #     sfreq = self.epoch_data.sfreq
+        #     max_time = (
+        #         max_time
+        #         if max_time is not None
+        #         else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
+        #         * 1000
+        #     )
+        #     return hmp.visu.plot_topo_timecourse(
+        #             self.epoch_data_offset,
+        #             self.fits[0],
+        #             positions,
+        #             self.models[0],
+        #             times_to_display=(np.mean(self.models[0].ends - self.models[0].starts)),
+        #             max_time=max_time,
+        #             ylabels={"": [self.conditions[0].capitalize()] if cond_label is None else [cond_label]},
+        #             as_time=True,
+        #             estimate_method="max",
+        #             ax=ax,
+        #             event_lines=None,
+        #             vmin=-7e-6,
+        #             vmax=7e-6,
+        #             colorbar=colorbar,
+        #             magnify=1.5,
+        #         )
         
     def __fit_model__(self, hmp_data):
         # Initialize model

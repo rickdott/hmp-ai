@@ -323,6 +323,7 @@ class MultiXArrayProbaDataset(Dataset):
             list
         ] = None,  # List of equal length as data_paths in case datasets have different labels, labels param should in this case be a list containing the intersection of all of these
         add_pe: bool = False,
+        subset_channels: list = None,
     ):
         self.data_paths = data_paths
         self.data_labels = data_labels
@@ -378,6 +379,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.skip_samples = skip_samples
         self.cut_samples = cut_samples
         self.add_pe = add_pe
+        self.subset_channels = subset_channels
 
         if self.transform is not None:
             for i, tf in enumerate(self.transform.transforms):
@@ -485,9 +487,10 @@ class MultiXArrayProbaDataset(Dataset):
             with xr.open_dataset(file_path) as ds:
                 # Find trials for which all samples for one channel are NaN, these are excluded
                 data = ds["data"].values
+                probas = ds["probabilities"].values
                 # Select subset of data to check valid indices
                 data = data[..., 0, :]
-                mask = ~np.isnan(data).all(axis=-1)
+                mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(axis=-1)
                 if self.subset_cond is not None:
                     if self.subset_cond[1] == 'contains':
                         subset_indices = ds[self.subset_cond[0]].str.contains(self.subset_cond[2])
@@ -621,6 +624,9 @@ class MultiXArrayProbaDataset(Dataset):
 
         # Subset TUEG channels
         # sample = sample.sel({"channels": self.sat2_chs})
+        # Subset SAT1 channels
+        if self.subset_channels is not None:
+            sample = sample.sel(channels=self.subset_channels)
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(

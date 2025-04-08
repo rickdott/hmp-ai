@@ -11,7 +11,12 @@ import captum
 from hmpai.pytorch.utilities import DEVICE, save_tensor
 from torch.utils.data import DataLoader
 import torch
-from hmpai.utilities import MASKING_VALUE, get_masking_index, get_masking_indices
+from hmpai.utilities import (
+    MASKING_VALUE,
+    calc_ratio,
+    get_masking_index,
+    get_masking_indices,
+)
 from tqdm.notebook import tqdm
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
@@ -599,6 +604,7 @@ def plot_performance_from_file(
     plot_performance(accs, f1s, categories, cat_name, legend_pos=legend_pos, ylim=ylim)
     return res
 
+
 def plot_predictions_on_epoch(
     epoch: torch.Tensor,
     true: torch.Tensor,
@@ -658,7 +664,7 @@ def plot_predictions_on_epoch(
 
     # print(true)
     nrows = 3 if random_perm else 2
-    fig, ax = plt.subplots(nrows, 1, figsize=(9, 15), dpi=50)
+    fig, ax = plt.subplots(nrows, 1, figsize=(6, 9), dpi=100)
     # fig, ax = plt.subplots(nrows, 1, sharex=True)
     ax[0].set_ylabel("HMP")
     ax[0].set_xlabel("Samples")
@@ -845,10 +851,14 @@ def predict_with_auc(
         data = {info_key: batch[2][0][info_key] for info_key in info_to_keep}
         pred = model(batch[0].to(DEVICE))
         rt_indices = get_masking_indices(batch[0])
-        data['rt_index_samples'] = rt_indices
+        data["rt_index_samples"] = rt_indices
         pred = torch.nn.Softmax(dim=2)(pred)
-        pred = pred.cpu().detach()
+        # Disregard negative class
+        # pred[:,:,1:] = pred[:,:,1:] / (1 - pred[:,:,0]).unsqueeze(-1)
+        # pred[:,:,1:] = pred[:,:,1:] / pred[:,:,0].unsqueeze(-1)
         batch_aucs = torch.sum(pred, dim=1)
+        batch_aucs = batch_aucs.cpu().detach()
+
         # Append AUCs
         for i, label in enumerate(labels):
             data[label + "_auc"] = batch_aucs[:, i]
@@ -1067,10 +1077,11 @@ def show_lmer(labels: list[str], data: pd.DataFrame, formula: str):
         plt.legend(title="Condition")
     plt.show()
 
+
 def plot_eeg(epoch: torch.Tensor):
     set_seaborn_style()
     plt.figure(figsize=(6, 2))
-    epoch = epoch[:get_masking_index(epoch)]
+    epoch = epoch[: get_masking_index(epoch)]
     for channel in range(epoch.shape[1]):
         sns.lineplot(epoch[:, channel])
     plt.xlabel("Samples")
@@ -1078,6 +1089,7 @@ def plot_eeg(epoch: torch.Tensor):
     plt.tight_layout()
     plt.savefig("../../img/eeg.svg", transparent=True)
     plt.show()
+
 
 def plot_epoch(item: tuple, title: str = ""):
     # Input is (data, labels, ... (info))
@@ -1155,8 +1167,7 @@ def plot_tertile_split(
                 data[f"{column.replace('_ratio', '_auc')}"] / data["sum_auc"]
             )
         if normalize == "time":
-            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / (data["rt_x"] / 1000)
-        # column = f"{column}_ratio"
+            data = calc_ratio(data, column.replace("_ratio", ""))
 
     # Calculate tertiles per participant, over conditions
     if calc_tertile_over_condition:
@@ -1239,15 +1250,19 @@ def plot_tertile_split(
     plt.savefig(f"../../img/tertile_split_{column}.svg", transparent=True)
     plt.show()
 
+
 def display_trial(model, dataset, behaviour, idx: int, labels):
     data = dataset.__getitem__(idx)
     epoch, true, info = data[0], data[1], data[2][0]
     print(info)
     # plot_eeg(epoch)
-    p_trial_info = match_on_event_name(info['event_name'], behaviour, info['participant'], info['rt'])
-    print(p_trial_info)
-    rt_ratio = p_trial_info["rt"].item() / get_masking_index(epoch)
-    print(f'RT/masking index ratio: {rt_ratio}')
+    if behaviour is not None:
+        p_trial_info = match_on_event_name(
+            info["event_name"], behaviour, info["participant"], info["rt"]
+        )
+        print(p_trial_info)
+        rt_ratio = p_trial_info["rt"].item() / get_masking_index(epoch)
+        print(f"RT/masking index ratio: {rt_ratio}")
     plot_predictions_on_epoch(
         epoch,
         true,
@@ -1257,47 +1272,80 @@ def display_trial(model, dataset, behaviour, idx: int, labels):
         smoothing=False,
         sequence=True,
         random_perm=True,
-        save=True,
+        save=False,
     )
 
-def plot_distributions(data, process='confirmation'):
+
+def plot_distributions(data, process="confirmation"):
     set_seaborn_style()
-    auc_columns = [column for column in data.columns if column.endswith('_auc') and not column.startswith('negative')]
+    auc_columns = [
+        column
+        for column in data.columns
+        if column.endswith("_auc") and not column.startswith("negative")
+    ]
     data["sum_auc"] = data[auc_columns].sum(axis=1)
     # data['rt_x_norm'] = (data['rt_x'] - data['rt_x'].min()) / (data['rt_x'].max() - data['rt_x'].min())
     # Normalized operation certainty
-    data['rt_samples'] = data["rt_x"] * (250)
-    x_col = process + '_auc'
-    data['ratio'] = data[x_col] / data['rt_samples']
+    data["rt_samples"] = data["rt_x"] * (250)
+    x_col = process + "_auc"
+    data["ratio"] = data[x_col] / data["rt_samples"]
     bins = 75
-    element = 'poly' # bars, step, poly
+    element = "poly"  # bars, step, poly
     fig, ax = plt.subplots(1, 3, sharey=True, figsize=(10, 3))
-    sns.histplot(data, x='rt_samples', element=element, ax=ax[0], bins=bins, hue='SAT', palette=sns.color_palette()[1:], legend=False)
-    sns.histplot(data, x=x_col, element=element, ax=ax[1], bins=bins, hue='SAT', palette=sns.color_palette()[1:], legend=False)
-    sns.histplot(data, x='ratio', element=element, ax=ax[2], bins=bins, hue='SAT', palette=sns.color_palette()[1:])
+    sns.histplot(
+        data,
+        x="rt_samples",
+        element=element,
+        ax=ax[0],
+        bins=bins,
+        hue="SAT",
+        palette=sns.color_palette()[1:],
+        legend=False,
+    )
+    sns.histplot(
+        data,
+        x=x_col,
+        element=element,
+        ax=ax[1],
+        bins=bins,
+        hue="SAT",
+        palette=sns.color_palette()[1:],
+        legend=False,
+    )
+    sns.histplot(
+        data,
+        x="ratio",
+        element=element,
+        ax=ax[2],
+        bins=bins,
+        hue="SAT",
+        palette=sns.color_palette()[1:],
+    )
     # plt.legend()
     plt.ylim(0, 3000)
-    ax[0].set_xlabel('RT (in samples)')
-    ax[0].set_ylabel('Count (trials)')
-    ax[1].set_xlabel(f'{process.capitalize()} AUC')
-    ax[2].set_xlabel(f'Average {process} probability')
+    ax[0].set_xlabel("RT (in samples)")
+    ax[0].set_ylabel("Count (trials)")
+    ax[1].set_xlabel(f"{process.capitalize()} AUC")
+    ax[2].set_xlabel(f"Average {process} probability")
     plt.tight_layout()
-    plt.savefig('../../img/dists.svg', transparent=True)
+    plt.savefig("../../img/dists.svg", transparent=True)
     plt.show()
+
 
 def plot_loss(losses, labels):
     set_seaborn_style()
     losses = torch.stack(losses)
     df = pd.DataFrame(losses.detach().cpu().numpy()[:, 1:], columns=labels[1:])
-    df['x'] = df.index  # Add x-axis column (index represents the time points)
-    df_melted = df.melt(id_vars='x', var_name='Dimension', value_name='Value')
+    df["x"] = df.index  # Add x-axis column (index represents the time points)
+    df_melted = df.melt(id_vars="x", var_name="Dimension", value_name="Value")
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=df_melted, x='x', y='Value', hue='Dimension')
-    plt.title('Tensor Visualization')
-    plt.xlabel('Time Steps')
-    plt.ylabel('Value')
-    plt.legend(title='Dimension')
+    sns.lineplot(data=df_melted, x="x", y="Value", hue="Dimension")
+    plt.title("Tensor Visualization")
+    plt.xlabel("Time Steps")
+    plt.ylabel("Value")
+    plt.legend(title="Dimension")
     plt.show()
+
 
 def plot_cumulative(model, loader, labels):
     # SAT2
@@ -1335,8 +1383,12 @@ def plot_cumulative(model, loader, labels):
                 true_normalized = torch.nn.functional.interpolate(
                     true_epoch, size=target_length, mode="linear", align_corners=False
                 )
-                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
-                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+                pred_normalized = pred_normalized / pred_normalized.sum(
+                    dim=2, keepdim=True
+                )
+                true_normalized = true_normalized / true_normalized.sum(
+                    dim=2, keepdim=True
+                )
 
                 # true_normalized *= lengths[i] / 100
                 # pred_normalized *= lengths[i] / 100
@@ -1409,7 +1461,10 @@ def plot_cumulative(model, loader, labels):
 
     handles, ax_labels = ax[0].get_legend_handles_labels()
     label_legend = ax[0].legend(
-        handles=handles[1::2], labels=ax_labels[1::2], title="Operation", loc="upper left"
+        handles=handles[1::2],
+        labels=ax_labels[1::2],
+        title="Operation",
+        loc="upper left",
     )
 
     # ax[1].legend(handles=handles, labels=ax_labels, title="Labels")
@@ -1432,6 +1487,7 @@ def plot_cumulative(model, loader, labels):
     plt.savefig("../../img/perf_plot_cumulative.svg", transparent=True)
 
     plt.show()
+
 
 def plot_density(model, loader, labels):
     # SAT2
@@ -1469,8 +1525,12 @@ def plot_density(model, loader, labels):
                 true_normalized = torch.nn.functional.interpolate(
                     true_epoch, size=target_length, mode="linear", align_corners=False
                 )
-                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
-                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+                pred_normalized = pred_normalized / pred_normalized.sum(
+                    dim=2, keepdim=True
+                )
+                true_normalized = true_normalized / true_normalized.sum(
+                    dim=2, keepdim=True
+                )
 
                 # Additionally normalize over sum to create a valid probability distribution
                 pred_normalized = pred_normalized.squeeze().permute(1, 0)
@@ -1539,7 +1599,10 @@ def plot_density(model, loader, labels):
 
     handles, ax_labels = ax[0].get_legend_handles_labels()
     label_legend = ax[0].legend(
-        handles=handles[1::2], labels=ax_labels[1::2], title="Operation", loc="upper left"
+        handles=handles[1::2],
+        labels=ax_labels[1::2],
+        title="Operation",
+        loc="upper left",
     )
     plt.ylim((0, 0.2))
     # ax[1].legend(handles=handles, labels=ax_labels, title="Labels")
@@ -1563,90 +1626,134 @@ def plot_density(model, loader, labels):
 
     plt.show()
 
-def plot_peak_timing(model, loader, labels, ax_ac, ax_sp):
-    output = []
-    torch.cuda.empty_cache()
 
-    with torch.no_grad():
-        for batch in loader:
-            info = batch[2][0]  # Contains RT
+def plot_peak_timing(model, loader, labels, ax_ac, ax_sp, cue_var="condition", path=None, sample=True):
+    if path is None:
+        output = []
+        torch.cuda.empty_cache()
 
-            pred = model(batch[0].to(DEVICE))
-            pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
+        with torch.no_grad():
+            for batch in loader:
+                info = batch[2][0]  # Contains RT
 
-            true = batch[1]
+                pred = model(batch[0].to(DEVICE))
+                pred = torch.nn.Softmax(dim=2)(pred).to("cpu")
 
-            lengths = get_masking_indices(batch[0])
+                true = batch[1]
 
-            pred_peaks = pred[..., 1:].argmax(dim=1).float()
-            true_peaks = true[..., 1:].argmax(dim=1).float()
+                lengths = get_masking_indices(batch[0])
 
-            pred_peaks /= lengths.unsqueeze(1)
-            true_peaks /= lengths.unsqueeze(1)
-            data = {"condition": info["condition"]}
-            for i, label in enumerate(labels):
-                if i == 0:
-                    continue
-                label_pred_peaks = pred_peaks[:, i - 1]
-                label_true_peaks = true_peaks[:, i - 1]
-                data[f"{label}_pred"] = label_pred_peaks
-                data[f"{label}_true"] = label_true_peaks
-            output.append(data)
-    df = pd.concat([pd.DataFrame(data) for data in output])
-    
-    for label in labels:
+                pred_peaks = pred[..., 1:].argmax(dim=1).float()
+                true_peaks = true[..., 1:].argmax(dim=1).float()
+
+                pred_peaks /= lengths.unsqueeze(1)
+                true_peaks /= lengths.unsqueeze(1)
+                data = {"condition": info[cue_var]}
+                for i, label in enumerate(labels):
+                    if i == 0:
+                        continue
+                    label_pred_peaks = pred_peaks[:, i - 1]
+                    label_true_peaks = true_peaks[:, i - 1]
+                    data[f"{label}_pred"] = label_pred_peaks
+                    data[f"{label}_true"] = label_true_peaks
+                output.append(data)
+        df = pd.concat([pd.DataFrame(data) for data in output])
+        df.to_csv("visu_peak.csv", index=False)
+    else:
+        df = pd.read_csv(path)
+    ac_label = "accuracy" if cue_var == "condition" else "AC"
+    sp_label = "speed" if cue_var == "condition" else "SP"
+
+    for i_label, label in enumerate(labels):
         if label == "negative":
             continue
-        # sns.scatterplot(
-        #     data=df[df["condition"] == "accuracy"],
+        # sns.kdeplot(
+        #     data=df[df["condition"] == ac_label],
         #     x=f"{label}_pred",
         #     y=f"{label}_true",
-        #     alpha=0.7,
-        #     ax=ax[0],
+        #     fill=True,       # Fills the contour
+        #     alpha=0.3,       # Transparency so overlaps are visible
+        #     color=sns.color_palette()[i_label - 1],       # Distinct color for each class
+        #     label=label,         # For legend
+        #     ax=ax_ac
         # )
-
-        # sns.scatterplot(
-        #     data=df[df["condition"] == "speed"],
+        # sns.kdeplot(
+        #     data=df[df["condition"] == sp_label],
         #     x=f"{label}_pred",
         #     y=f"{label}_true",
-        #     alpha=0.7,
-        #     ax=ax[1],
+        #     fill=True,       # Fills the contour
+        #     alpha=0.3,       # Transparency so overlaps are visible
+        #     color=sns.color_palette()[i_label - 1],       # Distinct color for each class
+        #     label=label,         # For legend
+        #     ax=ax_sp
         # )
-        sns.regplot(
-            data=df[df["condition"] == "accuracy"],
+        # sns.histplot(
+        #     data=df[df["condition"] == ac_label],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     bins=30,      # Fills the contour
+        #     alpha=0.7,       # Transparency so overlaps are visible
+        #     color=sns.color_palette()[i_label - 1],       # Distinct color for each class
+        #     label=label,         # For legend
+        #     ax=ax_ac
+        # )
+        # sns.histplot(
+        #     data=df[df["condition"] == sp_label],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     bins=30,      # Fills the contour
+        #     alpha=0.7,       # Transparency so overlaps are visible
+        #     color=sns.color_palette()[i_label - 1],       # Distinct color for each class
+        #     label=label,         # For legend
+        #     ax=ax_sp
+        # )
+        # sns.regplot(
+        #     data=df[df["condition"] == ac_label],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     scatter=False,
+        #     ax=ax_ac,
+        #     color=sns.color_palette()[i_label - 1],
+        #     # robust=True,
+        #     truncate=True,
+        #     # n_boot=5000,
+        # )
+        scatter_subset = df[df["condition"] == ac_label]
+        if sample:
+            scatter_subset = scatter_subset.sample(frac=0.1)
+        sns.scatterplot(
+            scatter_subset,
             x=f"{label}_pred",
             y=f"{label}_true",
-            # alpha=0.7,
+            alpha=0.2,
             ax=ax_ac,
-            scatter_kws={'alpha': 0.05},
+            color=sns.color_palette()[i_label - 1],
+            linewidth=0
         )
 
-        sns.regplot(
-            data=df[df["condition"] == "speed"],
+        # sns.regplot(
+        #     data=df[df["condition"] == sp_label],
+        #     x=f"{label}_pred",
+        #     y=f"{label}_true",
+        #     scatter=False,
+        #     ax=ax_sp,
+        #     color=sns.color_palette()[i_label - 1],
+        #     # robust=True,
+        #     # n_boot=5000,
+        # )
+        scatter_subset = df[df["condition"] == sp_label].sample(frac=0.1)
+        sns.scatterplot(
+            scatter_subset,
             x=f"{label}_pred",
             y=f"{label}_true",
-            # alpha=0.7,
+            alpha=0.2,
             ax=ax_sp,
-            scatter_kws={'alpha': 0.05},
+            color=sns.color_palette()[i_label - 1],
+            linewidth=0
         )
-        # ax[0].set_title("Accuracy")
-        # ax[1].set_title("Speed")
-        # ax[0].set_xlabel("")
-        # ax[1].set_xlabel("")
-        # ax[0].set_ylabel("")
-        # ax[1].set_ylabel("")
-        # ax[0].set_xlim((0, 1))
-        # ax[0].set_ylim((0, 1))
-        # ax[1].set_xlim((0, 1))
-        # ax[1].set_ylim((0, 1))
-        
-        # fig.supxlabel("Predicted peak timing (normalized)")
-        # fig.supylabel("True peak timing (normalized)")
 
-def plot_single_epoch(data,
-    labels: list[str],
-    model: torch.nn.Module,
-    ax):
+
+def plot_single_epoch(data, labels: list[str], model: torch.nn.Module, ax):
     # Pass in result of dataset.__getitem__(idx)
     epoch, true = data[0], data[1]
     rt_idx = get_masking_index(epoch)
@@ -1665,26 +1772,31 @@ def plot_single_epoch(data,
 
     # Plot HMP
     for i in range(0, true.shape[1]):
-        sns.lineplot(x=range(len(true[:, i])),
-                     y=true[:, i],
-                     ax=ax,
-                     color=sns.color_palette()[i + 1],
-                     label=labels[i + 1],
-                     legend=False,
-                     alpha=0.5,
-                     linestyle='--')
-    
+        sns.lineplot(
+            x=range(len(true[:, i])),
+            y=true[:, i],
+            ax=ax,
+            color=sns.color_palette()[i],
+            # label=labels[i + 1],
+            legend=False,
+            alpha=0.5,
+            linestyle="--",
+        )
+
     # Plot predictions
     for i in range(0, pred.shape[1]):
-        sns.lineplot(            x=range(len(pred[:, i])),
+        sns.lineplot(
+            x=range(len(pred[:, i])),
             y=pred[:, i],
             ax=ax,
-            color=sns.color_palette()[i + 1],
-            label=labels[i],
-            legend=False,)
+            color=sns.color_palette()[i],
+            label=labels[i + 1],
+            legend=False,
+        )
+
 
 def plot_density_single(model, loader, labels, ax_ac, ax_sp):
-        # SAT2
+    # SAT2
     torch.cuda.empty_cache()
 
     target_length = 100
@@ -1719,8 +1831,12 @@ def plot_density_single(model, loader, labels, ax_ac, ax_sp):
                 true_normalized = torch.nn.functional.interpolate(
                     true_epoch, size=target_length, mode="linear", align_corners=False
                 )
-                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
-                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+                pred_normalized = pred_normalized / pred_normalized.sum(
+                    dim=2, keepdim=True
+                )
+                true_normalized = true_normalized / true_normalized.sum(
+                    dim=2, keepdim=True
+                )
 
                 # Additionally normalize over sum to create a valid probability distribution
                 pred_normalized = pred_normalized.squeeze().permute(1, 0)
@@ -1741,7 +1857,7 @@ def plot_density_single(model, loader, labels, ax_ac, ax_sp):
     accuracy_true /= n_accuracy
 
     # Set confirmation in speed to 0
-    speed_true[:, 3] = 0    # SAT2
+    speed_true[:, 3] = 0  # SAT2
     torch.cuda.empty_cache()
 
     target_length = 100
@@ -1776,8 +1892,12 @@ def plot_density_single(model, loader, labels, ax_ac, ax_sp):
                 true_normalized = torch.nn.functional.interpolate(
                     true_epoch, size=target_length, mode="linear", align_corners=False
                 )
-                pred_normalized = pred_normalized / pred_normalized.sum(dim=2, keepdim=True)
-                true_normalized = true_normalized / true_normalized.sum(dim=2, keepdim=True)
+                pred_normalized = pred_normalized / pred_normalized.sum(
+                    dim=2, keepdim=True
+                )
+                true_normalized = true_normalized / true_normalized.sum(
+                    dim=2, keepdim=True
+                )
 
                 # Additionally normalize over sum to create a valid probability distribution
                 pred_normalized = pred_normalized.squeeze().permute(1, 0)
@@ -1839,13 +1959,21 @@ def plot_density_single(model, loader, labels, ax_ac, ax_sp):
             legend=False,
         )
 
-def plot_tertile_split_single(data: pd.DataFrame, column: str, conditions: list[str],
-                              calc_tertile_over_condition: bool = False,
-                              normalize: str = 'auc', axes: list=[]):
+
+def plot_tertile_split_single(
+    data: pd.DataFrame,
+    column: str,
+    conditions: list[str],
+    calc_tertile_over_condition: bool = False,
+    normalize: str = "auc",
+    axes: list = [],
+    cue_var="SAT",
+):
     pd.options.mode.chained_assignment = None
     data = data.copy()
 
     # Also do ratio here? Does not make sense since for non-confirmation operations we are certain that they exist?
+    rt_col = "RT" if not "rt_x" in data else "rt_x"
     if column.endswith("_ratio"):
         if normalize == "auc":
             auc_columns = [
@@ -1858,16 +1986,16 @@ def plot_tertile_split_single(data: pd.DataFrame, column: str, conditions: list[
                 data[f"{column.replace('_ratio', '_auc')}"] / data["sum_auc"]
             )
         if normalize == "time":
-            data[column] = data[f"{column.replace('_ratio', '_auc')}"] / (data["rt_x"] / 1000)
+            data = calc_ratio(data, column.replace("_ratio", ""), rt_col=rt_col)
 
     # Calculate tertiles per participant, over conditions
     if calc_tertile_over_condition:
         data["condition"] = data.groupby("participant")[column].transform(
             lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"])
         )
-    
+
     for i, condition in enumerate(conditions):
-        data_subset = data[data.SAT == condition]
+        data_subset = data[data[cue_var] == condition]
         if not calc_tertile_over_condition:
             data_subset["condition"] = data_subset.groupby("participant")[
                 column
@@ -1878,64 +2006,80 @@ def plot_tertile_split_single(data: pd.DataFrame, column: str, conditions: list[
             .response.mean()
             .reset_index()
         )
-        sns.violinplot(x="condition", y="response", data=participant_ratios, hue="condition", palette="mako_r", ax=axes[i], cut=0)
+        sns.violinplot(
+            x="condition",
+            y="response",
+            data=participant_ratios,
+            # hue="condition",
+            # palette="mako_r",
+            color=sns.color_palette()[4],
+            ax=axes[i],
+            cut=0,
+            label="Correct response",
+            legend=False,
+        )
 
-
-def plot_emg_sequence_combined(data, n, ax):
+def plot_emg_sequence_combined(data, ax):
     # Combine EMG_sequence groups
     group_mapping = {
-        "IR": "IR/CR",
-        "CR": "IR/CR",
-        "ICR": "ICR/CIR",
-        "CIR": "ICR/CIR",
-        "CCR": "CCR/IIR",
-        "IIR": "CCR/IIR",
+        "IR": "1",
+        "CR": "1",
+        "ICR": "2",
+        "CIR": "2",
+        "CCR": "2",
+        "IIR": "2",
     }
     data["EMG_group"] = data["EMG_sequence"].map(group_mapping)
 
-    # Filter based on occurrences
-    filtered_data = data[
-        data["EMG_group"].isin(
-            data["EMG_group"].value_counts()[data["EMG_group"].value_counts() > n].index
-        )
-    ].copy()
-    # print(filtered_data["EMG_group"].value_counts())
     # Calculate ratio
-    filtered_data["ratio"] = filtered_data["confirmation_auc"] / (
-        filtered_data["rt_x"] * 250
-    )
-
-    # Compute sorted categories
-    sorted_categories = (
-        filtered_data.groupby("EMG_group")["ratio"].median().sort_values().index
-    )
-
-    ir_cr = filtered_data[filtered_data["EMG_group"] == "IR/CR"]["ratio"]
-    icr_cir = filtered_data[filtered_data["EMG_group"] == "ICR/CIR"]["ratio"]
-    ccr_iir = filtered_data[filtered_data["EMG_group"] == "CCR/IIR"]["ratio"]
-
-    # p_1 = ttest_ind(ir_cr, icr_cir, equal_var=False)
-    # p_2 = ttest_ind(ir_cr, ccr_iir, equal_var=False)
-    # p_3 = ttest_ind(icr_cir, ccr_iir, equal_var=False)
-    # p_1 = mannwhitneyu(ir_cr, icr_cir)
-    # p_2 = mannwhitneyu(ir_cr, ccr_iir)
-    # p_3 = mannwhitneyu(icr_cir, ccr_iir)
-    # print(p_1, p_2, p_3)
-
+    filtered_data = calc_ratio(data, "confirmation", normalize=True)
 
     # Create the violin plot
     sns.violinplot(
-        x="EMG_group", y="ratio", data=filtered_data, order=sorted_categories, cut=0, ax=ax
+        x="EMG_group",
+        y="confirmation_ratio",
+        data=filtered_data,
+        order=["1", "2"],
+        cut=0,
+        ax=ax,
     )
 
-    # Add titles and labels
-    # plt.xlabel("EMG Sequence Groups")
-    # plt.ylabel("Average Confirmation Probability")
-    # plt.legend(title="SAT", loc="upper right")
-    # add_significance_annotations(p_1.pvalue, 0, 1, ir_cr.max() * 1.1, fig.axes[0])
-    # add_significance_annotations(p_2.pvalue, 0, 2, ir_cr.max() * 1.25, fig.axes[0])
-    # add_significance_annotations(p_3.pvalue, 1, 2, ir_cr.max() * 1.4, fig.axes[0])
+def plot_emg_tertile_split(data, axes, conditions, cue_var='SAT'):
+    # Combine EMG_sequence groups
+    group_mapping = {
+        "IR": 0,
+        "CR": 0,
+        "ICR": 1,
+        "CIR": 1,
+        "CCR": 1,
+        "IIR": 1,
+    }
+    data["EMG_group"] = data["EMG_sequence"].map(group_mapping)
 
-    # Optional: Rotate x-axis labels for better readability
-    # plt.ylim(0, 0.01)
-    # plt.xticks(rotation=45)
+    # Calculate ratio
+    data = calc_ratio(data, "confirmation", normalize=True)
+    column = "confirmation" + "_ratio"
+    for i, condition in enumerate(conditions):
+        data_subset = data[data[cue_var] == condition]
+        data_subset["condition"] = data_subset.groupby("participant")[
+            column
+        ].transform(lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"]))
+        # Calculate P(response == 1), per participant and per condition
+        participant_ratios = (
+            data_subset.groupby(["participant", "condition"], observed=True)
+            .EMG_group.mean()
+            .reset_index()
+        )
+        sns.violinplot(
+            x="condition",
+            y="EMG_group",
+            data=participant_ratios,
+            # hue="condition",
+            # palette="mako_r",
+            color=sns.color_palette()[5],
+            ax=axes[i],
+            cut=0,
+            linewidth=1,
+            label="Second EMG Event",
+            legend=False,
+        )

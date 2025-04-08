@@ -5,7 +5,8 @@ import numpy as np
 
 SAT2_SPLITS = [
     ["S6", "S2", "S16", "S18", "S12", "S9", "S13", "S1", "S20"], # Train
-    ["S5", "S11", "S15", "S17"], # Test
+    # ["S5", "S11", "S15", "S17"], # Test
+    ["S5", "S11", "S15", "S17", "S14"], # Test
     ["S4", "S10", "S3", "S7", "S8"], # Val
 ]
 

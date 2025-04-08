@@ -1,6 +1,7 @@
 import numpy as np
 import json
 import math
+import pandas as pd
 import torch
 import xarray as xr
 import seaborn as sns
@@ -210,11 +211,15 @@ def get_trial_start_end(probabilities: torch.Tensor):
 
 
 def set_seaborn_style():
-    matplotlib.rcParams['pdf.fonttype']=42
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['svg.fonttype'] = 'none'
+    matplotlib.rcParams['font.family'] = 'Arial'
+    matplotlib.rcParams['font.size'] = 7
     sns.set_style("ticks")
     sns.set_context("paper")
     # sns.set_palette("tab10")
     # Mononoke
+    # sns.set_palette("tab10")
     sns.set_palette(
         sns.color_palette(
             [
@@ -228,3 +233,27 @@ def set_seaborn_style():
         )
     )
     # sns.set_palette(sns.color_palette(["#e60049", "#0bb4ff", "#50e991", "#e6d800", "#9b19f5", "#ffa300", "#dc0ab4", "#b3d4ff", "#00bfa0"]))
+
+def calc_ratio(data: pd.DataFrame, column: str, rt_col: str = 'rt_x', normalize: bool = True):
+    auc_column = column + '_auc'
+    ratio_column = column + '_ratio'
+    # Assuming rt_col is in seconds
+    data[ratio_column] = data[auc_column] / (data[rt_col] * 250)
+    # min-max normalize
+    # data[ratio_column] = (data[ratio_column] - data[ratio_column].min()) / (data[ratio_column].max() - data[ratio_column].min())
+    # z-score
+    if normalize:
+        data[ratio_column] = (data[ratio_column] - data[ratio_column].mean()) / data[ratio_column].std()
+
+    return data
+
+def get_p(p):
+    if p < 0.001: return '< 0.001'
+    if p < 0.01: return '< 0.01'
+    if p < 0.05: return '< 0.05'
+    return f"= {p:.2f}"
+
+def format_stats_latex(model):
+    for index, row in model.coefs.iterrows():
+        print(index)
+        print(f"($\\beta = {row['Estimate']:.2f}$, $SE = {row['SE']:.2f}$, $z = {row['Z-stat']:.2f}$, $p {get_p(row['P-val'])}$, $OR = {row['OR']:.2f}$, $95\\%\\,CI\\,[{row['OR_2.5_ci']:.2f}, {row['OR_97.5_ci']:.2f}]$)")

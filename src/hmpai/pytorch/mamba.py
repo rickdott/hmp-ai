@@ -4,6 +4,7 @@ from mamba_ssm import Mamba2, Mamba
 from hmpai.utilities import MASKING_VALUE, get_masking_indices
 import numpy as np
 
+
 def build_mamba(config):
     class MambaModel(nn.Module):
         def __init__(self, config: dict):
@@ -21,68 +22,117 @@ def build_mamba(config):
             if "n_classes" not in config:
                 raise ValueError("Config must contain 'n_classes' key")
             n_classes = config.get("n_classes")
-            
+
             self.use_pos_enc = config.get("use_pos_enc", False)
 
             # Spatial feature extraction
-            if "spatial_feature_dim" not in config and ("use_linear_fe" in config or "use_pointconv_fe" in config):
-                raise ValueError("'spatial_feature_dim' must be provided if any feature extraction is done")
+            if "spatial_feature_dim" not in config and (
+                "use_linear_fe" in config or "use_pointconv_fe" in config
+            ):
+                raise ValueError(
+                    "'spatial_feature_dim' must be provided if any feature extraction is done"
+                )
             if config.get("use_linear_fe", False):
                 self.spatial_feature_dim = config.get("spatial_feature_dim")
-                self.spatial_layer = nn.Linear(in_features=self.n_channels, out_features=self.spatial_feature_dim)
+                self.spatial_layer = nn.Linear(
+                    in_features=self.n_channels, out_features=self.spatial_feature_dim
+                )
             elif config.get("use_pointconv_fe", False):
                 self.spatial_feature_dim = config.get("spatial_feature_dim")
-                self.spatial_layer = nn.Conv1d(in_channels=self.n_channels, out_channels=self.spatial_feature_dim, kernel_size=1)
+                self.spatial_layer = nn.Conv1d(
+                    in_channels=self.n_channels,
+                    out_channels=self.spatial_feature_dim,
+                    kernel_size=1,
+                )
             else:
                 # Dummy layer that does nothing
                 self.spatial_feature_dim = self.n_channels
                 self.spatial_layer = nn.Identity()
-            
+
             self.temporal_dropout = nn.Dropout1d(p=0.2)
             self.activation = nn.SiLU()
-            self.pos_enc = ReactionTimeRelativeEncoding()
 
             # Convolutional layers
             if config.get("use_conv", False):
                 if "conv_kernel_sizes" not in config:
-                    raise ValueError("If 'use_conv' is True, 'conv_kernel_sizes' must be provided")
+                    raise ValueError(
+                        "If 'use_conv' is True, 'conv_kernel_sizes' must be provided"
+                    )
                 self.conv_kernel_sizes = config.get("conv_kernel_sizes")
-                if "conv_out_channels" not in config:
-                    raise ValueError("If 'use_conv' is True, 'conv_out_channels' must be provided")
-                self.conv_out_channels = config.get("conv_out_channels")
                 if "conv_in_channels" not in config:
-                    raise ValueError("If 'use_conv' is True, 'conv_in_channels' must be provided")
+                    raise ValueError(
+                        "If 'use_conv' is True, 'conv_in_channels' must be provided"
+                    )
                 self.conv_in_channels = config.get("conv_in_channels")
+                if "conv_out_channels" not in config:
+                    raise ValueError(
+                        "If 'use_conv' is True, 'conv_out_channels' must be provided"
+                    )
+                self.conv_out_channels = config.get("conv_out_channels")
+
 
                 if config.get("conv_stack", False):
                     conv_modules = []
-                    for kernel_size, in_channels, out_channels in zip(self.conv_kernel_sizes, self.conv_in_channels, self.conv_out_channels):
-                        conv_modules.append(nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, padding="same"))
+                    for kernel_size, in_channels, out_channels in zip(
+                        self.conv_kernel_sizes,
+                        self.conv_in_channels,
+                        self.conv_out_channels,
+                    ):
+                        conv_modules.append(
+                            nn.Conv1d(
+                                in_channels=in_channels,
+                                out_channels=out_channels,
+                                kernel_size=kernel_size,
+                                padding="same",
+                            )
+                        )
                     self.temporal_module = nn.Sequential(*conv_modules)
-
                 elif config.get("conv_concat", False):
                     class ConcatConv(nn.Module):
-                        def __init__(self, conv_kernel_sizes, conv_in_channels, conv_out_channels):
+                        def __init__(
+                            self, conv_kernel_sizes, conv_in_channels, conv_out_channels
+                        ):
                             super().__init__()
                             self.conv_layers = nn.ModuleList()
-                            for kernel_size, in_channels, out_channels in zip(conv_kernel_sizes, conv_in_channels, conv_out_channels):
-                                self.conv_layers.append(nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, padding="same"))
-                        
+                            for kernel_size, in_channels, out_channels in zip(
+                                conv_kernel_sizes, conv_in_channels, conv_out_channels
+                            ):
+                                self.conv_layers.append(
+                                    nn.Conv1d(
+                                        in_channels=in_channels,
+                                        out_channels=out_channels,
+                                        kernel_size=kernel_size,
+                                        padding="same",
+                                    )
+                                )
+
                         def forward(self, x):
                             tmp_results = []
                             for conv_layer in self.conv_layers:
                                 tmp_results.append(conv_layer(x))
                             return torch.cat(tmp_results, dim=1)
-                    self.temporal_module = ConcatConv(self.conv_kernel_sizes, self.conv_in_channels, self.conv_out_channels)
+
+                    self.temporal_module = ConcatConv(
+                        self.conv_kernel_sizes,
+                        self.conv_in_channels,
+                        self.conv_out_channels,
+                    )
                 else:
-                    raise ValueError("If 'use_conv' is True, either 'conv_stack' or 'conv_concat' must be True")
+                    raise ValueError(
+                        "If 'use_conv' is True, either 'conv_stack' or 'conv_concat' must be True"
+                    )
             else:
                 self.temporal_module = nn.Identity()
-            
+
             mamba_dim = self.__calculate_mamba_dim__()
-            self.mamba = nn.Sequential(
-                *[MambaBlock(mamba_dim) for _ in range(n_mamba_layers)]
-            )
+            if config.get("use_lstm", False):
+                self.seq_model = nn.Sequential(
+                    *[LSTMBlock(mamba_dim) for _ in range(n_mamba_layers)]
+                )
+            else:
+                self.seq_model = nn.Sequential(
+                    *[MambaBlock(mamba_dim) for _ in range(n_mamba_layers)]
+                )
             self.normalization = nn.LayerNorm(mamba_dim)
             self.linear_out = nn.Linear(mamba_dim, n_classes)
 
@@ -102,19 +152,21 @@ def build_mamba(config):
 
         def forward(self, x):
             if self.use_pos_enc:
-                if (x.shape[-1] != self.n_channels + 1):
-                    raise ValueError("Positional encoding was likely not supplied as an extra feature, check input")
+                if x.shape[-1] != self.n_channels + 1:
+                    raise ValueError(
+                        "Positional encoding was likely not supplied as an extra feature, check input"
+                    )
                 pe = x[..., -1].unsqueeze(-1)
                 x = x[..., :-1]
-            
+
             max_indices = get_masking_indices(x)
             max_seq_len = max_indices.max()
 
             if self.use_pos_enc:
                 pe = pe[:, :max_seq_len]
-            
+
             x = x[:, :max_seq_len, :]
-            
+
             # Spatial
             if self.config.get("use_linear_fe", False):
                 x = self.spatial_layer(x)
@@ -141,13 +193,14 @@ def build_mamba(config):
                 # Append positional encoding feature
                 x = torch.cat([x, pe], dim=-1)
 
-            x = self.mamba(x)
+            x = self.seq_model(x)
             x = self.normalization(x)
             x = self.linear_out(x)
 
             return x
-    
+
     return MambaModel(config)
+
 
 class AblationMamba(nn.Module):
     def __init__(
@@ -155,24 +208,29 @@ class AblationMamba(nn.Module):
         n_channels: int,
         n_classes: int,
         global_pool: bool = False,
-        config: dict = {}, # Contains flags/values for ablation, if key is not present, dont add ablation
+        config: dict = {},  # Contains flags/values for ablation, if key is not present, dont add ablation
     ):
         super().__init__()
         self.n_channels = n_channels
         n_mamba_layers = config.get("mamba_layers")
-
 
         # Linear embedding from feature space (n_channels), to embed_dim
         # self.linear_in = nn.Linear(n_channels, embed_dim)
 
         self.pointconv = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=1)
         # self.conv_in = nn.Conv2d(in_channels=1, out_channels=embed_dim, kernel_size=(n_channels, 1), padding=0)
-        
+
         self.pos_enc = ReactionTimeRelativeEncoding()
         # self.pos_enc = NormalizedRelativePositionalEncoding(mamba_dim)
-        self.conv1 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding="same")
-        self.conv2 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=9, padding="same")
-        self.conv3 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=27, padding="same")
+        self.conv1 = nn.Conv1d(
+            in_channels=128, out_channels=256, kernel_size=3, padding="same"
+        )
+        self.conv2 = nn.Conv1d(
+            in_channels=128, out_channels=256, kernel_size=9, padding="same"
+        )
+        self.conv3 = nn.Conv1d(
+            in_channels=128, out_channels=256, kernel_size=27, padding="same"
+        )
 
         self.norm = nn.LayerNorm(mamba_dim)
 
@@ -226,7 +284,7 @@ class AblationMamba(nn.Module):
         x = x.permute(0, 2, 1)
 
         x = torch.cat([x, pe], dim=-1)
-        
+
         out_forward = (
             self.blocks(x)
             if not self.global_pool
@@ -254,19 +312,39 @@ class MambaBlock(nn.Module):
         return x
 
 
+class LSTMBlock(nn.Module):
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.lstm = nn.LSTM(embed_dim, embed_dim, batch_first=True)
+        self.norm = nn.RMSNorm(embed_dim)
+
+    def forward(self, x):
+        x = self.lstm(self.norm(x))[0] + x
+        return x
+
+
 class ReactionTimeRelativeEncoding(nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     def forward(self, max_indices):
         max_seq_len = max_indices.max()
         batch_size = len(max_indices)
 
-        positional_encodings = torch.arange(max_seq_len, device=max_indices.device).unsqueeze(0).expand(batch_size, -1).float()
-        normalized_positions = (positional_encodings / (max_indices.unsqueeze(1)).clamp(min=1)).clamp(max=1)  # Normalize positions over range [0, 1] up to max_idx
+        positional_encodings = (
+            torch.arange(max_seq_len, device=max_indices.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+            .float()
+        )
+        normalized_positions = (
+            positional_encodings / (max_indices.unsqueeze(1)).clamp(min=1)
+        ).clamp(
+            max=1
+        )  # Normalize positions over range [0, 1] up to max_idx
 
         return normalized_positions.unsqueeze(-1)
-    
+
 
 class NormalizedRelativePositionalEncoding(nn.Module):
     def __init__(self, embed_dim):
@@ -277,10 +355,18 @@ class NormalizedRelativePositionalEncoding(nn.Module):
     def forward(self, seq_len):
         max_seq_len = seq_len.max()
         # Create normalized relative positions (normalized to [0, 1])
-        normalized_positions = torch.arange(max_seq_len, device=seq_len.device).unsqueeze(0).float() / (max_seq_len - 1)
-        relative_positions = normalized_positions.unsqueeze(-1) - normalized_positions.unsqueeze(-2)
-        relative_positions = relative_positions.abs()  # Absolute difference for relationships
+        normalized_positions = torch.arange(
+            max_seq_len, device=seq_len.device
+        ).unsqueeze(0).float() / (max_seq_len - 1)
+        relative_positions = normalized_positions.unsqueeze(
+            -1
+        ) - normalized_positions.unsqueeze(-2)
+        relative_positions = (
+            relative_positions.abs()
+        )  # Absolute difference for relationships
 
         # Apply embedding to the relative positions
-        embedded_positions = self.relative_embedding(relative_positions.unsqueeze(-1))  # Shape: (seq_len, seq_len, embed_dim)
+        embedded_positions = self.relative_embedding(
+            relative_positions.unsqueeze(-1)
+        )  # Shape: (seq_len, seq_len, embed_dim)
         return embedded_positions
