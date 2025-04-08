@@ -1,33 +1,13 @@
-from collections import defaultdict, Counter
-from hmpai.behaviour.sat2 import match_on_event_name
-from mne.viz import plot_topomap
-from mne import Info
-import numpy as np
-import netCDF4
-import xarray as xr
-import matplotlib.pyplot as plt
-from hmpai.data import SAT1_STAGES_ACCURACY, preprocess
-import captum
-from hmpai.pytorch.utilities import DEVICE, save_tensor
+from hmpai.pytorch.utilities import DEVICE
 from torch.utils.data import DataLoader
 import torch
 from hmpai.utilities import (
-    MASKING_VALUE,
     calc_ratio,
     get_masking_index,
     get_masking_indices,
 )
-from tqdm.notebook import tqdm
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
 import pandas as pd
-from scipy.stats import ttest_rel, ttest_ind
-from typing import List, Optional
-import json
-from rpy2.robjects import conversion, default_converter
-from sklearn.preprocessing import StandardScaler
-from pymer4.models import Lmer
-import warnings
 from hmpai.utilities import set_seaborn_style
 
 
@@ -46,9 +26,7 @@ def predict_with_auc(
         rt_indices = get_masking_indices(batch[0])
         data["rt_index_samples"] = rt_indices
         pred = torch.nn.Softmax(dim=2)(pred)
-        # Disregard negative class
-        # pred[:,:,1:] = pred[:,:,1:] / (1 - pred[:,:,0]).unsqueeze(-1)
-        # pred[:,:,1:] = pred[:,:,1:] / pred[:,:,0].unsqueeze(-1)
+
         batch_aucs = torch.sum(pred, dim=1)
         batch_aucs = batch_aucs.cpu().detach()
 

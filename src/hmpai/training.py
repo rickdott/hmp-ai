@@ -1,18 +1,8 @@
 import random
-from hmpai.data import preprocess
-from sklearn.metrics import classification_report
 import netCDF4
 import xarray as xr
-from typing import Callable
-from hmpai.normalization import get_norm_vars, norm_dummy
-from hmpai.pytorch.utilities import set_global_seed
-import sklearn
 import numpy as np
-from copy import deepcopy
-from hmpai.utilities import MASKING_VALUE
-from collections import defaultdict
 from pathlib import Path
-import pandas as pd
 
 
 def split_participants_into_folds(

@@ -1,8 +1,3 @@
-from collections import defaultdict, Counter
-from hmpai.pytorch.correlation import correlate, emd
-from hmpai.pytorch.normalization import get_norm_vars_from_global_statistics
-from hmpai.utilities import pretty_json
-from hmpai.visualization import plot_loss
 from torch.utils.data import DataLoader, Dataset
 from tqdm.notebook import tqdm
 from hmpai.pytorch.utilities import (
@@ -11,22 +6,11 @@ from hmpai.pytorch.utilities import (
     save_model,
     load_model,
 )
-from hmpai.pytorch.generators import MultiXArrayProbaDataset, SAT1Dataset
-from hmpai.pytorch.pretraining import *
 import torch
-from hmpai.data import SAT1_STAGES_ACCURACY, SAT_CLASSES_ACCURACY
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
-import netCDF4
-import xarray as xr
 from datetime import datetime
 import numpy as np
-from sklearn.metrics import classification_report
-from typing import Callable
-from hmpai.normalization import get_norm_vars, norm_dummy
-from copy import deepcopy
-import re
-from hmpai.training import get_folds, split_participants
 
 
 def train_and_test(
@@ -40,18 +24,9 @@ def train_and_test(
     logs_path: Path = None,
     additional_info: dict = None,
     additional_name: str = None,
-    use_class_weights: bool = True,
-    class_weights: torch.Tensor = None,
-    label_smoothing: float = 0.0,
     weight_decay: float = 0.0,
     lr: float = 0.002,  # Default learning rate for optimizer
-    do_spectral_decoupling: bool = False,
-    labels: list[str] = None,
     seed: int = 42,
-    pretrain_fn: Callable = None,
-    whole_epoch: bool = False,
-    probabilistic_labels: bool = False,
-    do_test_shuffled: bool = False,
 ) -> dict:
     """
     Trains and tests a PyTorch model on the given datasets.
@@ -132,8 +107,6 @@ def train_and_test(
                     pin_memory=True,
                 )
             )
-    # Functions that take in predictions and labels and return a value
-    metrics = {"cum_mse": cum_mse, "emd": emd_loss, "spearman": spearman_corr, "peak_rmse": peak_rmse}
     # Set up logging
     write_log = logs_path is not None
     if write_log:
@@ -143,10 +116,6 @@ def train_and_test(
         path = logs_path / run_id
         writer = SummaryWriter(path)
 
-        # Log model summary
-        # shape = list(train_loader.dataset.data.shape)
-        # shape[0] = batch_size
-        # to_write = {"Model summary": get_summary_str(model, shape)}
         to_write = {}
         if additional_info:
             to_write.update(additional_info)
@@ -154,32 +123,12 @@ def train_and_test(
         for k, v in to_write.items():
             writer.add_text(k, v, global_step=0)
 
-    # Set up optimizer and loss
-    if use_class_weights:
-        if class_weights is None:
-            class_weights = calculate_class_weights(train_set, labels).to(DEVICE)
-        else:
-            class_weights = class_weights.to(DEVICE)
-    else:
-        class_weights = None
     model = model.to(DEVICE)
-    if pretrain_fn is not None:
-        loss = torch.nn.MSELoss()
-    else:
-        if whole_epoch or probabilistic_labels:
-            # KLDivLoss for calculating loss between probability distributions
-            # loss = torch.nn.CrossEntropyLoss()
-            loss = torch.nn.KLDivLoss(reduction="none", log_target=False)
-            # loss = SoftDTW(use_cuda=True, gamma=1.0)
-            # loss = kl_div_loss_with_correlation_regularization
-        else:
-            # TODO: Think about ignore_index
-            loss = torch.nn.CrossEntropyLoss(
-                weight=class_weights, label_smoothing=label_smoothing, ignore_index=-1
-            )
+
+    loss = kldiv_loss
+
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     stopper = EarlyStopper()
-    whole_epoch = whole_epoch or probabilistic_labels
 
     lowest_mean_val_loss = np.inf
     for epoch in range(epochs):
@@ -187,36 +136,23 @@ def train_and_test(
             tepoch.set_description(f"Epoch {epoch + 1}")
 
             # Train on batches in train_loader
-            if pretrain_fn is None:
-                batch_losses = train(
-                    model,
-                    train_loader,
-                    opt,
-                    loss,
-                    progress=tepoch,
-                    do_spectral_decoupling=do_spectral_decoupling,
-                    whole_epoch=whole_epoch,
-                    writer=writer,
-                    epoch=epoch,
-                    metrics=metrics,
-                )
-            else:
-                batch_losses = pretrain_train(
-                    model, train_loader, opt, loss, pretrain_fn, progress=tepoch
-                )
+            batch_losses = train(
+                model,
+                train_loader,
+                opt,
+                loss,
+                progress=tepoch,
+                writer=writer,
+                epoch=epoch,
+            )
 
             # Validate model and communicate results
             val_loss_list = []
             val_acc_list = []
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
-                if pretrain_fn is None:
-                    val_losses, val_accuracy = validate(
-                        model, val_loader, loss, whole_epoch, metrics, epoch, writer
-                    )
-                else:
-                    val_losses = pretrain_validate(model, val_loader, loss, pretrain_fn)
-                    val_accuracy = 0
+                val_losses, val_accuracy = validate(model, val_loader, loss)
+
                 # Only count val_loss for first validation set
                 if i == 0:
                     val_loss_list.append(val_losses)
@@ -257,17 +193,8 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    if pretrain_fn is None:
-        if do_test_shuffled:
-            results, _, _ = test_shuffled(
-                model, test_loaders, loss, writer, labels, whole_epoch
-            )
-        else:
-            results, _, _ = test(
-                model, test_loaders, loss, writer, labels, whole_epoch, metrics, epoch
-            )
-    else:
-        results = pretrain_test(model, test_loaders, loss, pretrain_fn, writer)
+    results, _, _ = test(model, test_loaders, loss)
+
     return results
 
 
@@ -277,11 +204,8 @@ def train(
     optimizer: torch.optim.Optimizer,
     loss_fn: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
-    do_spectral_decoupling: bool = False,
-    whole_epoch: bool = False,
     writer: SummaryWriter = None,
     epoch: int = None,
-    metrics: dict = None,
 ) -> list[float]:
     """Train model for all batches, one epoch.
 
@@ -297,12 +221,8 @@ def train(
         list[float]: List containing loss for each batch.
     """
     model.train()
-    if isinstance(loss_fn, torch.nn.KLDivLoss):
-        softmax = torch.nn.LogSoftmax(dim=2)
+
     loss_per_batch = []
-    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
-    if metrics is not None:
-        metric_values = defaultdict(lambda: [])
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
@@ -314,62 +234,13 @@ def train(
         if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
 
-        if len(predictions.shape) == 3:
-            if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
-                loss, exp_loss, indiv_loss = kldiv_loss(
-                    predictions.clone(), labels.clone(), dtw, mask=data == MASKING_VALUE
-                )
-                # Calculate training metrics
-                if metrics is not None:
-                    for metric_name, metric_fn in metrics.items():
-                        metric_val = metric_fn(predictions.clone(), labels.clone())
-                        metric_values[metric_name].append(metric_val)
-                        # writer.add_scalar(
-                        #     f"train_{metric_name}",
-                        #     metric_val,
-                        #     (epoch * progress.total) + progress.n,
-                        # )
-                # Individual loss metrics
-                for metric_name, metric_batch_loss in indiv_loss.items():
-                    metric_values[metric_name].append(metric_batch_loss.item())
-                    # writer.add_scalar(
-                    #     f"train_{metric_name}",
-                    #     metric_batch_loss,
-                    #     (epoch * progress.total) + progress.n,
-                    # )
-                # Class-wise loss
-                for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
-                    writer.add_scalar(
-                        f"train_loss_class{i_loss}",
-                        loss_class,
-                        (epoch * progress.total) + progress.n,
-                    )
-
-            elif loss_fn == kl_div_loss_with_correlation_regularization:
-                loss = kl_div_loss_with_correlation_regularization(
-                    predictions, labels, model, data
-                )
-            elif whole_epoch and isinstance(loss_fn, SoftDTW):
-                predictions = torch.nn.functional.softmax(predictions, dim=2)
-                predictions = predictions / predictions.sum()
-                # loss = loss_fn(predictions, labels).mean()
-                loss = []
-                for l_i in range(labels.shape[-1]):
-                    loss.append(
-                        loss_fn(
-                            predictions[..., l_i].unsqueeze(-1),
-                            labels[..., l_i].unsqueeze(-1),
-                        ).mean()
-                    )
-                loss = torch.stack(loss).mean()
-            else:
-                loss = loss_fn(
-                    predictions.view(-1, predictions.shape[-1]), labels.flatten()
-                )
-        else:
-            loss = loss_fn(predictions, labels)
-        if do_spectral_decoupling:
-            loss += 0.1 / 2 * (predictions**2).mean()
+        loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone())
+        for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
+            writer.add_scalar(
+                f"train_loss_class{i_loss}",
+                loss_class,
+                (epoch * progress.total) + progress.n,
+            )
 
         loss_per_batch.append(loss.item())
 
@@ -384,11 +255,7 @@ def train(
                 )
 
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-    if metrics is not None:
-        for metric_name, metric_batch_values in metric_values.items():
-            writer.add_scalar(f"train_{metric_name}", np.mean(metric_batch_values), epoch)
     return loss_per_batch
 
 
@@ -396,10 +263,6 @@ def validate(
     model: torch.nn.Module,
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
-    whole_epoch: bool = False,
-    metrics: dict = None,
-    epoch: int = None,
-    writer: SummaryWriter = None,
 ) -> (list[float], float):
     """Validate model.
 
@@ -414,90 +277,22 @@ def validate(
     """
     model.eval()
 
-    if isinstance(loss_fn, torch.nn.KLDivLoss):
-        softmax = torch.nn.LogSoftmax(dim=2)
     loss_per_batch = []
     total_correct = 0
     total_instances = 0
-    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
 
     with torch.no_grad():
-        all_labels = []
-        all_preds = []
-        if metrics is not None:
-            metric_values = defaultdict(lambda: [])
         for batch_i, batch in enumerate(validation_loader):
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
             predictions = model(data)
 
-            dim = len(predictions.shape) - 1
-            predicted_labels = torch.argmax(predictions, dim=dim)
-
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
 
-            if not whole_epoch:
-                matches = predicted_labels == labels
-                correct_predictions = matches.sum().item()
-            else:
-                correct_predictions = labels.numel()
-
-            total_correct += correct_predictions
-            total_instances += labels.numel()
-            # If data is sequence-shaped (batch, seq_len, class) instead of (batch, class)
-            if metrics is not None:
-                for metric_name, metric_fn in metrics.items():
-                    metric_val = metric_fn(predictions.clone(), labels.clone())
-                    metric_values[metric_name].append(metric_val)
-                    # writer.add_scalar(
-                    #     f"val_{metric_name}",
-                    #     metric_val,
-                    #     (epoch * len(validation_loader)) + batch_i,
-                    # )
-            if len(predictions.shape) == 3:
-                if whole_epoch and isinstance(loss_fn, torch.nn.KLDivLoss):
-                    # Add small value to prevent log(0), re-normalize
-                    loss, _, _ = kldiv_loss(
-                        predictions, labels, dtw, mask=data == MASKING_VALUE
-                    )
-                elif loss_fn == kl_div_loss_with_correlation_regularization:
-                    loss = kl_div_loss_with_correlation_regularization(
-                        predictions, labels, model, data
-                    )
-                elif whole_epoch and isinstance(loss_fn, SoftDTW):
-                    loss = 0
-                    for i in range(labels.shape[-1]):
-                        loss += loss_fn(
-                            predictions[..., i].unsqueeze(-1),
-                            labels[..., i].unsqueeze(-1),
-                        ).mean()
-                    loss = loss / labels.shape[-1]
-                else:
-                    loss = loss_fn(
-                        predictions.view(-1, predictions.shape[-1]), labels.flatten()
-                    )
-            else:
-                loss = loss_fn(predictions, labels)
-            all_labels.append(labels.cpu().flatten())
-            all_preds.append(predicted_labels.cpu().flatten())
+            loss, _, _ = loss_fn(predictions, labels)
             loss_per_batch.append(loss.item())
 
-        # Show test results for last batch
-        if not whole_epoch:
-            all_labels = torch.cat(all_labels, dim=0)
-            all_preds = torch.cat(all_preds, dim=0)
-            test_results = classification_report(
-                all_labels,
-                all_preds,
-                output_dict=False,
-                # target_names=class_labels,
-                zero_division=0.0,
-            )
-            print(test_results)
-    if metrics is not None:
-        for metric_name, metric_batch_values in metric_values.items():
-            writer.add_scalar(f"val_{metric_name}", np.mean(metric_batch_values), epoch)
     return loss_per_batch, round(total_correct / total_instances, 5)
 
 
@@ -505,11 +300,6 @@ def test(
     model: torch.nn.Module,
     test_loader: DataLoader | list[DataLoader],
     loss_fn: torch.nn.modules.loss._Loss,
-    writer: SummaryWriter = None,
-    class_labels: list[str] = None,
-    whole_epoch: bool = False,
-    metrics: dict = None,
-    epoch: int = None,
 ) -> dict:
     """
     Test the PyTorch model on the given test data and return the classification report.
@@ -525,7 +315,6 @@ def test(
         torch.Tensor: The true classes.
     """
     model.eval()
-    dtw = SoftDTW(use_cuda=True, gamma=0.1, normalize=False)
     test_results = []
 
     if type(test_loader) is not list:
@@ -533,7 +322,6 @@ def test(
         test_loader = [test_loader]
     for i, loader in enumerate(test_loader):
         outputs = []
-        true_labels = torch.Tensor()
         with torch.no_grad():
             for batch_i, batch in enumerate(loader):
                 data, labels = batch[0].to(DEVICE), batch[1]
@@ -542,98 +330,17 @@ def test(
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]
 
-                dim = len(predictions.shape) - 1
-                if metrics is not None:
-                    for metric_name, metric_fn in metrics.items():
-                        metric_val = metric_fn(predictions.clone(), labels.clone())
-                        writer.add_scalar(
-                            f"test_{metric_name}",
-                            metric_val,
-                            (epoch * len(test_loader)) + batch_i,
-                        )
-                if not whole_epoch:
-                    predictions = torch.argmax(predictions, dim=dim)
-                    outputs = torch.cat([outputs, predictions.flatten().cpu()])
-                    true_labels = torch.cat([true_labels, labels.flatten().cpu()])
-                elif isinstance(loss_fn, torch.nn.KLDivLoss):
-                    # Add small value to prevent log(0), re-normalize
-                    loss, loss_raw, _ = kldiv_loss(
-                        predictions, labels, dtw, mask=data == MASKING_VALUE
-                    )
-                    outputs.append(loss_raw.sum(dim=(1, 2)).to("cpu"))
-                elif isinstance(loss_fn, SoftDTW):
-                    loss = 0
-                    labels = labels.to("cuda")
-                    for i in range(labels.shape[-1]):
-                        loss += loss_fn(
-                            predictions[..., i].unsqueeze(-1),
-                            labels[..., i].unsqueeze(-1),
-                        ).mean()
-                    loss = loss / labels.shape[-1]
-                    outputs.append(loss.to("cpu"))
+                loss, loss_raw, _ = loss_fn(predictions, labels)
+                outputs.append(loss_raw.sum(dim=(1, 2)).to("cpu"))
 
-        if not whole_epoch:
-            loader_results = classification_report(
-                true_labels, outputs, output_dict=True, zero_division=0.0
-            )
-            test_results.append(loader_results)
-            if writer is not None:
-                writer.add_text(
-                    f"Test results {i}", pretty_json(loader_results), global_step=0
-                )
-        else:
-            outputs = torch.cat(outputs)
-            loader_results = {"test_kldiv_list": outputs.tolist(), "test_kldiv_mean": torch.mean(outputs).item()}
-            test_results.append(loader_results)
+        outputs = torch.cat(outputs)
+        loader_results = {
+            "test_kldiv_list": outputs.tolist(),
+            "test_kldiv_mean": torch.mean(outputs).item(),
+        }
+        test_results.append(loader_results)
 
-    return test_results, outputs, true_labels
-
-
-def calculate_global_class_weights(
-    datasets: list[Dataset],
-    labels: list[str] = SAT1_STAGES_ACCURACY,
-):
-    counters = {(label, 0) for label in labels}
-    for dataset in datasets:
-        if dataset.split:
-            # Split, count last dims in index_map
-            labels = [idx[3] for idx in dataset.index_map]
-            dataset_counter = Counter(labels)
-            for key, value in dataset_counter.items():
-                # Figure out solution, this is using dim indices instead of labels
-                # can figure out labels by loading one sample maybe?
-                # cant really load samples with specific labels
-                pass
-        else:
-            pass
-            # Not split, count occurrences of each label in data?
-
-
-def calculate_class_weights(
-    set: torch.utils.data.Dataset, labels: list[str]
-) -> torch.Tensor:
-    """
-    Calculates class weights for a given dataset.
-
-    Args:
-        set (torch.utils.data.Dataset): The dataset to calculate class weights for.
-
-    Returns:
-        torch.Tensor: The calculated class weights.
-    """
-    occurrences = set.labels.unique(return_counts=True)
-    weights = []
-    for i in range(len(labels)):
-        if i in occurrences[0]:
-            weights.append(
-                (
-                    sum(occurrences[1])
-                    / occurrences[1][(occurrences[0] == i).nonzero()[0]]
-                ).item()
-            )
-        else:
-            weights.append(1)
-    return torch.Tensor(weights)
+    return test_results, outputs
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
@@ -661,39 +368,21 @@ class EarlyStopper:
 def kldiv_loss(
     predictions: torch.Tensor,
     labels: torch.Tensor,
-    dtw: SoftDTW = None,
-    mask: torch.Tensor = None,
 ):
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
-    mask = ~mask[:, : predictions.shape[1], 0].unsqueeze(-1).to(DEVICE)
 
     # Predictions = model logits, non-softmaxed
     # labels = raw labels including negative, sums up to 1 at each time step
-
     predictions = torch.nn.functional.softmax(predictions, dim=2)
-
-    # # FORWARD
-    # Subset to 1024 since this dtw implementation does not support sequence length > 1024
-    # dtw_loss = dtw(predictions[:, :1024, :], labels[:, :1024, :]).mean()
-
-    # labels = labels + 1e-8
-    # labels = labels / labels.sum(dim=-1, keepdim=True)
 
     forward_kl_loss = torch.nn.functional.kl_div(
         predictions.log(), labels, reduction="none"
     )
 
     # batchmean normalization
-    # loss = forward_kl_loss.sum() / mask.sum()
     forward_kl_loss_norm = forward_kl_loss.sum() / predictions.shape[0]
-    # 
-    # mae_loss = torch.abs(predictions - labels).mean() * 1000
-    # alpha = 0.7
-    # loss = alpha * forward_kl_loss_norm + (1 - alpha) * mae_loss
-    # loss = 0.5 * forward_kl_loss_norm + 0.5 * dtw_loss
+
     loss = forward_kl_loss_norm
 
-    # Cross Entropy loss
-    # loss = torch.nn.functional.cross_entropy(predictions[:,:,1:], labels[:,:,1:])
     return loss, forward_kl_loss, {"kldiv": forward_kl_loss_norm}

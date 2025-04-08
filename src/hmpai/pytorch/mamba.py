@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-from mamba_ssm import Mamba2, Mamba
-from hmpai.utilities import MASKING_VALUE, get_masking_indices
+from mamba_ssm import Mamba
+from hmpai.utilities import get_masking_indices
 import numpy as np
 
 

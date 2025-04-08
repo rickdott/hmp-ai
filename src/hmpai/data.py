@@ -381,31 +381,6 @@ class StageFinder:
             ax[-1].set_xlabel("Time (in ms)")
             fig.supylabel("Condition")
             return fig, ax
-        # else:
-        #     sfreq = self.epoch_data.sfreq
-        #     max_time = (
-        #         max_time
-        #         if max_time is not None
-        #         else (int(max([len(fit.samples) for fit in self.fits]) / 2) / sfreq)
-        #         * 1000
-        #     )
-        #     return hmp.visu.plot_topo_timecourse(
-        #             self.epoch_data_offset,
-        #             self.fits[0],
-        #             positions,
-        #             self.models[0],
-        #             times_to_display=(np.mean(self.models[0].ends - self.models[0].starts)),
-        #             max_time=max_time,
-        #             ylabels={"": [self.conditions[0].capitalize()] if cond_label is None else [cond_label]},
-        #             as_time=True,
-        #             estimate_method="max",
-        #             ax=ax,
-        #             event_lines=None,
-        #             vmin=-7e-6,
-        #             vmax=7e-6,
-        #             colorbar=colorbar,
-        #             magnify=1.5,
-        #         )
         
     def __fit_model__(self, hmp_data):
         # Initialize model
@@ -452,14 +427,7 @@ class StageFinder:
 
         # Set up output datatypes
         event_locations = model.eventprobs.idxmax(dim="samples").astype(int)
-        # Weighted probability mean method
-        # event_locations = (
-        #     np.arange(model.eventprobs.shape[1]) @ model.eventprobs.to_numpy()
-        # ).astype(int)
 
-        # Remove channels dimension
-        # shape = list(self.epoch_data.data.shape)
-        # shape.pop(2)
         shape = (
             len(self.epoch_data.participant),
             len(self.epoch_data.epochs),
@@ -505,21 +473,6 @@ class StageFinder:
                 print("Epoch number exceeds shape of data, skipping")
                 continue
 
-            # TODO Maybe not reliable enough, what if electrode 0 (Fp1) is working but others are not
-            # Find first sample from the end for combination of participant + epoch where the value is NaN
-            # this is the reaction time sample where the participant pressed the button and stage ends
-            # RT_data = self.epoch_data.sel(
-            #     participant=data[0],
-            #     epochs=data[1],  # Use data[1] instead of epoch (.isel)?
-            #     channels=self.epoch_data.channels[0],
-            # ).data.to_numpy()
-            # RT_idx_reverse = np.argmax(np.logical_not(np.isnan(RT_data[::-1])))
-            # RT_sample = (
-            #     len(RT_data) - 1
-            #     if RT_idx_reverse == 0
-            #     else len(RT_data) - RT_idx_reverse
-            # )
-
             RT_data = self.epoch_data.sel(participant=data[0], epochs=data[1]).rt.item()
             RT_sample = int(RT_data * self.epoch_data.sfreq)
 
@@ -535,9 +488,7 @@ class StageFinder:
                 labels_array,
                 **label_fn_kwargs,
             )
-            # Increment the index to start looking for negative classes from by 1 if there are indices left, otherwise reset it
-            # With 4 classes: 0, 1, 2, 3, 0,...
-            # TODO: Maybe only increment if a negative class has been found at that bump location
+
             self.negative_class_start_idx = (
                 self.negative_class_start_idx + 1
                 if self.negative_class_start_idx + 1 < len(labels) - 1
@@ -617,93 +568,3 @@ class StageFinder:
                         ] = event_data
 
         return np.copy(labels_array)
-
-    def __label_bump_to_bump__(
-        self, locations, RT_sample, participant, epoch, labels, labels_array
-    ):
-        for i, location in enumerate(locations):
-            if i == 0:
-                # From stimulus onset to first bump == first operation
-                initial_slice = slice(0, location)
-                labels_array[participant, epoch, initial_slice] = labels[0]
-            if i != len(labels) - 2:
-                # Operations in between, slice from event to next event as long as the next event timing is not after reaction time (RT)
-                if not locations[i + 1] >= RT_sample:
-                    samples_slice = slice(location, locations[i + 1])
-                else:
-                    continue
-            else:
-                # Last operation, from last event sample to RT (if the event does not occur after RT)
-                if not location >= RT_sample:
-                    samples_slice = slice(location, RT_sample)
-                else:
-                    continue
-            if self.verbose:
-                print(
-                    f"i: {i}, Participant: {participant}, Epoch: {epoch}, Sample range: {samples_slice}, Reaction time sample: {RT_sample}"
-                )
-
-            labels_array[participant, epoch, samples_slice] = labels[i + 1]
-
-    def __label_samples_around_bump__(
-        self,
-        locations,
-        RT_sample,
-        participant,
-        epoch,
-        labels,
-        labels_array,
-        window=(0, 0),  # (samples_before, samples_after)
-        get_negative_class=True,
-    ):
-        n = len(locations)
-        current_idx = self.negative_class_start_idx
-        neg_end_idx = (self.negative_class_start_idx - 1) % n
-        negative_class_written = False
-        total_window_size = sum(window) * 2 + 1
-        if current_idx >= n:
-            print(" WHOA!")
-
-        while True:
-            if not negative_class_written and get_negative_class:
-                # Handle the case where the current index is the first one
-                if current_idx == 0 and locations[current_idx] > total_window_size:
-                    start_idx = locations[current_idx] - window[0] - sum(window) - 1
-                    end_idx = locations[current_idx] - window[0]
-                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
-                    negative_class_written = True
-                # Handle the case where there is more room between transitions than twice the total window size
-                elif (
-                    current_idx != n - 1
-                    and locations[current_idx + 1] - locations[current_idx]
-                    > total_window_size
-                ):
-                    start_idx = locations[current_idx + 1] - window[0] - sum(window) - 1
-                    end_idx = locations[current_idx + 1] - window[0]
-                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
-                    negative_class_written = True
-                # Handle the case where the current index is the last one
-                elif (
-                    current_idx == n - 1
-                    and RT_sample - locations[current_idx] > total_window_size
-                ):
-                    start_idx = RT_sample - window[0] - sum(window) - 1
-                    end_idx = RT_sample - window[0]
-                    labels_array[participant, epoch, start_idx:end_idx] = labels[0]
-                    negative_class_written = True
-
-            # Add one since slice(x, x) returns nothing, slice(x, x + 1) returns value at index x
-            samples_slice = slice(
-                locations[current_idx] - window[0],
-                locations[current_idx] + window[1] + 1,
-            )
-            if samples_slice.start < 0:
-                samples_slice = slice(0, samples_slice.stop)
-            if samples_slice.stop > RT_sample:
-                samples_slice = slice(samples_slice.start, RT_sample)
-            # Add one since we count a bump as the start of an event, so we label it as the operation the event leads into
-            labels_array[participant, epoch, samples_slice] = labels[current_idx + 1]
-
-            if current_idx == neg_end_idx:
-                break
-            current_idx = (current_idx + 1) % n
