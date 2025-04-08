@@ -151,14 +151,12 @@ def train_and_test(
             val_acc_list = []
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
-                val_losses, val_accuracy = validate(model, val_loader, loss)
+                val_losses = validate(model, val_loader, loss)
 
                 # Only count val_loss for first validation set
                 if i == 0:
                     val_loss_list.append(val_losses)
-                    val_acc_list.append(val_accuracy)
                 postfix_dict[f"val_loss_{i}"] = np.mean(val_losses)
-                postfix_dict[f"val_accuracy_{i}"] = val_accuracy
             tepoch.set_postfix(postfix_dict)
             mean_train_loss = np.mean(batch_losses)
             mean_val_loss = np.mean(val_loss_list[-1])
@@ -177,7 +175,6 @@ def train_and_test(
             if write_log:
                 writer.add_scalar("train_loss", mean_train_loss, global_step=epoch)
                 writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
-                writer.add_scalar("val_accuracy", val_accuracy, global_step=epoch)
                 writer.flush()
 
             # Stop training if validation loss has not improved sufficiently
@@ -193,7 +190,7 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    results, _, _ = test(model, test_loaders, loss)
+    results, _, = test(model, test_loaders, loss)
 
     return results
 
@@ -263,7 +260,7 @@ def validate(
     model: torch.nn.Module,
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
-) -> (list[float], float):
+) -> list[float]:
     """Validate model.
 
     Args:
@@ -278,8 +275,6 @@ def validate(
     model.eval()
 
     loss_per_batch = []
-    total_correct = 0
-    total_instances = 0
 
     with torch.no_grad():
         for batch_i, batch in enumerate(validation_loader):
@@ -293,7 +288,7 @@ def validate(
             loss, _, _ = loss_fn(predictions, labels)
             loss_per_batch.append(loss.item())
 
-    return loss_per_batch, round(total_correct / total_instances, 5)
+    return loss_per_batch
 
 
 def test(

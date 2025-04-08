@@ -319,7 +319,7 @@ class StageFinder:
 
         return stage_data
 
-    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None, model_index=None, figsize=None):
+    def visualize_model(self, positions, max_time=None, ax=None, colorbar=True, cond_label=None, model_index=None, figsize=None, set_vlims=True):
         if figsize is not None:
             figsize = figsize
         else:
@@ -338,8 +338,8 @@ class StageFinder:
                 estimate_method="max",
                 ax=ax,
                 event_lines=None,
-                vmin=-7e-6,
-                vmax=7e-6,
+                vmin=-7e-6 if set_vlims else None,
+                vmax=7e-6 if set_vlims else None,
                 colorbar=colorbar,
                 magnify=2.5,
             )
@@ -372,8 +372,8 @@ class StageFinder:
                     estimate_method="max",
                     ax=ax[i],
                     event_lines=None,
-                    vmin=-7e-6,
-                    vmax=7e-6,
+                    vmin=-7e-6 if set_vlims else None,
+                    vmax=7e-6 if set_vlims else None,
                     colorbar=colorbar,
                     magnify=2.5,
                 )

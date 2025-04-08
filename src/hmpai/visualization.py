@@ -71,7 +71,7 @@ def plot_peak_timing(
                     data[f"{label}_true"] = label_true_peaks
                 output.append(data)
         df = pd.concat([pd.DataFrame(data) for data in output])
-        df.to_csv("visu_peak.csv", index=False)
+        df.to_csv("files/visu_peak.csv", index=False)
     else:
         df = pd.read_csv(path)
     ac_label = "accuracy" if cue_var == "condition" else "AC"
