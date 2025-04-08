@@ -73,10 +73,6 @@ def add_relative_positional_encoding(data):
     pe /= end - start
     encoding_feature[start:] = pe.clamp(max=1)
     encoding_feature = encoding_feature.unsqueeze(-1)
-    # from matplotlib import pyplot as plt
-    # plt.figure()
-    # plt.plot(encoding_feature)
-    # plt.vlines([start, end], ymin=0, ymax=1, linestyles="--")
-    # plt.show()
+
     data = torch.cat([data, encoding_feature], dim=1)
     return data, probabilities

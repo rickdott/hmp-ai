@@ -70,7 +70,6 @@ def build_mamba(config):
                     )
                 self.conv_out_channels = config.get("conv_out_channels")
 
-
                 if config.get("conv_stack", False):
                     conv_modules = []
                     for kernel_size, in_channels, out_channels in zip(
@@ -88,6 +87,7 @@ def build_mamba(config):
                         )
                     self.temporal_module = nn.Sequential(*conv_modules)
                 elif config.get("conv_concat", False):
+
                     class ConcatConv(nn.Module):
                         def __init__(
                             self, conv_kernel_sizes, conv_in_channels, conv_out_channels
@@ -202,105 +202,6 @@ def build_mamba(config):
     return MambaModel(config)
 
 
-class AblationMamba(nn.Module):
-    def __init__(
-        self,
-        n_channels: int,
-        n_classes: int,
-        global_pool: bool = False,
-        config: dict = {},  # Contains flags/values for ablation, if key is not present, dont add ablation
-    ):
-        super().__init__()
-        self.n_channels = n_channels
-        n_mamba_layers = config.get("mamba_layers")
-
-        # Linear embedding from feature space (n_channels), to embed_dim
-        # self.linear_in = nn.Linear(n_channels, embed_dim)
-
-        self.pointconv = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=1)
-        # self.conv_in = nn.Conv2d(in_channels=1, out_channels=embed_dim, kernel_size=(n_channels, 1), padding=0)
-
-        self.pos_enc = ReactionTimeRelativeEncoding()
-        # self.pos_enc = NormalizedRelativePositionalEncoding(mamba_dim)
-        self.conv1 = nn.Conv1d(
-            in_channels=128, out_channels=256, kernel_size=3, padding="same"
-        )
-        self.conv2 = nn.Conv1d(
-            in_channels=128, out_channels=256, kernel_size=9, padding="same"
-        )
-        self.conv3 = nn.Conv1d(
-            in_channels=128, out_channels=256, kernel_size=27, padding="same"
-        )
-
-        self.norm = nn.LayerNorm(mamba_dim)
-
-        # Define sequence of Mamba blocks
-        # mamba_dim should be the feature length of output, so it depends on which ablations are used
-        self.blocks = nn.Sequential(
-            *[MambaBlock(mamba_dim) for _ in range(n_mamba_layers)]
-        )
-        self.global_pool = global_pool
-        self.linear_translation = nn.Linear(mamba_dim, n_channels)
-        self.linear_out = nn.Linear(mamba_dim, n_classes)
-        self.pretraining = False
-
-    def forward(self, x):
-        pe = None
-        if x.shape[-1] == self.n_channels + 1:
-            pe = x[:, :, -1].unsqueeze(-1)
-            x = x[:, :, :-1]
-
-        max_indices = get_masking_indices(x)
-
-        max_seq_len = max_indices.max()
-
-        if pe is not None:
-            pe = pe[:, :max_seq_len]
-
-        # [64, 634, 19]
-        # [B, T, C]
-        x = x[:, :max_seq_len, :]
-        # [64, 634-max_index, 19]
-        # [B, T-max_index, 19]
-        # Linear with same size to learn relationships between electrodes
-        # x = self.linear_in(x)
-
-        # Linear (64 > 64), Conv (64 > 128)
-        # 1D point-wise convolution to convert 64 channels into 64 features, including correlation across electrodes
-        x = x.permute(0, 2, 1)
-        x = self.pointconv(x)
-        # Dropout on time dimension to decrease dependence on temporal information
-        x = nn.Dropout1d(p=0.2)(x)
-        x = nn.functional.silu(x)
-
-        # Three conv layers with gradually increasing kernel sizes to capture temporal relationships at different time scales
-        x1 = self.conv1(x)
-        x2 = self.conv2(x)
-        x3 = self.conv3(x)
-        x = x1
-        x = torch.cat([x1, x2, x3], dim=1)
-        x = nn.functional.silu(x)
-
-        x = x.permute(0, 2, 1)
-
-        x = torch.cat([x, pe], dim=-1)
-
-        out_forward = (
-            self.blocks(x)
-            if not self.global_pool
-            else torch.mean(self.blocks(x), dim=1)
-        )
-
-        out = out_forward
-        out = self.norm(out)
-        out = (
-            self.linear_out(out)
-            if not self.pretraining
-            else self.linear_translation(out)
-        )
-        return out
-
-
 class MambaBlock(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -321,52 +222,3 @@ class LSTMBlock(nn.Module):
     def forward(self, x):
         x = self.lstm(self.norm(x))[0] + x
         return x
-
-
-class ReactionTimeRelativeEncoding(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, max_indices):
-        max_seq_len = max_indices.max()
-        batch_size = len(max_indices)
-
-        positional_encodings = (
-            torch.arange(max_seq_len, device=max_indices.device)
-            .unsqueeze(0)
-            .expand(batch_size, -1)
-            .float()
-        )
-        normalized_positions = (
-            positional_encodings / (max_indices.unsqueeze(1)).clamp(min=1)
-        ).clamp(
-            max=1
-        )  # Normalize positions over range [0, 1] up to max_idx
-
-        return normalized_positions.unsqueeze(-1)
-
-
-class NormalizedRelativePositionalEncoding(nn.Module):
-    def __init__(self, embed_dim):
-        super().__init__()
-        # Learnable embedding for relative distances in normalized space
-        self.relative_embedding = nn.Linear(1, embed_dim)
-
-    def forward(self, seq_len):
-        max_seq_len = seq_len.max()
-        # Create normalized relative positions (normalized to [0, 1])
-        normalized_positions = torch.arange(
-            max_seq_len, device=seq_len.device
-        ).unsqueeze(0).float() / (max_seq_len - 1)
-        relative_positions = normalized_positions.unsqueeze(
-            -1
-        ) - normalized_positions.unsqueeze(-2)
-        relative_positions = (
-            relative_positions.abs()
-        )  # Absolute difference for relationships
-
-        # Apply embedding to the relative positions
-        embedded_positions = self.relative_embedding(
-            relative_positions.unsqueeze(-1)
-        )  # Shape: (seq_len, seq_len, embed_dim)
-        return embedded_positions
