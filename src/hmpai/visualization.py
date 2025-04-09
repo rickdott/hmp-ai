@@ -17,6 +17,24 @@ def predict_with_auc(
     info_to_keep: list[str],
     labels: list[str],
 ):
+    """
+    Perform predictions using a given model and compute Area Under the Curve (AUC)
+    for each label. The function processes data in batches, extracts relevant
+    information, and returns a concatenated DataFrame containing predictions and
+    AUC values.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model used for making predictions.
+        loader (DataLoader): A DataLoader object providing batches of input data.
+        info_to_keep (list[str]): A list of keys specifying additional information
+            to extract from the input batch.
+        labels (list[str]): A list of label names corresponding to the output
+            predictions.
+
+    Returns:
+        pd.DataFrame: A concatenated DataFrame containing the extracted information,
+        AUC values for each label, and other relevant data for all batches.
+    """
     torch.cuda.empty_cache()
     torch.set_grad_enabled(False)
     data_list = []

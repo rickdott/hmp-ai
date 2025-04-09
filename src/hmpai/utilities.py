@@ -117,8 +117,7 @@ def calc_ratio(
     ratio_column = column + "_ratio"
     # Assuming rt_col is in seconds
     data[ratio_column] = data[auc_column] / (data[rt_col] * 250)
-    # min-max normalize
-    # data[ratio_column] = (data[ratio_column] - data[ratio_column].min()) / (data[ratio_column].max() - data[ratio_column].min())
+    
     # z-score
     if normalize:
         data[ratio_column] = (data[ratio_column] - data[ratio_column].mean()) / data[

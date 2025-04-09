@@ -29,28 +29,30 @@ def train_and_test(
     seed: int = 42,
 ) -> dict:
     """
-    Trains and tests a PyTorch model on the given datasets.
+    Trains and evaluates a PyTorch model using the provided datasets.
 
     Args:
-        model (torch.nn.Module): The PyTorch model to train and test.
-        train_set (Dataset): The training dataset.
-        test_set (Dataset): The testing dataset.
-        val_set (Dataset, optional): The validation dataset. Defaults to None.
-        batch_size (int, optional): The batch size to use for training and testing. Defaults to 128.
-        epochs (int, optional): The number of epochs to train for. Defaults to 20.
-        workers (int, optional): The number of worker threads to use for loading data. Defaults to 4.
-        logs_path (Path, optional): The path to save logs to. Defaults to None.
-        additional_info (dict, optional): Additional information to log. Defaults to None.
+        model (torch.nn.Module): The PyTorch model to train and evaluate.
+        train_set (Dataset): The dataset used for training.
+        test_set (Dataset | list[Dataset]): The dataset(s) used for testing. Can be a single Dataset or a list of Datasets.
+        val_set (Dataset, optional): The dataset used for validation. Can be a single Dataset or a list of Datasets. Defaults to None.
+        batch_size (int, optional): The batch size for data loaders. Defaults to 128.
+        epochs (int, optional): The number of training epochs. Defaults to 20.
+        workers (int, optional): The number of worker threads for data loading. Defaults to 4.
+        logs_path (Path, optional): The directory path to save training logs and checkpoints. If None, logging is disabled. Defaults to None.
+        additional_info (dict, optional): Additional information to log as text. Defaults to None.
         additional_name (str, optional): Additional name to append to the log directory. Defaults to None.
-        use_class_weights (bool, optional): Whether to use class weights for the loss function. Defaults to True.
-        label_smoothing (float, optional): The amount of label smoothing to use. Defaults to 0.0.
-        weight_decay (float, optional): The amount of weight decay to use. Defaults to 0.0.
-        do_spectral_decoupling (bool, optional): Whether to apply spectral decoupling to the loss function. Defaults to False.
-        labels (list[str], optional): The labels to use for classification. Defaults to None.
-        seed (int, optional): The seed to use for reproducibility. Defaults to 42.
+        weight_decay (float, optional): Weight decay (L2 regularization) for the optimizer. Defaults to 0.0.
+        lr (float, optional): Learning rate for the optimizer. Defaults to 0.002.
+        seed (int, optional): Random seed for reproducibility. Defaults to 42.
 
     Returns:
         dict: A dictionary containing the test results.
+
+    Notes:
+        - The function uses early stopping to terminate training if validation loss does not improve sufficiently.
+        - The best-performing model (based on validation loss) is saved and reloaded for testing.
+        - If `logs_path` is provided, training logs and model checkpoints are saved to the specified directory.
     """
     set_global_seed(seed)
     torch.cuda.empty_cache()
@@ -204,18 +206,20 @@ def train(
     writer: SummaryWriter = None,
     epoch: int = None,
 ) -> list[float]:
-    """Train model for all batches, one epoch.
+    """
+    Trains a PyTorch model for one epoch using the provided data loader, optimizer, and loss function.
 
     Args:
-        model (torch.nn.Module): Model to train.
-        train_loader (DataLoader): Loader that contains data used.
-        optimizer (torch.optim.Optimizer): Optimizer used.
-        loss_function (torch.nn.modules.loss._Loss): Loss function used.
-        progress (tqdm, optional): tqdm instance to write progress to, will not write if not provided. Defaults to None.
-        do_spectral_decoupling (bool, optional): Whether to apply spectral decoupling to loss. Defaults to False.
+        model (torch.nn.Module): The PyTorch model to be trained.
+        train_loader (DataLoader): DataLoader providing the training data.
+        optimizer (torch.optim.Optimizer): Optimizer used to update model parameters.
+        loss_fn (torch.nn.modules.loss._Loss): Loss function to compute the training loss.
+        progress (tqdm, optional): tqdm progress bar instance for tracking training progress. Defaults to None.
+        writer (SummaryWriter, optional): TensorBoard SummaryWriter for logging training metrics. Defaults to None.
+        epoch (int, optional): Current epoch number, used for logging. Defaults to None.
 
     Returns:
-        list[float]: List containing loss for each batch.
+        list[float]: A list of loss values for each batch in the training epoch.
     """
     model.train()
 
@@ -261,16 +265,19 @@ def validate(
     validation_loader: DataLoader,
     loss_fn: torch.nn.modules.loss._Loss,
 ) -> list[float]:
-    """Validate model.
+    """
+    Validate the performance of a model on a validation dataset.
 
-    Args:
-        model (torch.nn.Module): Model to validate.
-        validation_loader (DataLoader): Loader containing validation data.
-        loss_function (torch.nn.modules.loss._Loss): Loss function used.
+    This function evaluates the model in evaluation mode using the provided
+    validation data loader and computes the loss for each batch. It ensures
+    that the model's gradients are not updated during validation by using
+    `torch.no_grad()`.
 
-    Returns:
-        list[float]: List containing loss for each batch.
-        float: Validation accuracy
+        model (torch.nn.Module): The PyTorch model to validate.
+        validation_loader (DataLoader): DataLoader providing the validation dataset.
+        loss_fn (torch.nn.modules.loss._Loss): The loss function used to compute the loss.
+
+        list[float]: A list containing the loss value for each batch in the validation dataset.
     """
     model.eval()
 
@@ -297,17 +304,21 @@ def test(
     loss_fn: torch.nn.modules.loss._Loss,
 ) -> dict:
     """
-    Test the PyTorch model on the given test data and return the classification report.
+    Evaluate a PyTorch model on one or more test datasets using a specified loss function.
 
     Args:
-        model (torch.nn.Module): The PyTorch model to test.
-        test_loader (DataLoader): The DataLoader containing the test data.
-        writer (SummaryWriter): The SummaryWriter to use for logging.
+        model (torch.nn.Module): The PyTorch model to evaluate.
+        test_loader (DataLoader | list[DataLoader]): A single DataLoader or a list of DataLoaders
+            containing the test datasets.
+        loss_fn (torch.nn.modules.loss._Loss): The loss function to compute the evaluation metric.
 
     Returns:
-        dict: The classification report as a dictionary.
-        torch.Tensor: The predicted classes.
-        torch.Tensor: The true classes.
+        tuple: A tuple containing:
+            - test_results (list[dict]): A list of dictionaries, one for each DataLoader, containing:
+                - "test_kldiv_list" (list[float]): A list of per-sample loss values.
+                - "test_kldiv_mean" (float): The mean loss value across all samples in the DataLoader.
+            - outputs (torch.Tensor): A tensor containing the concatenated per-sample loss values
+              across all DataLoaders.
     """
     model.eval()
     test_results = []
@@ -364,6 +375,30 @@ def kldiv_loss(
     predictions: torch.Tensor,
     labels: torch.Tensor,
 ):
+    """
+    Computes the Kullback-Leibler divergence (KLDiv) loss between predictions and labels.
+
+    Args:
+        predictions (torch.Tensor): The model logits (non-softmaxed) with shape 
+            (batch_size, sequence_length, num_classes).
+        labels (torch.Tensor): The target labels with shape 
+            (batch_size, sequence_length, num_classes). The labels should sum up to 1 
+            along the last dimension and can include negative values.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+            - loss (torch.Tensor): The normalized forward KL divergence loss.
+            - forward_kl_loss (torch.Tensor): The element-wise KL divergence loss 
+              before normalization.
+            - metrics (Dict[str, torch.Tensor]): A dictionary containing the normalized 
+              KL divergence loss under the key "kldiv".
+
+    Notes:
+        - The predictions are softmaxed along the last dimension before computing the 
+          KL divergence.
+        - The loss is normalized using the "batchmean" reduction, which divides the 
+          sum of the loss by the batch size.
+    """
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
 

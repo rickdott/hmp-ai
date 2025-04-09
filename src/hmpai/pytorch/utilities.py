@@ -62,6 +62,30 @@ def save_tensor(tensor: torch.Tensor, filename: str) -> None:
     df_tensor.to_csv(filename, index=False)
 
 def add_relative_positional_encoding(data):
+    """
+    Adds a relative positional encoding feature to the input data.
+
+    This function takes a tuple containing data and probabilities, computes
+    the relative positional encoding based on the trial start and end indices,
+    and appends the encoding as an additional feature to the data.
+
+    Args:
+        data (tuple): A tuple containing:
+            - data (torch.Tensor): The input data tensor of shape (length, features).
+            - probabilities (torch.Tensor): A tensor containing probabilities used
+              to determine the trial start and end indices.
+
+    Returns:
+        tuple: A tuple containing:
+            - data (torch.Tensor): The input data tensor with the appended positional
+              encoding feature, of shape (length, features + 1).
+            - probabilities (torch.Tensor): The unchanged probabilities tensor.
+
+    Note:
+        - The positional encoding is computed as a normalized range from 0 to 1
+          starting from the trial start index to the trial end index.
+        - The encoding is clamped to a maximum value of 1.
+    """
     # Data is tuple (data, labels)
     data, probabilities = data
     start, end = get_trial_start_end(probabilities)

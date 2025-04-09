@@ -11,6 +11,18 @@ SAT2_SPLITS = [
 
 
 def read_behavioural_info(path: Path):
+    """
+    Reads behavioral information from a CSV file, removes specific indexing columns, 
+    and returns the processed data.
+
+    Args:
+        path (Path): The file path to the CSV file containing behavioral data.
+
+    Returns:
+        pandas.DataFrame: A DataFrame containing the behavioral data with indexing 
+        columns removed. Specifically, the first column and the ninth column 
+        (index 0 and 8) are dropped.
+    """
     data = pd.read_csv(path)
 
     # Remove indexing columns
@@ -24,6 +36,25 @@ def match_on_event_name(
     participant: str,
     rt: float,
 ):
+    """
+    Matches an event based on its name and retrieves the closest reaction time (RT) 
+    from the provided behaviour groups.
+
+    Args:
+        event_name (str): The event name string, formatted as "prefix/force/sat/expdResp/contrast".
+        behaviour_groups (pd.Series | pd.DataFrame): A pandas Series or DataFrame containing 
+            behavioural data. If a Series, it is expected to be a grouped object.
+        participant (str): The participant identifier.
+        rt (float): The reaction time (RT) in seconds.
+
+    Returns:
+        pd.Series: A pandas Series representing the row in the behaviour groups that 
+        matches the event and has the closest RT. Returns an empty Series if no match is found.
+
+    Raises:
+        KeyError: If the event_name format is invalid or required columns are missing 
+        in the behaviour_groups DataFrame.
+    """
     # Extract relevant parts of the event_name
     aspects = event_name.split("/")
     force = aspects[1]  # Not used
@@ -51,6 +82,19 @@ def match_on_event_name(
 
 
 def merge_data(true_df: pd.DataFrame, behaviour: pd.DataFrame):
+    """
+    Merges two DataFrames by matching rows from `true_df` with processed rows from `behaviour`.
+
+    Args:
+        true_df (pd.DataFrame): DataFrame containing ground truth data with columns including 
+                                'event_name', 'participant', and 'rt'.
+        behaviour (pd.DataFrame): DataFrame containing behavioral data with columns including 
+                                  'participant', 'SAT', 'expdResp', and 'contrast'.
+
+    Returns:
+        pd.DataFrame: A merged DataFrame with matched rows from `true_df` and processed `behaviour`, 
+                      dropping duplicate participant columns and renaming appropriately.
+    """
     def preprocess_behaviour(behaviour: pd.DataFrame):
         return behaviour.groupby(["participant", "SAT", "expdResp", "contrast"])
 
@@ -71,6 +115,20 @@ def merge_data(true_df: pd.DataFrame, behaviour: pd.DataFrame):
 
 
 def merge_data_xr(epoch_data: xr.Dataset, behaviour: pd.DataFrame):
+    """
+    Merges behavioural data into an xarray Dataset by aligning on event names and reaction times.
+
+    Parameters:
+        epoch_data (xr.Dataset): An xarray Dataset containing epoch data with coordinates 
+                                 'event_name', 'rt', and 'participant'.
+        behaviour (pd.DataFrame): A pandas DataFrame containing behavioural data, grouped by 
+                                  'participant', 'SAT', 'expdResp', and 'contrast'.
+
+    Returns:
+        xr.Dataset: The updated xarray Dataset with new coordinates ('givenResp', 'trialType') 
+                    added based on the behavioural data.
+    """
+
     columns_to_add = ["givenResp", "trialType"]
 
     behaviour = behaviour.groupby(["participant", "SAT", "expdResp", "contrast"])

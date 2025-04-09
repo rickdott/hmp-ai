@@ -3,6 +3,25 @@ from hmpai.utilities import get_masking_index
 
 
 class StartJitterTransform(object):
+    """
+    Applies a random temporal jitter to the start of input data with a given probability.
+
+    Attributes:
+        offset_before (int): Maximum offset for jitter.
+        probability (float): Probability of applying jitter (default: 1.0).
+
+    Args:
+        data_in (tuple): A tuple of:
+            - data (torch.Tensor): Input data of shape (T, F).
+            - labels (torch.Tensor): Corresponding labels of shape (T, L).
+
+    Returns:
+        tuple: Transformed (data, labels) with jitter applied or unchanged if skipped.
+
+    Notes:
+        - Pads data with NaN and labels with 0 to maintain size.
+        - Sets the last `offset` elements of the first label column to 1.0.
+    """
     def __init__(self, offset_before, probability=1.0):
         self.offset_before = offset_before
         self.probability = probability
@@ -31,6 +50,37 @@ class StartJitterTransform(object):
 
 
 class EndJitterTransform(object):
+    """
+    A PyTorch transform that modifies the input data and labels by introducing 
+    a random offset near the end of the sequence. This is useful for augmenting 
+    data by simulating variations in sequence endings.
+
+    Attributes:
+        extra_offset (int): The maximum offset to apply near the end of the sequence.
+        probability (float): The probability of applying the transform. Defaults to 1.0.
+
+    Methods:
+        __call__(data_in):
+            Applies the transform to the input data and labels.
+
+    Args:
+        data_in (tuple): A tuple containing:
+            - data (torch.Tensor): The input data tensor.
+            - labels (torch.Tensor): The corresponding labels tensor.
+
+    Returns:
+        tuple: A tuple containing the modified data and labels tensors. If the 
+        transform is not applied (based on the probability), the input data and 
+        labels are returned unchanged.
+
+    Notes:
+        - The transform identifies the end index of the sequence using a masking 
+          value (e.g., `torch.nan`).
+        - The data and labels are modified starting from the calculated end index 
+          minus a random offset.
+        - The labels are updated such that the last modified position is set to 1.0 
+          in the first dimension, and the rest are set to 0.
+    """
     def __init__(self, extra_offset, probability=1.0):
         self.extra_offset = extra_offset
         self.probability = probability

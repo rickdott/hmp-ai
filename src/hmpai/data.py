@@ -22,47 +22,48 @@ SAT_CLASSES_SPEED = ["negative", "encoding", "decision", "response"]
 
 class StageFinder:
     """
-    A class used to fit and label a HMP model on epoched EEG data.
-
-    Attributes
-    ----------
-    epoch_data : xarray.Dataset
-        The epoched EEG data.
-    verbose : bool
-        Whether to print verbose output.
-    labels : list of str
-        The labels for each stage.
-    conditions : list of dict
-        The conditions for each stage.
-    condition_variable : str
-        The variable used to determine the condition.
-    condition_method : str
-        The method used to check condition equality. ['equals', 'contains']
-    duration: int
-        The amount of samples that will be included from the start of the stage
-    cpus : int
-        The number of CPUs to use for fitting the model.
-    fit_function : str
-        The name of the function used to fit the model.
-    fit_args : dict
-        The arguments used to fit the model.
-    n_comp : int
-        The number of principal components to use for transforming the data.
-    models : list of hmp.models.hmp
-        The HMP models fitted for each condition.
-    fits : list of hmp.models.fitted
-        The fitted HMP models for each condition.
-    hmp_data : list of np.ndarray
-        The transformed data for each condition.
-
-    Methods
-    -------
-    fit_model()
-        Fits the HMP model on the dataset.
-    label_model()
-        Labels the dataset using the fitted HMP model.
-    visualize_model(positions)
-        Visualizes the HMP model.
+    StageFinder is a class designed to process and analyze epoched data using Hidden Multivariate Patterns (HMP). 
+    It provides functionality for data transformation, model fitting, labeling, and visualization.
+    Attributes:
+        epoch_data (xr.Dataset): The loaded epoched data.
+        epoch_data_offset (xr.Dataset): The epoched data with offset adjustments.
+        hmp_data_offset (xr.Dataset): The transformed data in principal component (PC) space.
+        verbose (bool): Whether to print detailed logs during processing.
+        labels (list or dict): Labels for stages or conditions.
+        main_labels (list): Main labels derived from the provided labels.
+        conditions (list): List of conditions for data separation.
+        condition_variable (str): Variable used for condition separation.
+        condition_method (str): Method used for condition separation.
+        cpus (int): Number of CPUs to use for parallel processing.
+        fit_function (str): Name of the function used for model fitting.
+        fit_args (dict): Arguments for the fitting function.
+        models (list): List of fitted HMP models.
+        fits (list): List of fit results for each condition.
+        hmp_data (list): List of HMP-transformed data for each condition.
+        fits_to_load (list): Pre-fitted models to load.
+        event_width (int): Width of events for the HMP model.
+        split_response (bool): Whether to split responses into separate conditions.
+    Methods:
+        __init__(epoched_data, labels, conditions=[], condition_variable="cue", 
+                 condition_method="equal", extra_split=None, cpus=1, fit_function="fit", 
+                 fit_args=dict(), verbose=False, n_comp=None, fits_to_load=[], 
+                 event_width=50, split_response=False, behaviour_path=None, 
+                 behaviour_fn=read_behavioural_info, pca_weights=None):
+            Initializes the StageFinder instance with the provided parameters.
+        fit_model(fit_args: dict = None, extra_split: list = None):
+            Fits the HMP model on the dataset, optionally using additional arguments 
+            or splitting on extra conditions.
+        label_model(label_fn=None, label_fn_kwargs=None, probabilistic=False):
+            Labels the dataset based on the fitted HMP model.
+        visualize_model(positions, max_time=None, ax=None, colorbar=True, cond_label=None, 
+                        model_index=None, figsize=None, set_vlims=True):
+            Visualizes the fitted HMP model using topographic time courses.
+        __fit_model__(hmp_data):
+            Internal method to fit the HMP model on the provided data.
+        __label_model__(model, label_fn, label_fn_kwargs, condition=None):
+            Internal method to label the dataset based on the fitted model.
+        __label_model_probabilistic__(model, condition=None):
+            Internal method to label the dataset probabilistically based on the fitted model.
     """
 
     def __init__(

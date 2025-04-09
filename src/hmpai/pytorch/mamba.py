@@ -6,6 +6,40 @@ import numpy as np
 
 
 def build_mamba(config):
+    """
+    build_mamba(config)
+
+    Builds a configurable PyTorch model called `MambaModel` based on the provided configuration dictionary.
+
+    Parameters:
+        config (dict): A dictionary containing the configuration for the model. The following keys are expected:
+            - n_channels (int): Number of input channels. (Required)
+            - n_mamba_layers (int): Number of Mamba or LSTM layers. (Required)
+            - n_classes (int): Number of output classes. (Required)
+            - use_pos_enc (bool, optional): Whether to use positional encoding. Defaults to False.
+            - spatial_feature_dim (int, optional): Dimension of spatial features. Required if `use_linear_fe` or `use_pointconv_fe` is True.
+            - use_linear_fe (bool, optional): Whether to use a linear layer for spatial feature extraction. Defaults to False.
+            - use_pointconv_fe (bool, optional): Whether to use a 1D convolutional layer for spatial feature extraction. Defaults to False.
+            - use_conv (bool, optional): Whether to use convolutional layers for temporal feature extraction. Defaults to False.
+            - conv_kernel_sizes (list of int, optional): Kernel sizes for convolutional layers. Required if `use_conv` is True.
+            - conv_in_channels (list of int, optional): Input channels for convolutional layers. Required if `use_conv` is True.
+            - conv_out_channels (list of int, optional): Output channels for convolutional layers. Required if `use_conv` is True.
+            - conv_stack (bool, optional): Whether to stack convolutional layers sequentially. Defaults to False.
+            - conv_concat (bool, optional): Whether to concatenate outputs of convolutional layers. Defaults to False.
+            - use_lstm (bool, optional): Whether to use LSTM layers instead of Mamba layers. Defaults to False.
+
+    Returns:
+        nn.Module: A PyTorch model instance configured based on the provided `config`.
+
+    Raises:
+        ValueError: If required keys are missing from the `config` dictionary or if incompatible configurations are provided.
+
+    Notes:
+        - The model supports optional spatial feature extraction using either a linear layer or a 1D convolutional layer.
+        - Temporal feature extraction can be performed using stacked or concatenated convolutional layers.
+        - The model can use either Mamba layers or LSTM layers for sequence modeling.
+        - Positional encoding can be optionally included as an additional feature.
+    """
     class MambaModel(nn.Module):
         def __init__(self, config: dict):
             super().__init__()
@@ -203,6 +237,33 @@ def build_mamba(config):
 
 
 class MambaBlock(nn.Module):
+    """
+    A PyTorch module that applies a Mamba block followed by RMS normalization.
+
+    The MambaBlock is designed to process input tensors using a combination of
+    a custom Mamba layer and RMS normalization. The output of the Mamba layer
+    is added to the input tensor (residual connection) to enhance gradient flow
+    and improve training stability.
+
+    Attributes:
+        mamba (Mamba): A custom Mamba layer initialized with specific parameters
+            such as embedding dimension, state size, convolution size, and expansion factor.
+        norm (nn.RMSNorm): An RMS normalization layer applied to the input tensor.
+
+    Args:
+        embed_dim (int): The embedding dimension of the input tensor.
+
+    Methods:
+        forward(x):
+            Applies the Mamba layer and RMS normalization to the input tensor,
+            followed by a residual connection.
+
+            Args:
+                x (torch.Tensor): The input tensor of shape (batch_size, seq_len, embed_dim).
+
+            Returns:
+                torch.Tensor: The output tensor of the same shape as the input.
+    """
     def __init__(self, embed_dim):
         super().__init__()
         self.mamba = Mamba(d_model=embed_dim, d_state=64, d_conv=4, expand=2)
@@ -214,6 +275,27 @@ class MambaBlock(nn.Module):
 
 
 class LSTMBlock(nn.Module):
+    """
+    LSTMBlock is a neural network module that combines an LSTM layer with RMS normalization.
+
+    This block applies RMS normalization to the input, processes it through an LSTM layer,
+    and adds the original input to the output of the LSTM layer (residual connection).
+
+    Attributes:
+        lstm (nn.LSTM): The LSTM layer with input and hidden dimensions equal to `embed_dim`.
+        norm (nn.RMSNorm): The RMS normalization layer applied to the input.
+
+    Args:
+        embed_dim (int): The dimensionality of the input and hidden states of the LSTM layer.
+
+    Forward Pass:
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, seq_len, embed_dim).
+
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, seq_len, embed_dim) after
+            applying RMS normalization, LSTM, and residual connection.
+    """
     def __init__(self, embed_dim):
         super().__init__()
         self.lstm = nn.LSTM(embed_dim, embed_dim, batch_first=True)

@@ -26,18 +26,66 @@ class MultiXArrayProbaDataset(Dataset):
             [torch.Tensor, float, float], torch.Tensor
         ] = norm_dummy,
         norm_vars: tuple[float, float] = None,
-        subset_cond: tuple = None,  # (variable, method, value), examples: ('event_name', 'contains', 'speed') or ('condition', 'equal', 'long')
+        subset_cond: tuple = None,
         statistics: dict = None,
         add_negative: bool = False,
-        probabilistic_labels: bool = False,  # Return labels as probabilities over each class instead of categorical
-        skip_samples: int = 0,  # Skip this amount of samples, used to skip pre-stimulus samples
-        cut_samples: int = 0,  # Take this amount of samples from the end, used to skip extra post-response offset samples
+        probabilistic_labels: bool = False,
+        skip_samples: int = 0,
+        cut_samples: int = 0,
         data_labels: list[
             list
-        ] = None,  # List of equal length as data_paths in case datasets have different labels, labels param should in this case be a list containing the intersection of all of these
+        ] = None,
         add_pe: bool = False,
         subset_channels: list = None,
     ):
+        """
+        Initializes the data generator with the specified parameters.
+
+        Args:
+            data_paths (list[str | Path]): List of paths to the datasets.
+            participants_to_keep (list, optional): List of participants to include. Defaults to None (uses all participants).
+            labels (list[str], optional): List of labels to use. Defaults to SAT_CLASSES_ACCURACY.
+            info_to_keep (list[str], optional): List of additional information to retain. Defaults to an empty list.
+            transform (Compose, optional): Transformation to apply to the data. Defaults to None.
+            normalization_fn (Callable[[torch.Tensor, float, float], torch.Tensor], optional): 
+                Function to normalize the data. Defaults to norm_dummy.
+            norm_vars (tuple[float, float], optional): Normalization variables (mean, std). Defaults to None.
+            subset_cond (tuple, optional): Condition to subset the data, specified as 
+                (variable, method, value). Examples: ('event_name', 'contains', 'speed') or 
+                ('condition', 'equal', 'long'). Defaults to None.
+            statistics (dict, optional): Precomputed statistics for normalization. Defaults to None.
+            add_negative (bool, optional): Whether to add negative samples. Defaults to False.
+            probabilistic_labels (bool, optional): Whether to return labels as probabilities over 
+                each class instead of categorical. Defaults to False.
+            skip_samples (int, optional): Number of samples to skip (e.g., pre-stimulus samples). Defaults to 0.
+            cut_samples (int, optional): Number of samples to take from the end (e.g., post-response offset samples). Defaults to 0.
+            data_labels (list[list], optional): List of labels for each dataset, used when datasets 
+                have different labels. Defaults to None.
+            add_pe (bool, optional): Whether to add positional encoding. Defaults to False.
+            subset_channels (list, optional): List of channels to subset. Defaults to None.
+
+        Attributes:
+            data_paths (list[str | Path]): Paths to the datasets.
+            data_labels (list[list]): Labels for each dataset.
+            transform (Compose): Transformation applied to the data.
+            info_to_keep (list[str]): Additional information retained.
+            keep_info (bool): Whether additional information is retained.
+            participants_to_keep (list): List of participants to include.
+            max_length (int): Maximum length of the datasets.
+            labels (list[str]): List of labels.
+            label_lookup (dict): Mapping of labels to indices.
+            subset_cond (tuple): Condition to subset the data.
+            statistics (dict): Precomputed statistics for normalization.
+            add_negative (bool): Whether negative samples are added.
+            probabilistic_labels (bool): Whether labels are returned as probabilities.
+            skip_samples (int): Number of samples skipped.
+            cut_samples (int): Number of samples taken from the end.
+            add_pe (bool): Whether positional encoding is added.
+            subset_channels (list): List of channels to subset.
+            index_map (dict): Mapping of indices for the dataset.
+            normalization_fn (Callable): Function used for normalization.
+            norm_vars (tuple[float, float]): Normalization variables (mean, std).
+        """
         self.data_paths = data_paths
         self.data_labels = data_labels
         self.transform = transform
