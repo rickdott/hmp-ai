@@ -3,6 +3,7 @@ import netCDF4
 import xarray as xr
 import numpy as np
 from pathlib import Path
+from sklearn.model_selection import train_test_split
 
 
 def split_participants_into_folds(
@@ -51,6 +52,34 @@ def split_participants(
     train_participants = [p for p in participants if p not in testval_participants]
     val_participants = testval_participants[: testval_n // 2]
     test_participants = testval_participants[testval_n // 2 :]
+    return (train_participants, val_participants, test_participants)
+
+
+def split_participants_custom(data_paths: list[str | Path], val: int, test: int = 0):
+    # Split all participants from datasets in data_paths into train, val and test splits
+    participants = []
+    for data_path in data_paths:
+        with xr.open_dataset(data_path) as ds:
+            participants.extend(ds.participant.values)
+    # Ensure no duplication of participants
+    participants = list(dict.fromkeys(participants))
+
+    if test == 0:
+        if val == 0:
+            train_participants = participants
+            val_participants = []
+        else:
+            train_participants, val_participants = train_test_split(
+                participants, test_size=val, random_state=42
+            )
+        test_participants = []
+    else:
+        train_participants, testval_participants = train_test_split(
+            participants, test_size=val + test, random_state=42
+        )
+        val_participants, test_participants = train_test_split(
+            testval_participants, test_size=test / (val + test), random_state=42
+        )
     return (train_participants, val_participants, test_participants)
 
 

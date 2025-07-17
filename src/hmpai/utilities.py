@@ -71,10 +71,10 @@ def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     return max_indices
 
 
-def get_trial_start_end(probabilities: torch.Tensor):
+def get_trial_start_end(probabilities: torch.Tensor, lbl_start: int=1, lbl_len: int=3):
     # Create a mask where any non-zero value exists along the channels
     # Any non-negative class
-    mask = (probabilities[:, 1:] != 0).any(dim=1)
+    mask = (probabilities[:, lbl_start:lbl_start + lbl_len] != 0).any(dim=1)
 
     # Find the first and last non-zero indices
     if mask.any():

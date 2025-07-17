@@ -74,7 +74,7 @@ def train_and_test(
                     pin_memory=True,
                 )
             )
-    else:
+    elif type(test_set) is Dataset:
         # Assume type of test_set is Dataset
         test_loaders.append(
             DataLoader(
@@ -192,8 +192,10 @@ def train_and_test(
         loss = best_checkpoint["loss"]
 
     # Test model
-    results, _, = test(model, test_loaders, loss)
-
+    if len(test_loaders) > 0:
+        results, _, = test(model, test_loaders, loss)
+    else:
+        results = None
     return results
 
 
@@ -227,10 +229,12 @@ def train(
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+        if len(batch) > 2:
+            info = batch[2]
 
         optimizer.zero_grad()
 
-        predictions = model(data)
+        predictions = model(data, task=info[0]["task"] if info is not None else None)
 
         if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
@@ -287,7 +291,9 @@ def validate(
         for batch_i, batch in enumerate(validation_loader):
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-            predictions = model(data)
+            if len(batch) > 2:
+                info = batch[2]
+            predictions = model(data, task=info[0]["task"] if info is not None else None)
 
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
@@ -330,8 +336,10 @@ def test(
         outputs = []
         with torch.no_grad():
             for batch_i, batch in enumerate(loader):
-                data, labels = batch[0].to(DEVICE), batch[1]
-                predictions = model(data)
+                data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+                if len(batch) > 2:
+                    info = batch[2]
+                predictions = model(data, task=info[0]["task"] if info is not None else None)
                 # Cut off labels if needed
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]

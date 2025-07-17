@@ -14,6 +14,12 @@ DEVICE = (
     else "cpu"
 )
 
+TASKS = {
+    "prp1/t1": 0,
+    "prp1/t2": 1,
+    "sat1": 2,
+}
+
 
 def get_summary_str(model: torch.nn.Module, input_shape: tuple[int, ...]) -> str:
     # Converts model summary to string, to log to Tensorboard
@@ -61,7 +67,7 @@ def save_tensor(tensor: torch.Tensor, filename: str) -> None:
     df_tensor = pd.DataFrame(np_tensor)
     df_tensor.to_csv(filename, index=False)
 
-def add_relative_positional_encoding(data):
+def add_relative_positional_encoding(data, lbl_start = 1, lbl_len = 3):
     """
     Adds a relative positional encoding feature to the input data.
 
@@ -88,7 +94,8 @@ def add_relative_positional_encoding(data):
     """
     # Data is tuple (data, labels)
     data, probabilities = data
-    start, end = get_trial_start_end(probabilities)
+    start, end = get_trial_start_end(probabilities, lbl_start, lbl_len)
+    
     length = data.shape[0]
 
     encoding_feature = torch.zeros(length)
@@ -100,3 +107,5 @@ def add_relative_positional_encoding(data):
 
     data = torch.cat([data, encoding_feature], dim=1)
     return data, probabilities
+
+

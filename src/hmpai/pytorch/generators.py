@@ -5,7 +5,7 @@ import xarray as xr
 import torch
 import numpy as np
 from hmpai.pytorch.normalization import *
-from hmpai.pytorch.utilities import add_relative_positional_encoding
+from hmpai.pytorch.utilities import TASKS, add_relative_positional_encoding
 from hmpai.utilities import get_masking_index, MASKING_VALUE
 from hmpai.data import SAT_CLASSES_ACCURACY
 from pathlib import Path
@@ -32,9 +32,7 @@ class MultiXArrayProbaDataset(Dataset):
         probabilistic_labels: bool = False,
         skip_samples: int = 0,
         cut_samples: int = 0,
-        data_labels: list[
-            list
-        ] = None,
+        data_labels: list[list] = None,
         add_pe: bool = False,
         subset_channels: list = None,
     ):
@@ -47,19 +45,19 @@ class MultiXArrayProbaDataset(Dataset):
             labels (list[str], optional): List of labels to use. Defaults to SAT_CLASSES_ACCURACY.
             info_to_keep (list[str], optional): List of additional information to retain. Defaults to an empty list.
             transform (Compose, optional): Transformation to apply to the data. Defaults to None.
-            normalization_fn (Callable[[torch.Tensor, float, float], torch.Tensor], optional): 
+            normalization_fn (Callable[[torch.Tensor, float, float], torch.Tensor], optional):
                 Function to normalize the data. Defaults to norm_dummy.
             norm_vars (tuple[float, float], optional): Normalization variables (mean, std). Defaults to None.
-            subset_cond (tuple, optional): Condition to subset the data, specified as 
-                (variable, method, value). Examples: ('event_name', 'contains', 'speed') or 
+            subset_cond (tuple, optional): Condition to subset the data, specified as
+                (variable, method, value). Examples: ('event_name', 'contains', 'speed') or
                 ('condition', 'equal', 'long'). Defaults to None.
             statistics (dict, optional): Precomputed statistics for normalization. Defaults to None.
             add_negative (bool, optional): Whether to add negative samples. Defaults to False.
-            probabilistic_labels (bool, optional): Whether to return labels as probabilities over 
+            probabilistic_labels (bool, optional): Whether to return labels as probabilities over
                 each class instead of categorical. Defaults to False.
             skip_samples (int, optional): Number of samples to skip (e.g., pre-stimulus samples). Defaults to 0.
             cut_samples (int, optional): Number of samples to take from the end (e.g., post-response offset samples). Defaults to 0.
-            data_labels (list[list], optional): List of labels for each dataset, used when datasets 
+            data_labels (list[list], optional): List of labels for each dataset, used when datasets
                 have different labels. Defaults to None.
             add_pe (bool, optional): Whether to add positional encoding. Defaults to False.
             subset_channels (list, optional): List of channels to subset. Defaults to None.
@@ -304,19 +302,26 @@ class MultiXArrayProbaDataset(Dataset):
 
         # Add positional encoding
         if self.add_pe:
-            sample_data, sample_label = add_relative_positional_encoding(
-                (sample_data, sample_label)
-            )
+            if sample_label.shape[1] == 7:
+                sample_data, sample_label = add_relative_positional_encoding(
+                    (sample_data, sample_label), 1, 6
+                )
+            else:
+                sample_data, sample_label = add_relative_positional_encoding(
+                    (sample_data, sample_label)
+                )
 
         if self.keep_info:
-            values_to_keep = [
-                np.atleast_1d(sample[key].to_numpy()) for key in self.info_to_keep
-            ]
-            sample_info = [
-                {key: value for key, value in zip(self.info_to_keep, values)}
-                for values in zip(*values_to_keep)
-            ]
-            return sample_data, sample_label, sample_info
+            sample_info = {}
+            for key in self.info_to_keep:
+                if key in sample:
+                    sample_info[key] = sample[key].item()
+                elif key in sample.attrs:
+                    val = sample.attrs[key]
+                    if getattr(val, "item", None) is not None:
+                        val = val.item()
+                    sample_info[key] = val
+            return sample_data, sample_label, [sample_info]
         return sample_data, sample_label
 
     def __getitem_clean__(self, idx):

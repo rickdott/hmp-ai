@@ -1,3 +1,4 @@
+from hmpai.pytorch.utilities import TASKS
 import torch
 from torch import nn
 from mamba_ssm import Mamba
@@ -158,17 +159,21 @@ def build_mamba(config):
             else:
                 self.temporal_module = nn.Identity()
 
-            mamba_dim = self.__calculate_mamba_dim__()
+            self.mamba_dim = self.__calculate_mamba_dim__()
             if config.get("use_lstm", False):
                 self.seq_model = nn.Sequential(
-                    *[LSTMBlock(mamba_dim) for _ in range(n_mamba_layers)]
+                    *[LSTMBlock(self.mamba_dim) for _ in range(n_mamba_layers)]
                 )
             else:
                 self.seq_model = nn.Sequential(
-                    *[MambaBlock(mamba_dim) for _ in range(n_mamba_layers)]
+                    *[MambaBlock(self.mamba_dim) for _ in range(n_mamba_layers)]
                 )
-            self.normalization = nn.LayerNorm(mamba_dim)
-            self.linear_out = nn.Linear(mamba_dim, n_classes)
+            self.normalization = nn.LayerNorm(self.mamba_dim)
+            self.linear_out = nn.Linear(self.mamba_dim, n_classes)
+            self.classification_head = nn.ModuleDict({
+                task_name: nn.Linear(self.mamba_dim, n_classes)
+                for task_name in TASKS.keys()
+            })
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
@@ -184,14 +189,19 @@ def build_mamba(config):
 
             return mamba_dim
 
-        def forward(self, x):
+        def forward(self, x, return_embeddings=False, task=None):
             if self.use_pos_enc:
-                if x.shape[-1] != self.n_channels + 1:
+                if x.shape[-1] != self.n_channels + 1 and x.shape[-1] != self.n_channels + 2:
                     raise ValueError(
                         "Positional encoding was likely not supplied as an extra feature, check input"
                     )
-                pe = x[..., -1].unsqueeze(-1)
-                x = x[..., :-1]
+                if x.shape[-1] == self.n_channels + 2:
+                    # Positional encoding is the last two features
+                    pe = x[..., -2:]
+                    x = x[..., :-2]
+                elif x.shape[-1] == self.n_channels + 1:
+                    pe = x[..., -1].unsqueeze(-1)
+                    x = x[..., :-1]
 
             max_indices = get_masking_indices(x)
             max_seq_len = max_indices.max()
@@ -229,8 +239,18 @@ def build_mamba(config):
 
             x = self.seq_model(x)
             x = self.normalization(x)
-            x = self.linear_out(x)
 
+            if return_embeddings:
+                emb = x.clone()
+            if task is None:
+                x = self.linear_out(x)
+            else:
+                x = torch.stack([
+                    self.classification_head[t](x[i, :, :]) for i, t in enumerate(task)
+                ])
+
+            if return_embeddings:
+                return x, emb
             return x
 
     return MambaModel(config)
