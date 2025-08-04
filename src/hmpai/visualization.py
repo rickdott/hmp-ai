@@ -59,7 +59,7 @@ def predict_with_auc(
 def plot_peak_timing(
     model, loader, labels, ax_ac, ax_sp, cue_var="condition", path=None, sample=True
 ):
-    if path is None:
+    if not path.exists():
         output = []
         torch.cuda.empty_cache()
 

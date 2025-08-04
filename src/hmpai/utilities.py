@@ -71,10 +71,12 @@ def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     return max_indices
 
 
-def get_trial_start_end(probabilities: torch.Tensor, lbl_start: int=1, lbl_len: int=3):
+def get_trial_start_end(
+    probabilities: torch.Tensor, lbl_start: int = 1, lbl_len: int = 3
+):
     # Create a mask where any non-zero value exists along the channels
     # Any non-negative class
-    mask = (probabilities[:, lbl_start:lbl_start + lbl_len] != 0).any(dim=1)
+    mask = (probabilities[:, lbl_start : lbl_start + lbl_len] != 0).any(dim=1)
 
     # Find the first and last non-zero indices
     if mask.any():
@@ -96,15 +98,35 @@ def set_seaborn_style():
     matplotlib.rcParams["font.size"] = 7
     sns.set_style("ticks")
     sns.set_context("paper")
+    # sns.set_palette(
+    #     sns.color_palette(
+    #         [
+    #             "#4477AA",
+    #             "#66CCEE",
+    #             "#228833",
+    #             "#CCBB44",
+    #             "#EE6677",
+    #             "#AA3377",
+    #         ]
+    #     )
+    # )
     sns.set_palette(
         sns.color_palette(
-            [
-                "#4477AA",
-                "#66CCEE",
+            palette=[
+                # existing six
+                "#4477aa",
+                "#66ccee",
                 "#228833",
-                "#CCBB44",
-                "#EE6677",
-                "#AA3377",
+                "#ccbb44",
+                "#ee6677",
+                "#aa3377",
+                # extension
+                "#44aa99",
+                "#aa7744",
+                "#ddaa33",
+                "#999933",
+                "#bb5566",
+                "#7777bb",
             ]
         )
     )
@@ -117,7 +139,7 @@ def calc_ratio(
     ratio_column = column + "_ratio"
     # Assuming rt_col is in seconds
     data[ratio_column] = data[auc_column] / (data[rt_col] * 250)
-    
+
     # z-score
     if normalize:
         data[ratio_column] = (data[ratio_column] - data[ratio_column].mean()) / data[

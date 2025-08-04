@@ -342,7 +342,7 @@ class StageFinder:
                 vmin=-7e-6 if set_vlims else None,
                 vmax=7e-6 if set_vlims else None,
                 colorbar=colorbar,
-                magnify=2.5,
+                magnify=3.5,
             )
         else:
             fig, ax = plt.subplots(len(self.fits), 1, figsize=figsize, sharex=True, dpi=300)
