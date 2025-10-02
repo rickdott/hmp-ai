@@ -50,18 +50,18 @@ def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     # Check if search_value is NaN
     if isinstance(search_value, float) and np.isnan(search_value):
         mask = np.isnan(
-            data.isel(channels=0)
+            data.isel(channel=0)
         )  # Select the first channel and apply NaN mask
     else:
         mask = (
-            data.isel(channels=0) == search_value
+            data.isel(channel=0) == search_value
         )  # Comparison for non-NaN search values
 
     # Reverse mask along the time dimension
-    reversed_mask = mask.isel(samples=slice(None, None, -1))
+    reversed_mask = mask.isel(sample=slice(None, None, -1))
 
     # Find the first occurrence of non-mask values in the reversed mask
-    last_block_start = (~reversed_mask).argmax(dim="samples")
+    last_block_start = (~reversed_mask).argmax(dim="sample")
 
     # Calculate the max indices based on the mask shape and block start positions
     max_indices = (

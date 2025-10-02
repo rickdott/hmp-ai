@@ -220,12 +220,12 @@ class StageFinder:
             path.mkdir(parents=True)
 
         # Save all models and estimates
-        for i, model in enumerate(self.models):
+        for i, _ in enumerate(self.models):
             model_path = path / f"model_{i}.pkl"
             with open(model_path, "wb") as f:
-                pickle.dump(model, f)
+                pickle.dump(self.models[i], f)
 
-            estimate_path = path / f"estimate_{i}.pkl"
+            estimate_path = path / f"estimates_{i}.pkl"
             with open(estimate_path, "wb") as f:
                 pickle.dump(self.estimates[i], f)
 
@@ -242,21 +242,22 @@ class StageFinder:
     def __remove_extra_offset(self):
         # Remove offset before stimulus
         epoch_data_no_offset = self.epoched_data.sel(
-            samples=range(
-                self.epoched_data["offset_before"], len(self.epoched_data.samples)
+            sample=range(
+                self.epoched_data.offset_before, len(self.epoched_data.sample)
             )
         )
 
         # Remove offset after RT (finds indices per trial where NaN starts)
-        reordered = epoch_data_no_offset.stack(
-            {"trial_x_participant": ["participant", "epochs"]}
-        ).transpose("trial_x_participant", ...)
-        indices = get_masking_indices_xr(reordered.data, search_value=np.nan)
-        for i, index in enumerate(indices):
-            reordered.data[i, :, index - reordered.extra_offset : index] = np.nan
-        epoch_data_no_offset = reordered.unstack().transpose(
-            "participant", "epochs", ...
-        )
+        if "extra_offset" in epoch_data_no_offset:
+            reordered = epoch_data_no_offset.stack(
+                {"trial_x_participant": ["participant", "epoch"]}
+            ).transpose("trial_x_participant", ...)
+            indices = get_masking_indices_xr(reordered.data, search_value=np.nan)
+            for i, index in enumerate(indices):
+                reordered.data[i, :, index - reordered.extra_offset : index] = np.nan
+            epoch_data_no_offset = reordered.unstack().transpose(
+                "participant", "epoch", ...
+            )
 
-        epoch_data_no_offset["samples"] = range(0, len(epoch_data_no_offset.samples))
+        epoch_data_no_offset["sample"] = range(0, len(epoch_data_no_offset.sample))
         return epoch_data_no_offset

@@ -97,8 +97,8 @@ class MultiXArrayProbaDataset(Dataset):
         self.max_length = 0
         for data_path in data_paths:
             ds = xr.open_dataset(data_path)
-            if len(ds.samples) > self.max_length:
-                self.max_length = len(ds.samples)
+            if len(ds.sample) > self.max_length:
+                self.max_length = len(ds.sample)
             ds.close()
 
         self.labels = labels
@@ -243,11 +243,11 @@ class MultiXArrayProbaDataset(Dataset):
         pad_right = 0
         filter = {
             "participant": indices[1],
-            "epochs": indices[2],
+            "epoch": indices[2],
         }
         sample = ds.isel(**filter)
-        if len(sample.samples) < self.max_length:
-            pad_right += self.max_length - len(sample.samples)
+        if len(sample.sample) < self.max_length:
+            pad_right += self.max_length - len(sample.sample)
 
         # Subset channels
         if self.subset_channels is not None:
@@ -328,13 +328,12 @@ class MultiXArrayProbaDataset(Dataset):
         # For use in calculating normalization variables and class weights
         indices = self.index_map[idx]
         ds = self._get_dataset(indices[0])
-        n_samples = len(ds.samples)
 
         pad_left = 0
         pad_right = 0
         filter = {
             "participant": indices[1],
-            "epochs": indices[2],
+            "epoch": indices[2],
         }
         sample = ds.isel(**filter)
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)

@@ -62,8 +62,7 @@ def train_and_test(
     )
     # Do not shuffle test loader since testing should be the same always
     test_loaders = []
-    if type(test_set) is list:
-        test_loaders = []
+    if isinstance(test_set, list):
         for test_data in test_set:
             test_loaders.append(
                 DataLoader(
@@ -74,7 +73,7 @@ def train_and_test(
                     pin_memory=True,
                 )
             )
-    elif type(test_set) is Dataset:
+    elif isinstance(test_set, Dataset):
         # Assume type of test_set is Dataset
         test_loaders.append(
             DataLoader(
@@ -88,7 +87,7 @@ def train_and_test(
 
     val_loaders = []
     if val_set is not None:
-        if type(val_set) is list:
+        if isinstance(val_set, list):
             for val in val_set:
                 val_loaders.append(
                     DataLoader(
@@ -99,7 +98,7 @@ def train_and_test(
                         pin_memory=True,
                     )
                 )
-        else:
+        elif isinstance(val_set, Dataset):
             val_loaders.append(
                 DataLoader(
                     val_set,
@@ -229,9 +228,7 @@ def train(
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-        if len(batch) > 2:
-            info = batch[2]
-
+        info = batch[2] if len(batch) > 2 else None
         optimizer.zero_grad()
 
         predictions = model(data, task=info[0]["task"] if info is not None else None)
@@ -291,8 +288,8 @@ def validate(
         for batch_i, batch in enumerate(validation_loader):
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-            if len(batch) > 2:
-                info = batch[2]
+            info = batch[2] if len(batch) > 2 else None
+
             predictions = model(data, task=info[0]["task"] if info is not None else None)
 
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
@@ -337,8 +334,7 @@ def test(
         with torch.no_grad():
             for batch_i, batch in enumerate(loader):
                 data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
-                if len(batch) > 2:
-                    info = batch[2]
+                info = batch[2] if len(batch) > 2 else None
                 predictions = model(data, task=info[0]["task"] if info is not None else None)
                 # Cut off labels if needed
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
