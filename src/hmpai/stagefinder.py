@@ -248,7 +248,7 @@ class StageFinder:
         )
 
         # Remove offset after RT (finds indices per trial where NaN starts)
-        if "extra_offset" in epoch_data_no_offset:
+        if "extra_offset" in epoch_data_no_offset.attrs:
             reordered = epoch_data_no_offset.stack(
                 {"trial_x_participant": ["participant", "epoch"]}
             ).transpose("trial_x_participant", ...)
