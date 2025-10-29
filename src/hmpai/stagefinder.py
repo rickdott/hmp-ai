@@ -13,33 +13,35 @@ from datetime import datetime
 
 
 class StageFinder:
-
     def __init__(
         self,
         epoched_data: Path | str | xr.Dataset,
-        conditions: list[str] = [],
+        conditions: list[str] | None = None,
         models: list[
             Path | str | hmp.models.base.BaseModel
-        ] = [],  # Must be equal length to conditions
+        ] | None = None,  # Must be equal length to conditions
         estimates: list[
             Path | str | xr.DataArray
-        ] = [],  # Must be equal length to conditions and models
-        preprocessing_kwargs: dict = dict(),  # Parameters used in `hmp.preprocessing.Standard`, provide pca weights here as 'weights' and # PCA components as 'n_comp'
+        ] | None = None,  # Must be equal length to conditions and models
+        preprocessing_kwargs: dict | None = None,  # Parameters used in `hmp.preprocessing.Standard`, provide pca weights here as 'weights' and # PCA components as 'n_comp'
         # verbose: bool = False,
         # extra_split: list[tuple[]] = None, # Only used in SAT refit currently, when instantiating a StageFinder on a full dataset, then splitting it when doing fit_model
     ):
+        self.conditions = conditions or []
+        self.models = models or []
+        self.estimates = estimates or []
+        self.preprocessing_kwargs = preprocessing_kwargs or {}
+
         # Check for invalid values
-        if len(conditions) > 0:
-            if len(models) > 0 and len(models) != len(conditions):
+        if len(self.conditions) > 0:
+            if len(self.models) > 0 and len(self.models) != len(self.conditions):
                 raise ValueError(
                     "If conditions are provided, models must be provided as well, and must be equal length to conditions"
                 )
-            if len(estimates) > 0 and len(estimates) != len(conditions):
+            if len(self.estimates) > 0 and len(self.estimates) != len(self.conditions):
                 raise ValueError(
                     "If conditions are provided, estimates must be provided as well, and must be equal length to conditions"
                 )
-
-        self.conditions = conditions
 
         # Load required data, making sure everything is in memory
         if type(epoched_data) is str or type(epoched_data) is Path:
@@ -48,18 +50,16 @@ class StageFinder:
             self.epoched_data = epoched_data
 
         # replace str or path models with deserialized models
-        for i, model in enumerate(models):
+        for i, model in enumerate(self.models):
             if isinstance(model, (str, Path)):
                 with open(model, "rb") as f:
-                    models[i] = pickle.load(f)
-        self.models = models
+                    self.models[i] = pickle.load(f)
 
         # replace str or path estimates with deserialized estimates
-        for i, estimate in enumerate(estimates):
+        for i, estimate in enumerate(self.estimates):
             if isinstance(estimate, (str, Path)):
                 with open(estimate, "rb") as f:
-                    estimates[i] = pickle.load(f)
-        self.estimates = estimates
+                    self.estimates[i] = pickle.load(f)
 
         # Create offset-corrected epoched data if required
         if "offset_before" in self.epoched_data.attrs:
@@ -70,7 +70,7 @@ class StageFinder:
         # Preprocess, split after if necessary per condition
         if len(self.models) == 0 and len(self.estimates) == 0:
             self.preprocessed = hmp.preprocessing.Standard(
-                self.epoched_data_no_offset, **preprocessing_kwargs
+                self.epoched_data_no_offset, copy=True, **self.preprocessing_kwargs
             )
 
     def fit_model(
@@ -97,8 +97,9 @@ class StageFinder:
             self.conditions.append("No condition")
         else:
             for condition in self.conditions:
+                print(f"Fitting model for condition: {condition}")
                 preprocessed_subset = hmp.utils.condition_selection(
-                    self.preprocessed,
+                    self.preprocessed.data,
                     condition_string=condition,
                     variable=condition_variable,
                     method=condition_method,
@@ -230,14 +231,32 @@ class StageFinder:
                 pickle.dump(self.estimates[i], f)
 
     def visualize_model(self, positions):
+        set_seaborn_style()
+        fig, ax = plt.subplots(len(self.models), 1, figsize=(10, 1.5 * len(self.models)))
         for i, model in enumerate(self.models):
+            cur_ax = ax[i] if len(self.models) > 1 else ax
             hmp.visu.plot_topo_timecourse(
                 self.epoched_data_no_offset,
                 self.estimates[i],
                 positions,
                 as_time=True,
                 event_lines=False,
+                ax=cur_ax,
+                # max_time=1000,
+                # sensors=True,
             )
+            cur_ax.text(
+                0, 1.12,  # (x, y) in axes coordinates
+                f"n = {len(self.estimates[i].trial)}",
+                transform=cur_ax.transAxes,
+                ha="left", va="top",
+            )
+            cur_ax.set_ylabel(f"{self.conditions[i]}")
+            if i != len(self.models) - 1 and len(self.models) > 1:
+                cur_ax.set_xticklabels([])
+            if i == len(self.models) - 1:
+                cur_ax.set_xlabel("Time (in ms)")
+        return fig, ax
 
     def __remove_extra_offset(self):
         # Remove offset before stimulus
