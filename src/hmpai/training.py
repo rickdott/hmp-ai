@@ -55,7 +55,7 @@ def split_participants(
     return (train_participants, val_participants, test_participants)
 
 
-def split_participants_custom(data_paths: list[str | Path], val: int, test: int = 0):
+def split_participants_custom(data_paths: list[str | Path], val: float, test: float = 0, random_state: int = 42):
     # Split all participants from datasets in data_paths into train, val and test splits
     participants = []
     for data_path in data_paths:
@@ -70,15 +70,15 @@ def split_participants_custom(data_paths: list[str | Path], val: int, test: int 
             val_participants = []
         else:
             train_participants, val_participants = train_test_split(
-                participants, test_size=val, random_state=42
+                participants, test_size=val, random_state=random_state
             )
         test_participants = []
     else:
         train_participants, testval_participants = train_test_split(
-            participants, test_size=val + test, random_state=42
+            participants, test_size=val + test, random_state=random_state
         )
         val_participants, test_participants = train_test_split(
-            testval_participants, test_size=test / (val + test), random_state=42
+            testval_participants, test_size=test / (val + test), random_state=random_state
         )
     return (train_participants, val_participants, test_participants)
 

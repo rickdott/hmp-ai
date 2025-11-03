@@ -49,8 +49,8 @@ class MultiXArrayProbaDataset(Dataset):
                 Function to normalize the data. Defaults to norm_dummy.
             norm_vars (tuple[float, float], optional): Normalization variables (mean, std). Defaults to None.
             subset_cond (tuple, optional): Condition to subset the data, specified as
-                (variable, method, value). Examples: ('event_name', 'contains', 'speed') or
-                ('condition', 'equal', 'long'). Defaults to None.
+                (variable, method, value/values). Examples: ('event_name', 'contains', 'speed') or
+                ('condition', 'equal', ['short', 'long']) List for 'value' is interpreted as an 'OR'. Defaults to None.
             statistics (dict, optional): Precomputed statistics for normalization. Defaults to None.
             add_negative (bool, optional): Whether to add negative samples. Defaults to False.
             probabilistic_labels (bool, optional): Whether to return labels as probabilities over
@@ -140,12 +140,18 @@ class MultiXArrayProbaDataset(Dataset):
                     axis=-1
                 )
                 if self.subset_cond is not None:
-                    if self.subset_cond[1] == "contains":
-                        subset_indices = ds[self.subset_cond[0]].str.contains(
-                            self.subset_cond[2]
-                        )
-                    elif self.subset_cond[1] == "equal":
-                        subset_indices = ds[self.subset_cond[0]] == self.subset_cond[2]
+                    col, op, val = self.subset_cond
+
+                    if op == "contains":
+                        if isinstance(val, list):
+                            subset_indices = ds[col].apply(lambda x: any(v in x for v in val))
+                        else:
+                            subset_indices = ds[col].str.contains(val)
+                    elif op == "equal":
+                        if isinstance(val, list):
+                            subset_indices = ds[col].isin(val)
+                        else:
+                            subset_indices = ds[col] == val
                     subset_indices = subset_indices.to_numpy()
 
                 combined_indices = (
@@ -302,14 +308,8 @@ class MultiXArrayProbaDataset(Dataset):
 
         # Add positional encoding
         if self.add_pe:
-            if sample_label.shape[1] == 7:
-                sample_data, sample_label = add_relative_positional_encoding(
-                    (sample_data, sample_label), 1, 6
-                )
-            else:
-                sample_data, sample_label = add_relative_positional_encoding(
-                    (sample_data, sample_label)
-                )
+            # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
+            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1)
 
         if self.keep_info:
             sample_info = {}

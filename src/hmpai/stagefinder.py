@@ -151,11 +151,10 @@ class StageFinder:
         return labeled_data
 
     def _label_model(self, model, estimate, condition, labels):
-        # Get condition with most labels to use as main labels
-        # TODO: This assumes that any condition with fewer events consists of a subset of the main condition which is not necessarily true
+        # Get union of all label subsets to use as main labels
         main_labels = (
-            labels[max(labels, key=lambda k: len(labels[k]))]
-            if type(labels) is dict
+            list(np.unique(np.concatenate(list(labels.values()))))
+            if isinstance(labels, dict)
             else labels
         )
         if condition == "No condition":
@@ -170,6 +169,8 @@ class StageFinder:
         labels_array = np.zeros(shape, dtype=np.float32)
 
         probs = estimate.unstack()
+        # Necessary to re-order participants if the order is different between epoched data and estimates?
+        probs = probs.sel(participant=self.epoched_data.participant.values)
         dims = probs.dims
         participants = probs.participant.values
         probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
