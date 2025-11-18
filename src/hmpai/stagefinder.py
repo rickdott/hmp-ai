@@ -165,55 +165,77 @@ class StageFinder:
         # Use non-offset data
         shape = list(self.epoched_data.data.shape)
         shape[-2] = len(main_labels)
-
         labels_array = np.zeros(shape, dtype=np.float32)
 
+        # Vectorized preprocessing of estimates
         probs = estimate.unstack()
-        # Necessary to re-order participants if the order is different between epoched data and estimates?
         probs = probs.sel(participant=self.epoched_data.participant.values)
         dims = probs.dims
         participants = probs.participant.values
         probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
-        epochs = list(self.epoched_data.epoch.values)
-
+        
+        # Pre-compute epoch mapping for faster lookups
+        epochs_list = list(self.epoched_data.epoch.values)
+        epoch_to_idx = {epoch: idx for idx, epoch in enumerate(epochs_list)}
+        
+        # Pre-compute label mapping
+        label_to_idx = {labels[i + 1]: main_labels.index(labels[i + 1]) 
+                       for i in range(len(labels) - 1)}
+        
+        # Vectorized processing - get all valid (non-NaN) trials at once
+        probs_data = probs.data  # Convert to numpy for speed
+        valid_mask = ~np.isnan(probs_data).any(axis=-1)  # Shape: (participant, epoch, event)
+        
+        # Pre-compute padding parameters
+        offset_before = self.epoched_data.attrs.get('offset_before', 0)
+        extra_offset = self.epoched_data.attrs.get('extra_offset', 0)
+        target_length = labels_array.shape[-1]
+        
+        print(f"Labeling {np.sum(valid_mask)} valid trials for condition {condition}")
+        
+        # Vectorized trial processing
         for i, participant in enumerate(participants):
-            print(f"Labeling participant {participant} for condition {condition}")
-            for epoch in probs.epoch:
-                trial_data = probs.sel(participant=participant, epoch=epoch)
-                if not np.any(np.isnan(trial_data.data)):
-                    for event in trial_data.event:
-                        # Assumes labels starts with "negative"
-                        event_idx = main_labels.index(labels[event.item() + 1])
-                        event_data = trial_data.sel(event=event).data
-                        if "offset_before" in self.epoched_data.attrs:
-                            # Left pad using offset
-                            event_data = np.pad(
-                                event_data,
-                                pad_width=((self.epoched_data.offset_before, 0)),
-                                mode="constant",
-                                constant_values=0,
-                            )
-                        if "extra_offset" in self.epoched_data.attrs:
-                            # Right pad using extra offset
-                            event_data = np.pad(
-                                event_data,
-                                pad_width=((0, self.epoched_data.extra_offset)),
-                                mode="constant",
-                                constant_values=0,
-                            )
-                        # Right pad if condition is shorter than longest condition (sample dim)
-                        if event_data.shape[-1] < labels_array.shape[-1]:
-                            event_data = np.pad(
-                                event_data,
-                                pad_width=(
-                                    (0, labels_array.shape[-1] - event_data.shape[-1])
-                                ),
-                                mode="constant",
-                                constant_values=0,
-                            )
-                        epoch = epochs.index(epoch)
-                        labels_array[i, epoch, event_idx, :] = event_data
-        return np.copy(labels_array)
+            participant_data = probs_data[i]  # Shape: (epoch, event, sample)
+            participant_valid = valid_mask[i]  # Shape: (epoch, event)
+            
+            # Process all valid trials for this participant at once
+            valid_epochs, valid_events = np.where(participant_valid)
+            
+            if len(valid_epochs) == 0:
+                continue
+                
+            # Batch process all valid trials
+            for epoch_idx, event_idx in zip(valid_epochs, valid_events):
+                epoch_val = probs.epoch.values[epoch_idx]
+                mapped_epoch_idx = epoch_to_idx[epoch_val]
+                
+                # Get label index (assumes labels start with "negative")
+                label_key = labels[event_idx + 1]
+                main_label_idx = label_to_idx[label_key]
+                
+                # Get event data
+                event_data = participant_data[epoch_idx, event_idx]
+                
+                # Vectorized padding operations
+                if offset_before > 0:
+                    event_data = np.pad(event_data, (offset_before, 0), 
+                                      mode='constant', constant_values=0)
+                
+                if extra_offset > 0:
+                    event_data = np.pad(event_data, (0, extra_offset), 
+                                      mode='constant', constant_values=0)
+                
+                # Right pad to target length if needed
+                if len(event_data) < target_length:
+                    event_data = np.pad(event_data, (0, target_length - len(event_data)), 
+                                      mode='constant', constant_values=0)
+                elif len(event_data) > target_length:
+                    event_data = event_data[:target_length]
+                
+                # Assign to output array
+                labels_array[i, mapped_epoch_idx, main_label_idx, :] = event_data
+        
+        return labels_array
 
 
     def save_model(self, path):

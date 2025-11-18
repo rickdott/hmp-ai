@@ -83,6 +83,27 @@ def split_participants_custom(data_paths: list[str | Path], val: float, test: fl
     return (train_participants, val_participants, test_participants)
 
 
+def split_participants_str(participants: list[str], val: float, test: float = 0, random_state: int = 42):
+    if val > 1.0 or test > 1.0:
+        raise ValueError("Val and test sizes should be decimals between 0 and 1.")
+    if test == 0:
+        if val == 0:
+            train_participants = participants
+            val_participants = []
+        else:
+            train_participants, val_participants = train_test_split(
+                participants, test_size=val, random_state=random_state
+            )
+        test_participants = []
+    else:
+        train_participants, testval_participants = train_test_split(
+            participants, test_size=val + test, random_state=random_state
+        )
+        val_participants, test_participants = train_test_split(
+            testval_participants, test_size=test / (val + test), random_state=random_state
+        )
+    return (train_participants, val_participants, test_participants)
+
 def get_folds(
     data: xr.Dataset,
     k: int,

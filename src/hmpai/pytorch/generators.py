@@ -1,3 +1,4 @@
+from threading import Lock
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose
 import netCDF4
@@ -11,9 +12,41 @@ from hmpai.data import SAT_CLASSES_ACCURACY
 from pathlib import Path
 from typing import Callable
 
-global_ds_cache = {}
+# Worker-specific cache: {worker_id: {file_path: dataset}}
+_worker_ds_cache = {}
+_cache_lock = Lock()
 
+def _get_worker_id():
+    """Get the current worker ID for PyTorch DataLoader multiprocessing"""
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is None:
+        return 0  # Single-process mode
+    return worker_info.id
 
+class CombinedDataset(Dataset):
+    def __init__(self, datasets: list[Dataset]):
+        """
+        Initializes a combined dataset from multiple datasets.
+
+        Args:
+            datasets (list[Dataset]): List of datasets to combine.
+        """
+        self.datasets = datasets
+        self.cumulative_lengths = np.cumsum([len(ds) for ds in datasets])
+
+    def __len__(self):
+        return self.cumulative_lengths[-1]
+
+    def __getitem__(self, idx):
+        # Determine which dataset the index belongs to
+        dataset_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_lengths[dataset_idx - 1]
+        
+        return self.datasets[dataset_idx][sample_idx]
+                 
 class MultiXArrayProbaDataset(Dataset):
     def __init__(
         self,
@@ -96,7 +129,7 @@ class MultiXArrayProbaDataset(Dataset):
         # Find max length in datasets
         self.max_length = 0
         for data_path in data_paths:
-            ds = xr.open_dataset(data_path)
+            ds = self._get_dataset(data_path)
             if len(ds.sample) > self.max_length:
                 self.max_length = len(ds.sample)
             ds.close()
@@ -115,6 +148,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.subset_channels = subset_channels
 
         self.index_map = self._create_index_map_whole()
+        self.dataset_info = self._gather_dataset_info()
 
         if norm_vars is None:
             if self.statistics is None:
@@ -125,58 +159,82 @@ class MultiXArrayProbaDataset(Dataset):
 
         self.normalization_fn = normalization_fn
         self.norm_vars = norm_vars
+        
+        # Precompute label indices mapping for each dataset
+        self._precompute_label_indices()
+
+    def _precompute_label_indices(self):
+        """Precompute label index mappings to avoid doing it in __getitem__"""
+        self.label_index_maps = []
+        if self.data_labels is not None:
+            for ds_labels in self.data_labels:
+                ds_label_indices = [self.labels.index(label) for label in ds_labels]
+                self.label_index_maps.append(ds_label_indices)
+        else:
+            self.label_index_maps = None
 
     def _create_index_map_whole(self):
         index_map = []
-
         for file_idx, file_path in enumerate(self.data_paths):
-            with xr.open_dataset(file_path) as ds:
-                # Find trials for which all samples for one channel are NaN, these are excluded
-                data = ds["data"].values
-                probas = ds["probabilities"].values
-                # Select subset of data to check valid indices
-                data = data[..., 0, :]
-                mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(
-                    axis=-1
-                )
-                if self.subset_cond is not None:
-                    col, op, val = self.subset_cond
+            ds = self._get_dataset(file_path)
+            # Find trials for which all samples for one channel are NaN, these are excluded
+            data = ds["data"].values
+            probas = ds["probabilities"].values
+            # Select subset of data to check valid indices
+            data = data[..., 0, :]
+            mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(
+                axis=-1
+            )
+            
+            # Optimize subset condition evaluation
+            if self.subset_cond is not None:
+                col, op, val = self.subset_cond
+                col_data = ds[col].values  # Get numpy array directly instead of using pandas
 
-                    if op == "contains":
-                        if isinstance(val, list):
-                            subset_indices = ds[col].apply(lambda x: any(v in x for v in val))
-                        else:
-                            subset_indices = ds[col].str.contains(val)
-                    elif op == "equal":
-                        if isinstance(val, list):
-                            subset_indices = ds[col].isin(val)
-                        else:
-                            subset_indices = ds[col] == val
-                    subset_indices = subset_indices.to_numpy()
+                if op == "contains":
+                    if isinstance(val, list):
+                        subset_indices = np.array([any(v in x for v in val) for x in col_data])
+                    else:
+                        subset_indices = np.array([val in x for x in col_data])
+                elif op == "equal":
+                    if isinstance(val, list):
+                        subset_indices = np.isin(col_data, val)
+                    else:
+                        subset_indices = col_data == val
 
-                combined_indices = (
-                    np.argwhere((mask) & (subset_indices))
-                    if self.subset_cond is not None
-                    else np.argwhere(mask)
-                )
+            combined_indices = (
+                np.argwhere((mask) & (subset_indices))
+                if self.subset_cond is not None
+                else np.argwhere(mask)
+            )
 
-                if len(self.participants_to_keep) > 0:
-                    participants_in_data = [
-                        index
-                        for index, value in enumerate(ds.participant.values.tolist())
-                        if value in self.participants_to_keep
-                    ]
-                    index_map.extend(
-                        [
-                            (file_idx, *idx)
-                            for idx in combined_indices
-                            if idx[0] in participants_in_data
-                        ]
-                    )
-                else:
-                    index_map.extend([(file_idx, *idx) for idx in combined_indices])
+            # Optimize participant filtering using set lookup
+            if len(self.participants_to_keep) > 0:
+                participant_set = set(self.participants_to_keep)  # Use set for O(1) lookup
+                participants_in_data = np.array([
+                    index
+                    for index, value in enumerate(ds.participant.values)
+                    if value in participant_set
+                ])
+                # Vectorized filtering
+                mask_participants = np.isin(combined_indices[:, 0], participants_in_data)
+                valid_indices = combined_indices[mask_participants]
+                index_map.extend([(file_idx, *idx) for idx in valid_indices])
+            else:
+                index_map.extend([(file_idx, *idx) for idx in combined_indices])
 
         return index_map
+    
+    def _gather_dataset_info(self):
+        dataset_info = {}
+        # file_idx == idx[0] in index_map, so for a give sample we can find this information, but also equal to index in data_paths
+        for file_idx, file_path in enumerate(self.data_paths):
+            ds = self._get_dataset(file_path)
+            dataset_info[file_idx] = {
+                "offset_before": ds.attrs.get("offset_before", 0),
+                "extra_offset": ds.attrs.get("extra_offset", 0)
+            }
+        return dataset_info
 
     def _calc_global_statistics(self, sample_size):
         sample_size = (
@@ -235,29 +293,52 @@ class MultiXArrayProbaDataset(Dataset):
             "class_weights": class_weights,
         }
 
-    def _get_dataset(self, file_idx):
-        file_path = self.data_paths[file_idx]
-        if file_path not in global_ds_cache:
-            global_ds_cache[file_path] = xr.open_dataset(file_path)
-        return global_ds_cache[file_path]
+    def _get_dataset(self, file_path):
+        """Get dataset with worker-aware caching"""
+        worker_id = _get_worker_id()
+        
+        with _cache_lock:
+            if worker_id not in _worker_ds_cache:
+                _worker_ds_cache[worker_id] = {}
+            
+            worker_cache = _worker_ds_cache[worker_id]
+            
+            if file_path not in worker_cache:
+                # Open with chunks=None for better random access performance
+                # Use locks=False to avoid HDF5 file locking issues
+                worker_cache[file_path] = xr.open_dataset(
+                    file_path,
+                    # chunks=None,
+                    # lock=False,
+                    # engine='netcdf4'
+                )
+        
+        return _worker_ds_cache[worker_id][file_path]
 
     def __getitem__(self, idx, debug=False):
         indices = self.index_map[idx]
 
-        ds = self._get_dataset(indices[0])
+        ds = self._get_dataset(self.data_paths[indices[0]])
         pad_left = 0
         pad_right = 0
+        
+        # Use xarray isel - it's optimized for NetCDF random access
         filter = {
             "participant": indices[1],
             "epoch": indices[2],
         }
         sample = ds.isel(**filter)
+        
         if len(sample.sample) < self.max_length:
             pad_right += self.max_length - len(sample.sample)
 
         # Subset channels
         if self.subset_channels is not None:
-            sample = sample.sel(channels=self.subset_channels)
+            sample = sample.sel(channel=self.subset_channels)
+        # TEMPORARY, TODO: REMOVE
+        sample = sample.isel(channel=slice(0, 63))
+        
+        # Convert to tensor - torch.as_tensor avoids copy when possible
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
@@ -270,15 +351,16 @@ class MultiXArrayProbaDataset(Dataset):
                 sample_label, (pad_left, pad_right), mode="constant", value=0
             )
 
-        # Convert label probabilities to correct order
-        if self.data_labels is not None:
-            ds_labels = self.data_labels[indices[0]]
-            ds_label_indices = [self.labels.index(label) for label in ds_labels]
+        # Convert label probabilities to correct order (using precomputed indices)
+        if self.label_index_maps is not None:
+            ds_label_indices = self.label_index_maps[indices[0]]
             new_labels = torch.zeros(
                 (len(self.labels), sample_label.shape[1]), dtype=torch.float32
             )
+            # Vectorized assignment instead of loop
             for old_idx, new_idx in enumerate(ds_label_indices):
-                new_labels[new_idx] = sample_label[old_idx]
+                # Changed to old_idx+1 to account for negative class
+                new_labels[new_idx] = sample_label[old_idx + 1]
             sample_label = new_labels
 
         if self.add_negative:
@@ -299,7 +381,11 @@ class MultiXArrayProbaDataset(Dataset):
         sample_data = sample_data[self.skip_samples :, :]
 
         if self.transform is not None:
-            sample_data, sample_label = self.transform((sample_data, sample_label))
+            context = {
+                "start_jitter": ds.attrs.get("offset_before", 0),
+                "end_jitter": ds.attrs.get("extra_offset", 0),
+            }
+            sample_data, sample_label, _ = self.transform((sample_data, sample_label, context))
 
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
 
@@ -315,19 +401,29 @@ class MultiXArrayProbaDataset(Dataset):
             sample_info = {}
             for key in self.info_to_keep:
                 if key in sample:
-                    sample_info[key] = sample[key].item()
+                    if isinstance(sample[key], xr.DataArray) and sample[key].size > 1:
+                        # continue
+                        sample_info[key] = sample[key].values
+                    else:
+                        sample_info[key] = sample[key].item()
                 elif key in sample.attrs:
                     val = sample.attrs[key]
                     if getattr(val, "item", None) is not None:
                         val = val.item()
                     sample_info[key] = val
+            # if "channel" in self.info_to_keep and self.channel_dict is not None:
+            #     channels = sample.channel.values.tolist()
+            #     mapped_channels = torch.Tensor([
+            #         self.channel_dict.get(str(ch), str(ch)) for ch in channels
+            #     ])
+            #     sample_info["channel"] = mapped_channels
             return sample_data, sample_label, [sample_info]
         return sample_data, sample_label
 
     def __getitem_clean__(self, idx):
         # For use in calculating normalization variables and class weights
         indices = self.index_map[idx]
-        ds = self._get_dataset(indices[0])
+        ds = self._get_dataset(self.data_paths[indices[0]])
 
         pad_left = 0
         pad_right = 0

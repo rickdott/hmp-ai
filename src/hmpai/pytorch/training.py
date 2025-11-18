@@ -1,5 +1,7 @@
 from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import autocast, GradScaler
 from tqdm.notebook import tqdm
+from hmpai.utilities import MASKING_VALUE
 from hmpai.pytorch.utilities import (
     DEVICE,
     set_global_seed,
@@ -11,6 +13,80 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import numpy as np
+
+def mixed_collate(batch):
+    """
+    Custom collate function to handle variable-length sequences with padding and combine metadata.
+    Pads sequences to the maximum length in the batch.
+    """
+    xs, ys, meta = [], [], []
+
+    # Extract tensors and metadata
+    for sample_data, sample_label, sample_info in batch:
+        xs.append(sample_data)
+        ys.append(sample_label)
+        meta.append(sample_info)  # List of dicts containing metadata
+    
+    # Find maximum sequence length in the batch
+    max_seq_len = max(x.shape[0] for x in xs)
+    max_label_len = max(y.shape[0] for y in ys)
+    
+    # Pad sequences to maximum length
+    padded_xs = []
+    padded_ys = []
+    
+    for x, y in zip(xs, ys):
+        seq_len = x.shape[0]
+        label_len = y.shape[0]
+        
+        # Pad data tensor
+        if seq_len < max_seq_len:
+            pad_size = max_seq_len - seq_len
+            x_padded = torch.nn.functional.pad(x, (0, 0, 0, pad_size), value=MASKING_VALUE)
+        else:
+            x_padded = x
+        padded_xs.append(x_padded)
+        
+        # Pad label tensor
+        if label_len < max_label_len:
+            pad_size = max_label_len - label_len
+            y_padded = torch.nn.functional.pad(y, (0, 0, 0, pad_size), value=0.0)
+        else:
+            y_padded = y
+        padded_ys.append(y_padded)
+    
+    # Stack padded tensors
+    xs = torch.stack(padded_xs)  # [B, T, C] (EEG data)
+    ys = torch.stack(padded_ys)  # [B, T, num_classes] (labels)
+    
+    # Create padding mask (True for valid data, False for padding)
+    # Check if any channel contains MASKING_VALUE to determine padding
+    padding_mask = (xs != MASKING_VALUE).any(dim=-1)  # [B, T]
+
+    # Combine metadata into a single dictionary
+    combined_meta = {}
+    
+    # Iterate through metadata and combine
+    for sample_info in meta:
+        for key, value in sample_info[0].items():
+            if key not in combined_meta:
+                combined_meta[key] = []
+
+            # If the value is a tensor (e.g., epoch, cluster, channel positions), stack them
+            if isinstance(value, torch.Tensor):
+                combined_meta[key].append(value)
+            else:
+                # Otherwise, just append the values (lists of strings, like task, participant)
+                combined_meta[key].append(value)
+
+    # Convert lists of metadata values into tensors if needed
+    for key, value in combined_meta.items():
+        if isinstance(value[0], torch.Tensor):
+            combined_meta[key] = torch.stack(value)  # Convert list of tensors into a tensor
+        else:
+            combined_meta[key] = value  # Keep list if it's not a tensor
+
+    return xs, ys, combined_meta, padding_mask
 
 
 def train_and_test(
@@ -56,9 +132,16 @@ def train_and_test(
     """
     set_global_seed(seed)
     torch.cuda.empty_cache()
-    # Create loaders
+    # Create loaders with optimizations
     train_loader = DataLoader(
-        train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True
+        train_set, 
+        batch_size, 
+        shuffle=True, 
+        num_workers=workers, 
+        pin_memory=True, 
+        collate_fn=mixed_collate,
+        persistent_workers=True if workers > 0 else False,
+        prefetch_factor=8 if workers > 0 else None,
     )
     # Do not shuffle test loader since testing should be the same always
     test_loaders = []
@@ -71,6 +154,9 @@ def train_and_test(
                     shuffle=False,
                     num_workers=workers,
                     pin_memory=True,
+                    collate_fn=mixed_collate,
+                    # persistent_workers=True if workers > 0 else False,
+                    # prefetch_factor=2 if workers > 0 else None,
                 )
             )
     elif isinstance(test_set, Dataset):
@@ -82,6 +168,9 @@ def train_and_test(
                 shuffle=False,
                 num_workers=workers,
                 pin_memory=True,
+                collate_fn=mixed_collate,
+                # persistent_workers=True if workers > 0 else False,
+                # prefetch_factor=2 if workers > 0 else None,
             )
         )
 
@@ -93,9 +182,12 @@ def train_and_test(
                     DataLoader(
                         val,
                         batch_size,
-                        shuffle=True,
+                        shuffle=False,
                         num_workers=workers,
                         pin_memory=True,
+                        collate_fn=mixed_collate,
+                        # persistent_workers=True if workers > 0 else False,
+                        # prefetch_factor=2 if workers > 0 else None,
                     )
                 )
         elif isinstance(val_set, Dataset):
@@ -103,9 +195,12 @@ def train_and_test(
                 DataLoader(
                     val_set,
                     batch_size,
-                    shuffle=True,
+                    shuffle=False,
                     num_workers=workers,
                     pin_memory=True,
+                    collate_fn=mixed_collate,
+                    # persistent_workers=True if workers > 0 else False,
+                    # prefetch_factor=2 if workers > 0 else None,
                 )
             )
     # Set up logging
@@ -128,8 +223,10 @@ def train_and_test(
 
     loss = kldiv_loss
 
-    opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
-    stopper = EarlyStopper()
+    # opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
+    opt = torch.optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * len(train_loader))
+    stopper = EarlyStopper(tolerance=5)
 
     lowest_mean_val_loss = np.inf
     for epoch in range(epochs):
@@ -141,15 +238,16 @@ def train_and_test(
                 model,
                 train_loader,
                 opt,
+                scheduler,
                 loss,
                 progress=tepoch,
                 writer=writer,
                 epoch=epoch,
             )
 
+
             # Validate model and communicate results
             val_loss_list = []
-            val_acc_list = []
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 val_losses = validate(model, val_loader, loss)
@@ -181,7 +279,7 @@ def train_and_test(
             # Stop training if validation loss has not improved sufficiently
             if stopper.check_stop(mean_val_loss):
                 break
-
+        print(f"Epoch {epoch}: LR = {scheduler.get_last_lr()[0]:.6f}")
     # Re-load best performing model
     if write_log:
         best_checkpoint = load_model(path / "checkpoint.pt")
@@ -202,6 +300,7 @@ def train(
     model: torch.nn.Module,
     train_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
     loss_fn: torch.nn.modules.loss._Loss,
     progress: tqdm = None,
     writer: SummaryWriter = None,
@@ -225,18 +324,23 @@ def train(
     model.train()
 
     loss_per_batch = []
+    
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
         info = batch[2] if len(batch) > 2 else None
+        padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
         optimizer.zero_grad()
 
-        predictions = model(data, task=info[0]["task"] if info is not None else None)
+        # Mixed precision forward pass
+        predictions = model(data, task=info["task"] if info is not None else None)
 
         if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
+            if padding_mask is not None:
+                padding_mask = padding_mask[:, : predictions.shape[1]]
 
-        loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone())
+        loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone(), padding_mask)
         for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
             writer.add_scalar(
                 f"train_loss_class{i_loss}",
@@ -255,9 +359,10 @@ def train(
                         "loss": round(np.mean(loss_per_batch), 5),
                     }
                 )
-
         loss.backward()
         optimizer.step()
+        scheduler.step()
+    
     return loss_per_batch
 
 
@@ -289,13 +394,16 @@ def validate(
             # (Index, samples, channels), (Index, )
             data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
             info = batch[2] if len(batch) > 2 else None
+            padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
 
-            predictions = model(data, task=info[0]["task"] if info is not None else None)
+            predictions = model(data, task=info["task"] if info is not None else None)
 
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
+                if padding_mask is not None:
+                    padding_mask = padding_mask[:, : predictions.shape[1]]
 
-            loss, _, _ = loss_fn(predictions, labels)
+            loss, _, _ = loss_fn(predictions, labels, padding_mask)
             loss_per_batch.append(loss.item())
 
     return loss_per_batch
@@ -335,12 +443,15 @@ def test(
             for batch_i, batch in enumerate(loader):
                 data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
                 info = batch[2] if len(batch) > 2 else None
-                predictions = model(data, task=info[0]["task"] if info is not None else None)
+                padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
+                predictions = model(data, task=info["task"] if info is not None else None)
                 # Cut off labels if needed
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]
+                    if padding_mask is not None:
+                        padding_mask = padding_mask[:, : predictions.shape[1]]
 
-                loss, loss_raw, _ = loss_fn(predictions, labels)
+                loss, loss_raw, _ = loss_fn(predictions, labels, padding_mask)
                 outputs.append(loss_raw.sum(dim=(1, 2)).to("cpu"))
 
         outputs = torch.cat(outputs)
@@ -378,6 +489,7 @@ class EarlyStopper:
 def kldiv_loss(
     predictions: torch.Tensor,
     labels: torch.Tensor,
+    padding_mask: torch.Tensor = None,
 ):
     """
     Computes the Kullback-Leibler divergence (KLDiv) loss between predictions and labels.
@@ -388,6 +500,8 @@ def kldiv_loss(
         labels (torch.Tensor): The target labels with shape 
             (batch_size, sequence_length, num_classes). The labels should sum up to 1 
             along the last dimension and can include negative values.
+        padding_mask (torch.Tensor, optional): Boolean mask with shape (batch_size, sequence_length)
+            where True indicates valid positions and False indicates padding. If None, no masking is applied.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
@@ -400,8 +514,8 @@ def kldiv_loss(
     Notes:
         - The predictions are softmaxed along the last dimension before computing the 
           KL divergence.
-        - The loss is normalized using the "batchmean" reduction, which divides the 
-          sum of the loss by the batch size.
+        - When padding_mask is provided, loss is only computed on valid (non-padded) positions.
+        - The loss is normalized by the number of valid positions (or batch size if no mask).
     """
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
@@ -409,14 +523,26 @@ def kldiv_loss(
     # Predictions = model logits, non-softmaxed
     # labels = raw labels including negative, sums up to 1 at each time step
     predictions = torch.nn.functional.softmax(predictions, dim=2)
+    predictions = torch.clamp(predictions, min=1e-7, max=1.0)  # Prevent log(0)
 
     forward_kl_loss = torch.nn.functional.kl_div(
         predictions.log(), labels, reduction="none"
     )
 
-    # batchmean normalization
-    forward_kl_loss_norm = forward_kl_loss.sum() / predictions.shape[0]
+    # Apply masking if provided
+    if padding_mask is not None:
+        # Expand mask to match loss dimensions [B, T, C]
+        mask_expanded = padding_mask.unsqueeze(-1).expand_as(forward_kl_loss)
+        # Zero out loss at padded positions
+        forward_kl_loss = forward_kl_loss * mask_expanded.float()
+        # Normalize by number of valid positions
+        num_valid = padding_mask.sum()
+        forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
+    else:
+        # Original batchmean normalization
+        forward_kl_loss_norm = forward_kl_loss.sum() / predictions.shape[0]
 
     loss = forward_kl_loss_norm
 
     return loss, forward_kl_loss, {"kldiv": forward_kl_loss_norm}
+

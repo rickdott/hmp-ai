@@ -22,18 +22,20 @@ class StartJitterTransform(object):
         - Pads data with NaN and labels with 0 to maintain size.
         - Sets the last `offset` elements of the first label column to 1.0.
     """
-    def __init__(self, offset_before, probability=1.0):
+    def __init__(self, offset_before=0, probability=1.0):
         self.offset_before = offset_before
         self.probability = probability
 
     def __call__(self, data_in):
         data = data_in[0]
         labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
 
         if torch.rand((1,)).item() > self.probability:
-            return data, labels
+            return data, labels, context
 
-        offset = torch.randint(self.offset_before, (1,))
+        offset_before = context['start_jitter'] if context and 'start_jitter' in context else self.offset_before
+        offset = torch.randint(offset_before, (1,))
 
         cropped_data = data[offset:, :]
         cropped_labels = labels[offset:, :]
@@ -46,7 +48,7 @@ class StartJitterTransform(object):
         )
         cropped_labels[-offset:, 0] = 1.0
 
-        return cropped_data, cropped_labels
+        return cropped_data, cropped_labels, context
 
 
 class EndJitterTransform(object):
@@ -81,22 +83,64 @@ class EndJitterTransform(object):
         - The labels are updated such that the last modified position is set to 1.0 
           in the first dimension, and the rest are set to 0.
     """
-    def __init__(self, extra_offset, probability=1.0):
+    def __init__(self, extra_offset=0, probability=1.0):
         self.extra_offset = extra_offset
         self.probability = probability
 
     def __call__(self, data_in):
         data = data_in[0]
         labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
 
         if torch.rand((1,)).item() > self.probability:
-            return data, labels
+            return data, labels, context
 
-        offset = torch.randint(self.extra_offset, (1,))
+        extra_offset = context['end_jitter'] if context and 'end_jitter' in context else self.extra_offset
+        offset = torch.randint(extra_offset, (1,))
 
         end_idx = get_masking_index(data, search_value=torch.nan)
         data[end_idx - offset :, :] = torch.nan
         labels[end_idx - offset :, :] = 0
         labels[end_idx - offset :, 0] = 1.0
 
-        return data, labels
+        return data, labels, context
+
+
+class ChannelShuffleTransform(object):
+    """
+    A PyTorch transform that randomly shuffles the channels of the input data 
+    with a specified probability. This is useful for data augmentation in scenarios 
+    where channel order should not affect the model's performance.
+
+    Attributes:
+        probability (float): The probability of applying the channel shuffle. 
+                             Defaults to 1.0.
+
+    Methods:
+        __call__(data):
+            Applies the channel shuffle to the input data.
+
+    Args:
+        data (torch.Tensor): The input data tensor of shape (T, C), where T is 
+                             the number of time steps and C is the number of channels.
+
+    Returns:
+        torch.Tensor: The transformed data tensor with channels shuffled, or 
+                      the original data if the transform is not applied.
+    """
+    def __init__(self, probability=1.0):
+        self.probability = probability
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
+        
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels, context
+
+        n_channels = data.shape[1]
+        perm = torch.randperm(n_channels)
+        shuffled_data = data[:, perm]
+
+        return shuffled_data, labels, context
