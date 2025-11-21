@@ -141,6 +141,8 @@ class ChannelShuffleTransform(object):
 
         n_channels = data.shape[1]
         perm = torch.randperm(n_channels)
+        if context is not None:
+            context['perm'] = perm
         shuffled_data = data[:, perm]
 
         return shuffled_data, labels, context

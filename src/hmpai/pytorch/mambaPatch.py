@@ -67,28 +67,10 @@ def build_mamba_patch(config):
                 )
             self.spatial_feature_dim = config.get("spatial_feature_dim")
             self.patch_size = config.get("spatial_patch_size", 50)
-            self.spatial_layer = SpatialFeatureExtractor(embed_dim=self.spatial_feature_dim, patch_size=self.patch_size)
+            self.feature_extractor = FeatureExtractor(embed_dim=self.spatial_feature_dim, patch_size=self.patch_size, use_pos_enc=self.use_pos_enc)
 
             self.temporal_dropout = nn.Dropout1d(p=0.2)
             self.activation = nn.SiLU()
-
-            # Convolutional layers
-            if config.get("use_conv", False):
-                if "conv_kernel_sizes" not in config:
-                    raise ValueError(
-                        "If 'use_conv' is True, 'conv_kernel_sizes' must be provided"
-                    )
-                self.conv_kernel_sizes = config.get("conv_kernel_sizes")
-                if "conv_in_channels" not in config:
-                    raise ValueError(
-                        "If 'use_conv' is True, 'conv_in_channels' must be provided"
-                    )
-                self.conv_in_channels = config.get("conv_in_channels")
-                if "conv_out_channels" not in config:
-                    raise ValueError(
-                        "If 'use_conv' is True, 'conv_out_channels' must be provided"
-                    )
-                self.conv_out_channels = config.get("conv_out_channels")
 
             self.mamba_dim = self.__calculate_mamba_dim__()
             if config.get("use_lstm", False):
@@ -99,9 +81,7 @@ def build_mamba_patch(config):
                 # Alternating forward and backward Mamba layers
                 layers = []
                 for i in range(n_mamba_layers):
-                    # Alternate between forward (even indices) and backward (odd indices)
-                    is_backward = (i % 2 == 1)
-                    layers.append(MambaBlock(self.mamba_dim, backward=is_backward))
+                    layers.append(MambaBlock(self.mamba_dim))
                 self.seq_model = nn.Sequential(*layers)
             self.normalization = nn.LayerNorm(self.mamba_dim)
             self.linear_out = nn.Linear(self.mamba_dim, n_classes)
@@ -109,32 +89,31 @@ def build_mamba_patch(config):
             self.classification_prep = ClassificationPrep(
                 self.mamba_dim, 
                 self.patch_size, 
-                n_classes
+                n_classes, 
             )
             
             self.classification_head = nn.ModuleDict({
                 task_name: ClassificationHead(
                     emb_dim=self.mamba_dim,
-                    n_classes=n_classes,
-                    n_channels=self.n_channels,
-                    patch_size=self.patch_size
+                    n_classes=n_classes
                 ) for task_name in TASKS.keys()
             })
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
-            if self.use_pos_enc:
-                mamba_dim += 2
+            # # TODO: Change if pos_enc is embedded into embedding
+            # if self.use_pos_enc:
+            #     mamba_dim += 2
             return mamba_dim
 
-        def forward(self, x, return_embeddings=False, task=None):
+        def forward(self, x, return_embeddings=False, task=None, coords=None):
             max_indices = get_masking_indices(x)
             max_seq_len = max_indices.max()
 
             x = x[:, :max_seq_len, :]
 
             x = x.permute(0, 2, 1)
-            x = self.spatial_layer(x)
+            x = self.feature_extractor(x, coords)
 
             x = self.seq_model(x)
             x = self.normalization(x)
@@ -187,20 +166,13 @@ class MambaBlock(nn.Module):
             Returns:
                 torch.Tensor: The output tensor of the same shape as the input.
     """
-    def __init__(self, embed_dim, backward=False):
+    def __init__(self, embed_dim):
         super().__init__()
         self.mamba = Mamba(d_model=embed_dim, d_state=64, d_conv=4, expand=2)
         self.norm = nn.RMSNorm(embed_dim)
-        self.backward = backward
 
     def forward(self, x):
-        if self.backward:
-            # Process sequence in reverse order
-            x = torch.flip(x, [1])
-            x = self.mamba(self.norm(x)) + x
-            x = torch.flip(x, [1])
-        else:
-            x = self.mamba(self.norm(x)) + x
+        x = self.mamba(self.norm(x)) + x
         return x
 
 
@@ -235,37 +207,43 @@ class LSTMBlock(nn.Module):
         x = self.lstm(self.norm(x))[0] + x
         return x
 
-class SpatialFeatureExtractor(nn.Module):
-    def __init__(self, embed_dim, patch_size=13):
+class FeatureExtractor(nn.Module):
+    def __init__(self, embed_dim, patch_size=13, use_pos_enc=False):
         super().__init__()
         self.embed_dim = embed_dim
         self.patch_size = patch_size
+        self.use_pos_enc = use_pos_enc
         self.norm = nn.LayerNorm(embed_dim)
 
         self.time_module = TimeModule(embed_dim, groups=8, patch_size=patch_size)
         self.spectral_module = SpectralModule(embed_dim, patch_size=patch_size)
-        self.positional_module = PositionalModule(embed_dim, patch_size=patch_size)
+        self.positional_module = ConditionalPositionalEncoding(embed_dim, patch_size=patch_size)
+        self.spatial_module = CoordinatePositionalEncoding(embed_dim)
+        if self.use_pos_enc:
+            self.trial_temporal_module = TrialTemporalEncoding(embed_dim, patch_size=patch_size)
 
-    def forward(self, x):
+    def forward(self, x, coords=None):
         # Split into patches
         # Input (B, C, T)
         x = x.unfold(dimension=-1, size=self.patch_size, step=self.patch_size) # (B, C, T//patch_size, patch_size)
         # Remove PE (last channel)
-        pe = x[:, -1:, :, :]
-        x = x[:, :-1, :, :]
+        if self.use_pos_enc:
+            pe = x[:, -1:, :, :]
+            x = x[:, :-1, :, :]
 
         x_time = self.time_module(x)
         # x_spectral = self.spectral_module(x)
         x_total = x_time #+ x_spectral
 
-        # Conditional Positional Encoding
-        x_pos = self.positional_module(x_total)
+        x_pos = self.spatial_module(coords)
+        x_pos = x_pos.unsqueeze(2)  # (B, C, 1, D)
+        # x_position = self.positional_module(x_total + x_pos)
+        if self.use_pos_enc:
+            x_trial = self.trial_temporal_module(pe)
+        else:
+            x_trial = 0
 
-        x_total = x_total + x_pos
-        pe = torch.cat([pe.min(dim=-1, keepdims=True).values, pe.max(dim=-1, keepdims=True).values], dim=-1)
-        pe = pe.expand(-1, x_total.shape[1], -1, -1)
-
-        x_total = torch.cat([x_total, pe], dim=-1)
+        x_total = x_total + x_pos + x_trial
 
         B, C, n, D = x_total.shape
         x_total = x_total.reshape(B, C*n, D)
@@ -282,21 +260,16 @@ class TimeModule(nn.Module):
         self.conv = nn.Conv1d(1, embed_dim, kernel_size=patch_size, stride=1, padding=0)
         self.norm = nn.GroupNorm(num_groups=embed_dim // groups, num_channels=embed_dim)
         self.act = nn.GELU()
-        # TODO: Figure out how to add residual connection, this doesnt work
-        self.shortcut = nn.Conv1d(1, embed_dim, kernel_size=1)
 
 
     def forward(self, x):
         # (B, C, T//patch_size, patch_size)
         B, C, n, t = x.shape
         x = x.reshape(B*C*n, 1, t)
-        # res = self.shortcut(x)
 
         x = self.conv(x)
         x = self.norm(x)
         x = self.act(x)
-
-        # x += res
 
         x = x.reshape(B, C, n, -1)
         return x
@@ -309,14 +282,14 @@ class SpectralModule(nn.Module):
     
     def forward(self, x):
         B, C, n, t = x.shape
-        x = x.reshape(B*C*n, t).contiguous()
+        x = x.reshape(B*C*n, t)
         spectral = torch.fft.rfft(x, dim=-1, norm='forward')
-        spectral = torch.abs(spectral).contiguous().view(B, C, n, -1)
+        spectral = torch.abs(spectral).view(B, C, n, -1)
         spectral_emb = self.proj(spectral)
         return spectral_emb
 
 
-class PositionalModule(nn.Module):
+class ConditionalPositionalEncoding(nn.Module):
     def __init__(self, embed_dim, patch_size=13):
         super().__init__()
         self.embed_dim = embed_dim
@@ -335,6 +308,35 @@ class PositionalModule(nn.Module):
         x = x.permute(0, 2, 3, 1)
         # x: B, C, n, D
         return x
+    
+class CoordinatePositionalEncoding(nn.Module):
+    def __init__(self, emb_dim):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(3, emb_dim),
+            nn.GELU(),
+        )
+    
+    def forward(self, coords):
+        # x: (B, C, 3)
+        pe = self.mlp(coords)
+        # pe: (B, C, D)
+        return pe
+
+class TrialTemporalEncoding(nn.Module):
+    def __init__(self, emb_dim, patch_size):
+        super().__init__()
+        self.emb_dim = emb_dim
+        self.patch_size = patch_size
+        self.proj = nn.Sequential(nn.Linear(patch_size, emb_dim), nn.GELU())
+    
+    def forward(self, x):
+        # x: (B, C, n, D)
+        B, C, n, D = x.shape
+        x = x.reshape(B, C*n, D)  # (B, D, C*n)
+        x = self.proj(x)
+        x = x.unsqueeze(1)
+        return x
 
 
 class ClassificationPrep(nn.Module):
@@ -351,55 +353,67 @@ class ClassificationPrep(nn.Module):
             stride=self.patch_size, 
             padding=0
         )
+        
+        # Refinement
         self.refine = nn.Sequential(
-            nn.Conv1d(self.emb_dim, self.emb_dim, kernel_size=3, padding=1),
+            nn.Conv1d(emb_dim, emb_dim, kernel_size=3, padding=1),
             nn.GELU(),
-            nn.Conv1d(self.emb_dim, self.emb_dim, kernel_size=3, padding=1),
-            nn.GELU(),
+            nn.Conv1d(emb_dim, emb_dim, kernel_size=3, padding=1),
         )
 
     def forward(self, x, max_seq_len):
+        # x: (B, L, D) where L = C * n_patches
         B, L, D = x.shape
-        # L = C * n_patches
-        # C = n_channels
         n_patches = max_seq_len // self.patch_size
+        C = L // n_patches
 
-        x = x.view(B, -1, n_patches, D)
-        # Mean over channels
-        x = x.mean(dim=1)
+        x = x.view(B, C, n_patches, D)
 
-        x = x.transpose(1, -1)  # (B, D, C*n_patches)
+        # # Mean over channels
+        # x = x.mean(dim=1)
+
+        x = x.permute(0, 1, 3, 2)
+        x = x.reshape(B * C, D, n_patches)
+
         y = self.head(x)  # (B, D, C*n_patches * patch_size)
         y = self.refine(y)
 
+        T = y.shape[-1]
+        y = y.view(B, C, D, T)
+
         return y
-    
-    def _get_num_groups(self, num_channels):
-        """Find a valid number of groups that divides num_channels"""
-        # Try preferred group sizes in descending order
-        for groups in [32, 16, 8, 4, 2, 1]:
-            if num_channels % groups == 0:
-                return groups
-        return 1  # Fallback to 1 group (equivalent to LayerNorm)
 
 class ClassificationHead(nn.Module):
-    def __init__(self, emb_dim, n_classes, n_channels=63, patch_size=50):
+    def __init__(self, emb_dim, n_classes):
         super().__init__()
-        self.n_channels = n_channels
-        self.patch_size = patch_size
-        
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(emb_dim, emb_dim // 4, kernel_size=(1, 1)),
+            nn.GELU(),
+            nn.Conv2d(emb_dim // 4, 1, kernel_size=(1, 1)),  # (1, 1, C, T)
+        )
         self.classifier = nn.Sequential(
+            nn.Conv1d(emb_dim, emb_dim, 3, padding=1),
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Conv1d(emb_dim, emb_dim // 2, 3, padding=1),
             nn.GELU(),
+            nn.Dropout(0.1),
             nn.Conv1d(emb_dim // 2, n_classes, 1)
         )
     
     def forward(self, x):
-        # x: (D, C*T) where C=n_channels, T=time_steps
-        x = x.unsqueeze(0)  # (1, D, C*T)
-        
-        # Classify each time step
-        y = self.classifier(x)  # (1, n_classes, T)
-        y = y.squeeze(0).transpose(1, 0)  # (T, n_classes)
+        C, D, T = x.shape
 
+        x = x.unsqueeze(0).permute(0, 2, 1, 3)
+
+        weights = self.spatial_attention(x)
+        weights = torch.softmax(weights, dim=2)
+
+        x = (x*weights).sum(dim=2)
+        y = self.classifier(x)
+        y = y.squeeze(0).transpose(1, 0)
+        # # x: (D, T) for single sample
+        # x = x.unsqueeze(0)  # (1, D, T)
+        # y = self.classifier(x)  # (1, n_classes, T)
+        # y = y.squeeze(0).transpose(1, 0)  # (T, n_classes)
         return y

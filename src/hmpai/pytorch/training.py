@@ -1,5 +1,4 @@
 from torch.utils.data import DataLoader, Dataset
-from torch.cuda.amp import autocast, GradScaler
 from tqdm.notebook import tqdm
 from hmpai.utilities import MASKING_VALUE
 from hmpai.pytorch.utilities import (
@@ -132,16 +131,9 @@ def train_and_test(
     """
     set_global_seed(seed)
     torch.cuda.empty_cache()
-    # Create loaders with optimizations
+    # Create loaders
     train_loader = DataLoader(
-        train_set, 
-        batch_size, 
-        shuffle=True, 
-        num_workers=workers, 
-        pin_memory=True, 
-        collate_fn=mixed_collate,
-        persistent_workers=True if workers > 0 else False,
-        prefetch_factor=8 if workers > 0 else None,
+        train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True, collate_fn=mixed_collate
     )
     # Do not shuffle test loader since testing should be the same always
     test_loaders = []
@@ -155,8 +147,6 @@ def train_and_test(
                     num_workers=workers,
                     pin_memory=True,
                     collate_fn=mixed_collate,
-                    # persistent_workers=True if workers > 0 else False,
-                    # prefetch_factor=2 if workers > 0 else None,
                 )
             )
     elif isinstance(test_set, Dataset):
@@ -169,8 +159,6 @@ def train_and_test(
                 num_workers=workers,
                 pin_memory=True,
                 collate_fn=mixed_collate,
-                # persistent_workers=True if workers > 0 else False,
-                # prefetch_factor=2 if workers > 0 else None,
             )
         )
 
@@ -182,12 +170,10 @@ def train_and_test(
                     DataLoader(
                         val,
                         batch_size,
-                        shuffle=False,
+                        shuffle=True,
                         num_workers=workers,
                         pin_memory=True,
                         collate_fn=mixed_collate,
-                        # persistent_workers=True if workers > 0 else False,
-                        # prefetch_factor=2 if workers > 0 else None,
                     )
                 )
         elif isinstance(val_set, Dataset):
@@ -195,12 +181,10 @@ def train_and_test(
                 DataLoader(
                     val_set,
                     batch_size,
-                    shuffle=False,
+                    shuffle=True,
                     num_workers=workers,
                     pin_memory=True,
                     collate_fn=mixed_collate,
-                    # persistent_workers=True if workers > 0 else False,
-                    # prefetch_factor=2 if workers > 0 else None,
                 )
             )
     # Set up logging
@@ -248,6 +232,7 @@ def train_and_test(
 
             # Validate model and communicate results
             val_loss_list = []
+            val_acc_list = []
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 val_losses = validate(model, val_loader, loss)
@@ -324,7 +309,6 @@ def train(
     model.train()
 
     loss_per_batch = []
-    
     for i, batch in enumerate(train_loader):
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
@@ -332,8 +316,7 @@ def train(
         padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
         optimizer.zero_grad()
 
-        # Mixed precision forward pass
-        predictions = model(data, task=info["task"] if info is not None else None)
+        predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
 
         if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
@@ -359,10 +342,10 @@ def train(
                         "loss": round(np.mean(loss_per_batch), 5),
                     }
                 )
+
         loss.backward()
         optimizer.step()
         scheduler.step()
-    
     return loss_per_batch
 
 
@@ -396,7 +379,7 @@ def validate(
             info = batch[2] if len(batch) > 2 else None
             padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
 
-            predictions = model(data, task=info["task"] if info is not None else None)
+            predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
 
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
@@ -444,7 +427,7 @@ def test(
                 data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
                 info = batch[2] if len(batch) > 2 else None
                 padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
-                predictions = model(data, task=info["task"] if info is not None else None)
+                predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
                 # Cut off labels if needed
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]
@@ -523,8 +506,7 @@ def kldiv_loss(
     # Predictions = model logits, non-softmaxed
     # labels = raw labels including negative, sums up to 1 at each time step
     predictions = torch.nn.functional.softmax(predictions, dim=2)
-    predictions = torch.clamp(predictions, min=1e-7, max=1.0)  # Prevent log(0)
-
+    predictions = torch.clamp(predictions, 1e-8, 1.0)
     forward_kl_loss = torch.nn.functional.kl_div(
         predictions.log(), labels, reduction="none"
     )
