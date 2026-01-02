@@ -316,7 +316,10 @@ def train(
         padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
         optimizer.zero_grad()
 
-        predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
+        if 'coords' in info:
+            predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
+        else:
+            predictions = model(data, task=info["task"] if info is not None else None)
 
         if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
             labels = labels[:, : predictions.shape[1]]
@@ -379,7 +382,10 @@ def validate(
             info = batch[2] if len(batch) > 2 else None
             padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
 
-            predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
+            if 'coords' in info:
+                predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
+            else:
+                predictions = model(data, task=info["task"] if info is not None else None)
 
             if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                 labels = labels[:, : predictions.shape[1]]
@@ -427,7 +433,10 @@ def test(
                 data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
                 info = batch[2] if len(batch) > 2 else None
                 padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
-                predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE) if info is not None else None)
+                if 'coords' in info:
+                    predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
+                else:
+                    predictions = model(data, task=info["task"] if info is not None else None)
                 # Cut off labels if needed
                 if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
                     labels = labels[:, : predictions.shape[1]]

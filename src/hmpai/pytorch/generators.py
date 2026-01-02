@@ -166,9 +166,10 @@ class MultiXArrayProbaDataset(Dataset):
             probas = ds["probabilities"].values
             # Select subset of data to check valid indices
             data = data[..., 0, :]
-            mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(
-                axis=-1
-            )
+            # mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(
+            #     axis=-1
+            # )
+            mask = ~np.isnan(data).all(axis=-1)
             if self.subset_cond is not None:
                 col, op, val = self.subset_cond
 
@@ -299,7 +300,7 @@ class MultiXArrayProbaDataset(Dataset):
         if self.subset_channels is not None:
             sample = sample.sel(channel=self.subset_channels)
         # TEMPORARY, TODO: REMOVE
-        sample = sample.isel(channel=slice(0, 63))
+        # sample = sample.isel(channel=slice(0, 63))
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
@@ -321,9 +322,8 @@ class MultiXArrayProbaDataset(Dataset):
             )
             for old_idx, new_idx in enumerate(ds_label_indices):
                 # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
-                new_labels[new_idx] = sample_label[old_idx + 1]
+                new_labels[new_idx] = sample_label[old_idx]
             sample_label = new_labels
-
         if self.add_negative:
             sample_label[0, :] = 1 - sample_label.sum(axis=0)
         sample_label = sample_label.transpose(1, 0)
@@ -356,7 +356,10 @@ class MultiXArrayProbaDataset(Dataset):
         # Add positional encoding
         if self.add_pe:
             # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
-            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1)
+            if 'rt' in sample:
+                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
+                start = sample.attrs.get("offset_before", 0) - self.skip_samples
+            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
 
         if self.keep_info:
             sample_info = {}

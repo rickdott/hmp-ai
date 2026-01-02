@@ -21,6 +21,8 @@ TASKS = {
     "rdk/s1": 3,
     "rdk/s2": 4,
     "pdm2": 5,
+    "stopsignal/go": 6,
+    "stopsignal/stopcode": 7,
 }
 
 
@@ -70,7 +72,7 @@ def save_tensor(tensor: torch.Tensor, filename: str) -> None:
     df_tensor = pd.DataFrame(np_tensor)
     df_tensor.to_csv(filename, index=False)
 
-def add_relative_positional_encoding(data, lbl_start = 1, lbl_len = 3):
+def add_relative_positional_encoding(data, lbl_start = 1, lbl_len = 3, start=None, end=None):
     """
     Adds a relative positional encoding feature to the input data.
 
@@ -97,7 +99,8 @@ def add_relative_positional_encoding(data, lbl_start = 1, lbl_len = 3):
     """
     # Data is tuple (data, labels)
     data, probabilities = data
-    start, end = get_trial_start_end(probabilities, lbl_start, lbl_len)
+    if start is None or end is None:
+        start, end = get_trial_start_end(probabilities, lbl_start, lbl_len)
     
     length = data.shape[0]
 
