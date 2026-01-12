@@ -165,3 +165,12 @@ def format_stats_latex(model):
         print(
             f"($\\beta = {row['Estimate']:.2f}$, $SE = {row['SE']:.2f}$, $z = {row['Z-stat']:.2f}$, $p {get_p(row['P-val'])}$, $OR = {row['OR']:.2f}$, $95\\%\\,CI\\,[{row['OR_2.5_ci']:.2f}, {row['OR_97.5_ci']:.2f}]$)"
         )
+
+
+def adjust_offset(epoch_data: xr.Dataset, hmp_offset: float) -> xr.Dataset:
+    sfreq = epoch_data.sfreq
+    tmp_offset = epoch_data.offset
+    hmp_offset = int(np.rint(hmp_offset * sfreq)) # 0.05 = 50 ms worth of samples for HMP after response, remainder is not used in HMP
+    epoch_data = epoch_data.assign_attrs({'offset': hmp_offset, 'extra_offset': tmp_offset - hmp_offset})
+
+    return epoch_data
