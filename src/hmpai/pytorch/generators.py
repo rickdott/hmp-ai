@@ -215,8 +215,8 @@ class MultiXArrayProbaDataset(Dataset):
         for file_idx, file_path in enumerate(self.data_paths):
             ds = self._get_dataset(file_path)
             dataset_info[file_idx] = {
-                "offset_before": ds.attrs.get("offset_before", 0),
-                "extra_offset": ds.attrs.get("extra_offset", 0)
+                "offset_start": ds.attrs.get("offset_before", ds.attrs.get("offset_before_start", 0)),
+                "extra_offset_end": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_after_end", 0)),
             }
         return dataset_info
 
@@ -300,7 +300,7 @@ class MultiXArrayProbaDataset(Dataset):
         if self.subset_channels is not None:
             sample = sample.sel(channel=self.subset_channels)
         # TEMPORARY, TODO: REMOVE
-        # sample = sample.isel(channel=slice(0, 63))
+        sample = sample.isel(channel=slice(0, 63))
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
@@ -343,8 +343,8 @@ class MultiXArrayProbaDataset(Dataset):
         context = None
         if self.transform is not None:
             context = {
-                "start_jitter": ds.attrs.get("offset_before", 0),
-                "end_jitter": ds.attrs.get("extra_offset", 0),
+                "start_jitter": ds.attrs.get("offset_before", ds.attrs.get("offset_before_start", 0)),
+                "end_jitter": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_after_end", 0)),
             }
             sample_data, sample_label, context = self.transform((sample_data, sample_label, context))
 
@@ -357,10 +357,12 @@ class MultiXArrayProbaDataset(Dataset):
         if self.add_pe:
             # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
             if 'rt' in sample:
-                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
-                start = sample.attrs.get("offset_before", 0) - self.skip_samples
+                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", sample.attrs.get("offset_before_start", 0)) - self.skip_samples
+                start = sample.attrs.get("offset_before", sample.attrs.get("offset_before_start", 0)) - self.skip_samples
+            elif 'RT' in sample:
+                end = int(sample['RT'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", sample.attrs.get("offset_before_start", 0)) - self.skip_samples
+                start = sample.attrs.get("offset_before", sample.attrs.get("offset_before_start", 0)) - self.skip_samples
             sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
-
         if self.keep_info:
             sample_info = {}
             for key in self.info_to_keep:

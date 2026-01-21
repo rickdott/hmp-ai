@@ -169,8 +169,23 @@ def format_stats_latex(model):
 
 def adjust_offset(epoch_data: xr.Dataset, hmp_offset: float) -> xr.Dataset:
     sfreq = epoch_data.sfreq
-    tmp_offset = epoch_data.offset
+    if 'offset' in epoch_data.attrs:
+        offset_name = 'offset'
+    else:
+        offset_name = 'offset_end'
+    tmp_offset = epoch_data.attrs[offset_name]
     hmp_offset = int(np.rint(hmp_offset * sfreq)) # 0.05 = 50 ms worth of samples for HMP after response, remainder is not used in HMP
-    epoch_data = epoch_data.assign_attrs({'offset': hmp_offset, 'extra_offset': tmp_offset - hmp_offset})
+    epoch_data = epoch_data.assign_attrs({offset_name: hmp_offset, f'extra_{offset_name}': tmp_offset - hmp_offset})
 
     return epoch_data
+
+def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
+    split = xr.DataArray(np.full(ds.sizes["participant"], "unknown", dtype=object),
+                         dims=["participant"],
+                         coords={"participant": ds["participant"]})
+    split.loc[splits[0]] = "train"
+    split.loc[splits[1]] = "val"
+    split.loc[splits[2]] = "test"
+
+    ds = ds.assign_coords(split=split)
+    return ds

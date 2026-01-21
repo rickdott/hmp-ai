@@ -23,6 +23,9 @@ TASKS = {
     "pdm2": 5,
     "stopsignal/go": 6,
     "stopsignal/stopcode": 7,
+    "conf1": 8,
+    "conf2": 9,
+    "conf3_exp1": 10,
 }
 
 
