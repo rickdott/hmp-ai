@@ -26,6 +26,8 @@ TASKS = {
     "conf1": 8,
     "conf2": 9,
     "conf3_exp1": 10,
+    "conf3_exp2": 11,
+    "conf3_exp3": 12,
 }
 
 

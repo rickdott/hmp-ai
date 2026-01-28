@@ -179,6 +179,7 @@ def adjust_offset(epoch_data: xr.Dataset, hmp_offset: float) -> xr.Dataset:
 
     return epoch_data
 
+
 def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
     split = xr.DataArray(np.full(ds.sizes["participant"], "unknown", dtype=object),
                          dims=["participant"],
@@ -189,3 +190,11 @@ def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
 
     ds = ds.assign_coords(split=split)
     return ds
+
+
+def get_splits_from_dataset(ds: xr.Dataset) -> list[np.ndarray]:
+    train_split = ds.participant.where(ds.split == 'train', drop=True).values
+    val_split = ds.participant.where(ds.split == 'val', drop=True).values
+    test_split = ds.participant.where(ds.split == 'test', drop=True).values
+
+    return [train_split, val_split, test_split]
