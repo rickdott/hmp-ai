@@ -122,10 +122,7 @@ def get_folds(
     """
     # Make sure #participants is divisible by k
     n_participants = len(data.participant)
-    if n_participants % k != 0:
-        raise ValueError(
-            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
-        )
+
 
     # Divide data into k folds
     participants = data.participant.values.copy()

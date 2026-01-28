@@ -99,6 +99,7 @@ class StageFinder:
         condition_variable: str = "condition",
         condition_method: str = "equal",
         event_width: int = 50,
+        fit_kwargs: dict = dict(),
     ):
         # Optional if models and estimates were provided, will (re)-fill models & estimates lists
         self.event_properties = hmp.patterns.HalfSine.create_expected(
@@ -110,7 +111,7 @@ class StageFinder:
                 transformed=self.preprocessed.data,
                 pattern=model.pattern.template,
             )
-            _, estimates = model.fit_transform(trial_data)
+            _, estimates = model.fit_transform(trial_data, **fit_kwargs)
             self.models.append(model)
             self.estimates.append((estimates, self.epoched_data_no_offset))
             self.conditions.append("No condition")
@@ -128,7 +129,7 @@ class StageFinder:
                     transformed=preprocessed_subset,
                     pattern=model.pattern.template,
                 )
-                _, estimates = model.fit_transform(trial_data, cpus=4)
+                _, estimates = model.fit_transform(trial_data, **fit_kwargs)
                 self.models.append(model)
                 self.estimates.append((estimates, self.epoched_data_no_offset))
 
@@ -298,19 +299,12 @@ class StageFinder:
         return labels_array
 
     def save_model(self, path):
-        path = path / datetime.now().strftime("%Y%m%d%H%M")
+        # path = path / datetime.now().strftime("%Y%m%d%H%M")
         if not path.exists():
             path.mkdir(parents=True)
+        total_path = path / "hmp_fit.pkl"
+        pickle.dump((self.models, self.estimates), open(total_path, "wb"))
 
-        # Save all models and estimates
-        for i, _ in enumerate(self.models):
-            model_path = path / f"model_{i}.pkl"
-            with open(model_path, "wb") as f:
-                pickle.dump(self.models[i], f)
-        for i, _ in enumerate(self.estimates):
-            estimate_path = path / f"estimates_{i}.pkl"
-            with open(estimate_path, "wb") as f:
-                pickle.dump(self.estimates[i], f)
 
     def visualize_model(self, positions, max_time=None):
         set_seaborn_style()
