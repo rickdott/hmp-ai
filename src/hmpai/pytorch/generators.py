@@ -213,8 +213,8 @@ class MultiXArrayProbaDataset(Dataset):
         self.max_length = 0
         for data_path in data_paths:
             ds = self._get_dataset(data_path)
-            if len(ds.sample) > self.max_length:
-                self.max_length = len(ds.sample)
+            if len(ds.samples) > self.max_length:
+                self.max_length = len(ds.samples)
             ds.close()
 
         self.labels = labels
@@ -383,17 +383,16 @@ class MultiXArrayProbaDataset(Dataset):
         pad_right = 0
         filter = {
             "participant": indices[1],
-            "epoch": indices[2],
+            "epochs": indices[2],
         }
         sample = ds.isel(**filter)
-        if len(sample.sample) < self.max_length:
-            pad_right += self.max_length - len(sample.sample)
-
+        if len(sample.samples) < self.max_length:
+            pad_right += self.max_length - len(sample.samples)
         # Subset channels
         if self.subset_channels is not None:
-            sample = sample.sel(channel=self.subset_channels)
+            sample = sample.sel(channels=self.subset_channels)
         # TEMPORARY, TODO: REMOVE
-        sample = sample.isel(channel=slice(0, 63))
+        # sample = sample.isel(channels=slice(0, 63))
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
@@ -415,7 +414,7 @@ class MultiXArrayProbaDataset(Dataset):
             )
             for old_idx, new_idx in enumerate(ds_label_indices):
                 # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
-                new_labels[new_idx] = sample_label[old_idx + 1]
+                new_labels[new_idx] = sample_label[old_idx]
             sample_label = new_labels
         if self.add_negative:
             sample_label[0, :] = 1 - sample_label.sum(axis=0)
@@ -450,7 +449,11 @@ class MultiXArrayProbaDataset(Dataset):
         if self.add_pe:
             # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
             rt_key = self.rt_key if self.rt_key is not None else 'rt' if 'rt' in sample else 'RT' if 'RT' in sample else None
-            end = int(sample[rt_key].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0)) - self.skip_samples
+            rt = sample[rt_key].item()
+            if rt > 5:
+                # Is in ms, convert to s
+                rt = rt / 1000
+            end = int(rt * sample.sfreq.item()) + sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0)) - self.skip_samples
             start = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0)) - self.skip_samples
 
             sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
@@ -488,7 +491,7 @@ class MultiXArrayProbaDataset(Dataset):
         pad_right = 0
         filter = {
             "participant": indices[1],
-            "epoch": indices[2],
+            "epochs": indices[2],
         }
         sample = ds.isel(**filter)
         sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)

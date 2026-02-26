@@ -50,18 +50,18 @@ def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     # Check if search_value is NaN
     if isinstance(search_value, float) and np.isnan(search_value):
         mask = np.isnan(
-            data.isel(channel=0)
+            data.isel(channels=0)
         )  # Select the first channel and apply NaN mask
     else:
         mask = (
-            data.isel(channel=0) == search_value
+            data.isel(channels=0) == search_value
         )  # Comparison for non-NaN search values
 
     # Reverse mask along the time dimension
-    reversed_mask = mask.isel(sample=slice(None, None, -1))
+    reversed_mask = mask.isel(samples=slice(None, None, -1))
 
     # Find the first occurrence of non-mask values in the reversed mask
-    last_block_start = (~reversed_mask).argmax(dim="sample")
+    last_block_start = (~reversed_mask).argmax(dim="samples")
 
     # Calculate the max indices based on the mask shape and block start positions
     max_indices = (
@@ -110,23 +110,56 @@ def set_seaborn_style():
     #         ]
     #     )
     # )
+
+    # sns.set_palette(
+    #     sns.color_palette(
+    #         palette=[
+    #             # existing six
+    #             "#4477aa",
+    #             "#66ccee",
+    #             "#228833",
+    #             "#ccbb44",
+    #             "#ee6677",
+    #             "#aa3377",
+    #             # extension
+    #             "#44aa99",
+    #             "#aa7744",
+    #             "#ddaa33",
+    #             "#999933",
+    #             "#bb5566",
+    #             "#7777bb",
+    #         ]
+    #     )
+    # )
+    # sns.set_palette(sns.color_palette(
+    #     palette=[
+    #         (235/255, 172/255, 35/255),
+    #         (184/255, 0/255, 88/255),
+    #         (0/255, 140/255, 249/255),
+    #         (0/255, 110/255, 0/255),
+    #         (0/255, 187/255, 173/255),
+    #         (209/255, 99/255, 230/255),
+    #         (178/255, 69/255, 2/255),
+    #         (255/255, 146/255, 135/255),
+    #         (89/255, 84/255, 214/255),
+    #         (0/255, 198/255, 248/255),
+    #         (135/255, 133/255, 0/255),
+    #         (0/255, 167/255, 108/255),
+    #         (189/255, 189/255, 189/255),
+    #     ]
+    # ))
+    
     sns.set_palette(
         sns.color_palette(
             palette=[
-                # existing six
-                "#4477aa",
-                "#66ccee",
-                "#228833",
-                "#ccbb44",
-                "#ee6677",
-                "#aa3377",
-                # extension
-                "#44aa99",
-                "#aa7744",
-                "#ddaa33",
-                "#999933",
-                "#bb5566",
-                "#7777bb",
+                "#E69F00",  # Orange
+                "#56B4E9",  # Sky Blue
+                "#009E73",  # Bluish Green
+                "#CC79A7",  # Reddish Purple
+                "#0072B2",  # Blue
+                "#D55E00",  # Vermillion
+                "#F0E442",  # Yellow
+
             ]
         )
     )

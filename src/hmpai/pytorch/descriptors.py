@@ -30,10 +30,23 @@ DESC_PRP2 = {
     "subset_cond": ("condition", "equal", "long")
 }
 
+DESC_SAT1 = {
+    "path": DATA_PATH / "sat1" / "preprocessed_500hz" / "labelled_data_200hz.nc",
+    "label": ["encoding", "decision", "confirmation", "response"],
+    "strategy": ["sat1/speed", "sat1/accuracy"],
+    "info_to_keep": [],
+    # "subset_cond": ("condition", "equal", "long") # No need to subset force == high since we do that when estimating
+}
+# DESC_CONF1 = {
+#     "path": DATA_PATH / "conf1" / "labelled_data_200hz.nc",
+#     "label": ["s1_op1", "s1_op2", "s1_op3", "s1_op4", "s2_op1", "s2_op2", "s2_op3", "s2_op4", "s2_op5"],
+#     "strategy": ["rdk/s1", "rdk/s2"],
+#     "info_to_keep": ["confidence"],
+# }
 DESC_CONF1 = {
     "path": DATA_PATH / "conf1" / "labelled_data_200hz.nc",
-    "label": ["s1_op1", "s1_op2", "s1_op3", "s1_op4", "s2_op1", "s2_op2", "s2_op3", "s2_op4", "s2_op5"],
-    "strategy": ["rdk/s1", "rdk/s2"],
+    "label": ["conf1_op1", "conf1_op2", "conf1_op3", "conf1_op4"],
+    "strategy": "conf1",
     "info_to_keep": ["confidence"],
 }
 

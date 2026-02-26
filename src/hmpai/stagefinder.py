@@ -105,8 +105,21 @@ class StageFinder:
         self.event_properties = hmp.patterns.HalfSine.create_expected(
             sfreq=self.epoched_data.sfreq, width=event_width
         )
+        n_events = None
+        if model_class == hmp.models.EventModel:
+            if "n_events" not in model_kwargs:
+                raise ValueError("Provide n_events in model_kwargs when using EventModel, as a dictionary with conditions as keys if fitting multiple conditions")
+            n_events = model_kwargs.pop("n_events")
+
+
         if len(self.conditions) == 0:
-            model = model_class(self.event_properties, **model_kwargs)
+            if n_events is not None:
+                model_kwargs['n_events'] = n_events
+                model = model_class(self.event_properties, **model_kwargs)
+                model_kwargs.pop('n_events')
+            else:
+                model = model_class(self.event_properties, **model_kwargs)
+
             trial_data = hmp.trialdata.TrialData.from_transformer(
                 transformed=self.preprocessed.data,
                 pattern=model.pattern.template,
@@ -124,11 +137,18 @@ class StageFinder:
                     variable=condition_variable,
                     method=condition_method,
                 )
-                model = model_class(self.event_properties, **model_kwargs)
+                if n_events is not None:
+                    model_kwargs['n_events'] = n_events[condition]
+                    model = model_class(self.event_properties, **model_kwargs)
+                    model_kwargs.pop('n_events')
+                else:
+                    model = model_class(self.event_properties, **model_kwargs)
+
                 trial_data = hmp.trialdata.TrialData.from_transformer(
                     transformed=preprocessed_subset,
                     pattern=model.pattern.template,
                 )
+                
                 _, estimates = model.fit_transform(trial_data, **fit_kwargs)
                 self.models.append(model)
                 self.estimates.append((estimates, self.epoched_data_no_offset))
@@ -308,11 +328,16 @@ class StageFinder:
 
     def visualize_model(self, positions, max_time=None):
         set_seaborn_style()
+        if max_time is None:
+            raise ValueError("max_time must be provided for visualization, otherwise x-axes will not be the same")
         fig, ax = plt.subplots(
             len(self.estimates), 1, figsize=(10, 1.5 * len(self.estimates))
         )
+        axes_list = []
+        
         for i, _ in enumerate(self.estimates):
             cur_ax = ax[i] if len(self.estimates) > 1 else ax
+            axes_list.append(cur_ax)
             hmp.visu.plot_topo_timecourse(
                 self.estimates[i][1], # Data pointer, note that HMP does not use actual RTs from metadata, but the end of the last dist as RT
                 self.estimates[i][0], # Estimates
@@ -322,8 +347,8 @@ class StageFinder:
                 ax=cur_ax,
                 max_time=max_time,
                 # sensors=True,
-                vmin=-7e-6,
-                vmax=7e-6,
+                # vmin=-7e-6,
+                # vmax=7e-6,
             )
             cur_ax.text(
                 0,
@@ -341,6 +366,9 @@ class StageFinder:
                 cur_ax.set_xticklabels([])
             if i == len(self.estimates) - 1:
                 cur_ax.set_xlabel("Time (in ms)")
+        max_xlim = max(ax_.get_xlim()[1] for ax_ in axes_list)
+        for ax_ in axes_list:
+            ax_.set_xlim(right=max_xlim)
         return fig, ax
 
     def estimate(self, data, condition_variable=None, condition_method=None):
