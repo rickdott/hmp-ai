@@ -7,7 +7,7 @@ DATA_PATH = Path(os.getenv("DATA_PATH"))
 DESC_STOP1 = {
     "path": DATA_PATH / "stopsignal" / "labelled_data_200hz.nc",
     "label": ["go1", "go2", "go3", "go4"],
-    "strategy": "stop1",
+    "strategy": "stopsignal/go",
     "info_to_keep": [], 
     "subset_cond": ('grouped_rt', 'equal', ['go/success/low', 'go/success/high'])
 }
@@ -15,25 +15,25 @@ DESC_STOP1 = {
 DESC_PRP1 = {
     "path": DATA_PATH / "prp" / "labelled_data_200hz_t1.nc",
     "label": ["t1_1", "t1_2", "t1_3", "t1_4"],
-    "strategy": "prp/t1",
+    "strategy": "prp1/t1",
     "info_to_keep": [],
-    "share_participants_with": "prp/t2",
+    "share_participants_with": "prp1/t2",
     "subset_cond": ("condition", "equal", "long")
 }
 
 DESC_PRP2 = {
     "path": DATA_PATH / "prp" / "labelled_data_200hz_t2.nc",
     "label": ["t2_1", "t2_2", "t2_3"],
-    "strategy": "prp/t2",
+    "strategy": "prp1/t2",
     "info_to_keep": [],
-    "share_participants_with": "prp/t1",
+    "share_participants_with": "prp1/t1",
     "subset_cond": ("condition", "equal", "long")
 }
 
 DESC_SAT1 = {
     "path": DATA_PATH / "sat1" / "preprocessed_500hz" / "labelled_data_200hz.nc",
     "label": ["encoding", "decision", "confirmation", "response"],
-    "strategy": ["sat1/speed", "sat1/accuracy"],
+    "strategy": "sat1",
     "info_to_keep": [],
     # "subset_cond": ("condition", "equal", "long") # No need to subset force == high since we do that when estimating
 }

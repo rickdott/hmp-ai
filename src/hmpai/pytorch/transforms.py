@@ -35,6 +35,8 @@ class StartJitterTransform(object):
             return data, labels, context
 
         offset_before = context['start_jitter'] if context and 'start_jitter' in context else self.offset_before
+        if offset_before < 0:
+            offset_before = -offset_before
         offset = torch.randint(offset_before, (1,))
 
         cropped_data = data[offset:, :]

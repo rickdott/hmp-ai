@@ -14,22 +14,6 @@ DEVICE = (
     else "cpu"
 )
 
-TASKS = {
-    "prp2/t1": 0,
-    "prp2/t2": 1,
-    "sat1": 2,
-    # "rdk/s1": 3,
-    # "rdk/s2": 4,
-    # "pdm2": 5,
-    # "stopsignal/go": 6,
-    # "stopsignal/stopcode": 7,
-    # "conf1": 8,
-    # "conf2": 9,
-    # "conf3_exp1": 10,
-    # "conf3_exp2": 11,
-    # "conf3_exp3": 12,
-}
-
 
 def get_summary_str(model: torch.nn.Module, input_shape: tuple[int, ...]) -> str:
     # Converts model summary to string, to log to Tensorboard

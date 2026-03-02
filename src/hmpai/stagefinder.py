@@ -250,7 +250,7 @@ class StageFinder:
         )  # Shape: (participant, epoch, event)
 
         # Pre-compute padding parameters
-        offset_start = np.rint(self.preprocessing_kwargs.get("offset_start", 0) * data.attrs['sfreq']).astype(int)
+        offset_start = np.rint(-self.preprocessing_kwargs.get("offset_start", 0) * data.attrs['sfreq']).astype(int)
 
         # Maybe this has to be reintroduced later? Dont know if there was a reason for it
         # Seems like right-padding to target_length already handles this

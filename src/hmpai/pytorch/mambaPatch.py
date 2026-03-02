@@ -1,8 +1,7 @@
-from hmpai.pytorch.utilities import TASKS
 import torch
 from torch import nn
 from mamba_ssm import Mamba
-from hmpai.utilities import get_masking_indices
+from hmpai.utilities import get_masking_indices, MASKING_VALUE
 import numpy as np
 
 
@@ -14,7 +13,6 @@ def build_mamba_patch(config):
 
     Parameters:
         config (dict): A dictionary containing the configuration for the model. The following keys are expected:
-            - n_channels (int): Number of input channels. (Required)
             - n_mamba_layers (int): Number of Mamba or LSTM layers. (Required)
             - n_classes (int): Number of output classes. (Required)
             - use_pos_enc (bool, optional): Whether to use positional encoding. Defaults to False.
@@ -46,17 +44,12 @@ def build_mamba_patch(config):
             super().__init__()
             self.config = config
 
-            if "n_channels" not in config:
-                raise ValueError("Config must contain 'n_channels' key")
-            self.n_channels = config.get("n_channels")
-
+            if "task_class_counts" not in config:
+                raise ValueError("Config must contain 'task_class_counts' key")
+            self.task_class_counts = config.get("task_class_counts")
             if "n_mamba_layers" not in config:
                 raise ValueError("Config must contain 'n_mamba_layers' key")
             n_mamba_layers = config.get("n_mamba_layers")
-
-            if "n_classes" not in config:
-                raise ValueError("Config must contain 'n_classes' key")
-            n_classes = config.get("n_classes")
 
             self.use_pos_enc = config.get("use_pos_enc", False)
 
@@ -78,26 +71,19 @@ def build_mamba_patch(config):
                     *[LSTMBlock(self.mamba_dim) for _ in range(n_mamba_layers)]
                 )
             else:
-                # Alternating forward and backward Mamba layers
                 layers = []
-                for i in range(n_mamba_layers):
+                for _ in range(n_mamba_layers):
                     layers.append(MambaBlock(self.mamba_dim))
                 self.seq_model = nn.Sequential(*layers)
             self.normalization = nn.LayerNorm(self.mamba_dim)
-            self.linear_out = nn.Linear(self.mamba_dim, n_classes)
+            self.linear_out = nn.Linear(self.mamba_dim, sum(self.task_class_counts.values()))
             
             self.classification_prep = ClassificationPrep(
                 self.mamba_dim, 
-                self.patch_size, 
-                n_classes, 
+                self.patch_size
             )
             
-            self.classification_head = nn.ModuleDict({
-                task_name: ClassificationHead(
-                    emb_dim=self.mamba_dim,
-                    n_classes=n_classes
-                ) for task_name in TASKS.keys()
-            })
+            self.classification_head = nn.ModuleDict({})
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
@@ -124,9 +110,35 @@ def build_mamba_patch(config):
             if task is None:
                 x = self.linear_out(x)
             else:
-                x = torch.stack([
-                    self.classification_head[t](x[i, :, :]) for i, t in enumerate(task)
-                ])
+                unique_tasks = set(task)
+                for t in unique_tasks:
+                    if t not in self.classification_head:
+                        self.classification_head[t] = ClassificationHead(
+                            emb_dim=self.mamba_dim,
+                            n_classes=self.task_class_counts.get(t, 0)
+                        ).to(x.device)
+                
+                # Compute outputs for each sample
+                outputs = []
+                for i, t in enumerate(task):
+                    out = self.classification_head[t](x[i, :, :])  # (T, n_classes_for_task_t)
+                    outputs.append(out)
+                
+                # Find max number of classes in this batch
+                max_classes = max(out.shape[-1] for out in outputs)
+                
+                # Pad outputs to max_classes
+                padded_outputs = []
+                for out in outputs:
+                    if out.shape[-1] < max_classes:
+                        # Pad with MASKING_VALUE
+                        pad_size = max_classes - out.shape[-1]
+                        out_padded = torch.nn.functional.pad(out, (0, pad_size), value=MASKING_VALUE)
+                        padded_outputs.append(out_padded)
+                    else:
+                        padded_outputs.append(out)
+                
+                x = torch.stack(padded_outputs)
 
             if return_embeddings:
                 return x, emb
@@ -340,11 +352,10 @@ class TrialTemporalEncoding(nn.Module):
 
 
 class ClassificationPrep(nn.Module):
-    def __init__(self, emb_dim, patch_size, n_classes):
+    def __init__(self, emb_dim, patch_size):
         super().__init__()
         self.emb_dim = emb_dim
         self.patch_size = patch_size
-        self.n_classes = n_classes
         # Original single-step approach
         self.head = nn.ConvTranspose1d(
             in_channels=self.emb_dim, 

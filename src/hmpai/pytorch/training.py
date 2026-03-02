@@ -28,7 +28,11 @@ def mixed_collate(batch):
     
     # Find maximum sequence length in the batch
     max_seq_len = max(x.shape[0] for x in xs)
+    max_channels = max(x.shape[1] for x in xs)  # Subtract 1 to account for positional encoding channel
     max_label_len = max(y.shape[0] for y in ys)
+    max_label_width = max(y.shape[1] for y in ys)
+
+    max_coord_channels = max_channels - 1
     
     # Pad sequences to maximum length
     padded_xs = []
@@ -36,14 +40,19 @@ def mixed_collate(batch):
     
     for x, y in zip(xs, ys):
         seq_len = x.shape[0]
+        ch_len = x.shape[1]
         label_len = y.shape[0]
-        
+        label_width = y.shape[1]
         # Pad data tensor
         if seq_len < max_seq_len:
             pad_size = max_seq_len - seq_len
             x_padded = torch.nn.functional.pad(x, (0, 0, 0, pad_size), value=MASKING_VALUE)
         else:
             x_padded = x
+        if ch_len < max_channels:
+            ch_pad_size = max_channels - ch_len
+            # Front pad so that pos enc stays last index
+            x_padded = torch.nn.functional.pad(x_padded, (ch_pad_size, 0, 0, 0), value=MASKING_VALUE)
         padded_xs.append(x_padded)
         
         # Pad label tensor
@@ -52,6 +61,9 @@ def mixed_collate(batch):
             y_padded = torch.nn.functional.pad(y, (0, 0, 0, pad_size), value=0.0)
         else:
             y_padded = y
+        if label_width < max_label_width:
+            width_pad_size = max_label_width - label_width
+            y_padded = torch.nn.functional.pad(y_padded, (0, width_pad_size, 0, 0), value=MASKING_VALUE)
         padded_ys.append(y_padded)
     
     # Stack padded tensors
@@ -73,6 +85,10 @@ def mixed_collate(batch):
 
             # If the value is a tensor (e.g., epoch, cluster, channel positions), stack them
             if isinstance(value, torch.Tensor):
+                if key == 'coords':
+                    if value.shape[0] < max_coord_channels:
+                        value = torch.nn.functional.pad(value, (0, 0, max_coord_channels - value.shape[0], 0), value=MASKING_VALUE) 
+
                 combined_meta[key].append(value)
             else:
                 # Otherwise, just append the values (lists of strings, like task, participant)
@@ -189,6 +205,7 @@ def train_and_test(
             )
     # Set up logging
     write_log = logs_path is not None
+    writer = None
     if write_log:
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         if additional_name is not None:
@@ -229,21 +246,21 @@ def train_and_test(
                 epoch=epoch,
             )
 
-
             # Validate model and communicate results
             val_loss_list = []
             val_acc_list = []
+            epoch_val_loss = 0
             postfix_dict = {"loss": np.mean(batch_losses)}
             for i, val_loader in enumerate(val_loaders):
                 val_losses = validate(model, val_loader, loss)
 
-                # Only count val_loss for first validation set
-                if i == 0:
-                    val_loss_list.append(val_losses)
+                epoch_val_loss += np.mean(val_losses)
                 postfix_dict[f"val_loss_{i}"] = np.mean(val_losses)
-            tepoch.set_postfix(postfix_dict)
             mean_train_loss = np.mean(batch_losses)
-            mean_val_loss = np.mean(val_loss_list[-1])
+            mean_val_loss = epoch_val_loss / len(val_loaders)
+            postfix_dict["mean_val_loss"] = mean_val_loss
+            tepoch.set_postfix(postfix_dict)
+
 
             # Save model checkpoint if validation loss is the lowest yet
             if mean_val_loss < lowest_mean_val_loss:
@@ -275,7 +292,7 @@ def train_and_test(
 
     # Test model
     if len(test_loaders) > 0:
-        results, _, = test(model, test_loaders, loss)
+        results = test(model, test_loaders, loss)
     else:
         results = None
     return results
@@ -427,7 +444,7 @@ def test(
         # Assume type is DataLoader
         test_loader = [test_loader]
     for i, loader in enumerate(test_loader):
-        outputs = []
+        loss_per_batch = []
         with torch.no_grad():
             for batch_i, batch in enumerate(loader):
                 data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
@@ -443,17 +460,18 @@ def test(
                     if padding_mask is not None:
                         padding_mask = padding_mask[:, : predictions.shape[1]]
 
-                loss, loss_raw, _ = loss_fn(predictions, labels, padding_mask)
-                outputs.append(loss_raw.sum(dim=(1, 2)).to("cpu"))
+                loss, _, _ = loss_fn(predictions, labels, padding_mask)
+                loss_per_batch.append(loss)
 
-        outputs = torch.cat(outputs)
+
+        loss_per_batch = torch.stack(loss_per_batch)
         loader_results = {
-            "test_kldiv_list": outputs.tolist(),
-            "test_kldiv_mean": torch.mean(outputs).item(),
+            "test_kldiv_list": loss_per_batch.tolist(),
+            "test_kldiv_mean": torch.mean(loss_per_batch).item(),
         }
         test_results.append(loader_results)
 
-    return test_results, outputs
+    return test_results
 
 
 # https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
@@ -491,7 +509,8 @@ def kldiv_loss(
             (batch_size, sequence_length, num_classes).
         labels (torch.Tensor): The target labels with shape 
             (batch_size, sequence_length, num_classes). The labels should sum up to 1 
-            along the last dimension and can include negative values.
+            along the last dimension and can include negative values. Positions with
+            MASKING_VALUE are considered invalid/padded classes.
         padding_mask (torch.Tensor, optional): Boolean mask with shape (batch_size, sequence_length)
             where True indicates valid positions and False indicates padding. If None, no masking is applied.
 
@@ -499,7 +518,7 @@ def kldiv_loss(
         Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
             - loss (torch.Tensor): The normalized forward KL divergence loss.
             - forward_kl_loss (torch.Tensor): The element-wise KL divergence loss 
-              before normalization.
+              before normalization (with invalid positions zeroed out).
             - metrics (Dict[str, torch.Tensor]): A dictionary containing the normalized 
               KL divergence loss under the key "kldiv".
 
@@ -507,31 +526,48 @@ def kldiv_loss(
         - The predictions are softmaxed along the last dimension before computing the 
           KL divergence.
         - When padding_mask is provided, loss is only computed on valid (non-padded) positions.
-        - The loss is normalized by the number of valid positions (or batch size if no mask).
+        - Classes with MASKING_VALUE in labels are excluded from loss calculation.
+        - The loss is normalized by the number of valid elements (time + class dimensions).
     """
     predictions = predictions.to(DEVICE)
     labels = labels.to(DEVICE)
 
-    # Predictions = model logits, non-softmaxed
-    # labels = raw labels including negative, sums up to 1 at each time step
-    predictions = torch.nn.functional.softmax(predictions, dim=2)
+    # Create mask for valid classes (not padded with MASKING_VALUE)
+    # Shape: [B, T, C]
+    class_mask = (labels != MASKING_VALUE)
+    
+    predictions_masked = predictions.clone()
+    predictions_masked = torch.where(class_mask, predictions_masked, torch.tensor(float('-inf'), device=predictions.device))
+    
+    # Now softmax only normalizes over valid classes
+    predictions = torch.nn.functional.softmax(predictions_masked, dim=2)
     predictions = torch.clamp(predictions, 1e-8, 1.0)
+    
+    # Replace MASKING_VALUE in labels with 0 to avoid numerical issues in KL div
+    labels_clean = torch.where(class_mask, labels, torch.zeros_like(labels))
+    
     forward_kl_loss = torch.nn.functional.kl_div(
-        predictions.log(), labels, reduction="none"
+        predictions.log(), labels_clean, reduction="none"
     )
 
-    # Apply masking if provided
+    # Apply masking
     if padding_mask is not None:
-        # Expand mask to match loss dimensions [B, T, C]
+        # Combine time-based padding mask with class-based mask
+        # padding_mask: [B, T] -> [B, T, 1]
+        # class_mask: [B, T, C]
         mask_expanded = padding_mask.unsqueeze(-1).expand_as(forward_kl_loss)
-        # Zero out loss at padded positions
-        forward_kl_loss = forward_kl_loss * mask_expanded.float()
+        combined_mask = mask_expanded & class_mask
+        
+        # Zero out loss at invalid positions
+        forward_kl_loss = forward_kl_loss * combined_mask.float()
         # Normalize by number of valid positions
-        num_valid = padding_mask.sum()
+        num_valid = combined_mask.sum()
         forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
     else:
-        # Original batchmean normalization
-        forward_kl_loss_norm = forward_kl_loss.sum() / predictions.shape[0]
+        # Only apply class mask
+        forward_kl_loss = forward_kl_loss * class_mask.float()
+        num_valid = class_mask.sum()
+        forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
 
     loss = forward_kl_loss_norm
 
