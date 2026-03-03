@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader, Dataset
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 from hmpai.utilities import MASKING_VALUE
 from hmpai.pytorch.utilities import (
     DEVICE,
@@ -281,7 +281,7 @@ def train_and_test(
             # Stop training if validation loss has not improved sufficiently
             if stopper.check_stop(mean_val_loss):
                 break
-        print(f"Epoch {epoch}: LR = {scheduler.get_last_lr()[0]:.6f}")
+        # print(f"Epoch {epoch}: LR = {scheduler.get_last_lr()[0]:.6f}")
     # Re-load best performing model
     if write_log:
         best_checkpoint = load_model(path / "checkpoint.pt")
