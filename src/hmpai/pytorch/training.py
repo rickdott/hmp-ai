@@ -147,6 +147,8 @@ def train_and_test(
     """
     set_global_seed(seed)
     torch.cuda.empty_cache()
+    torch.set_float32_matmul_precision("high")
+
     # Create loaders
     train_loader = DataLoader(
         train_set, batch_size, shuffle=True, num_workers=workers, pin_memory=True, collate_fn=mixed_collate
@@ -186,7 +188,7 @@ def train_and_test(
                     DataLoader(
                         val,
                         batch_size,
-                        shuffle=True,
+                        shuffle=False,
                         num_workers=workers,
                         pin_memory=True,
                         collate_fn=mixed_collate,
@@ -197,7 +199,7 @@ def train_and_test(
                 DataLoader(
                     val_set,
                     batch_size,
-                    shuffle=True,
+                    shuffle=False,
                     num_workers=workers,
                     pin_memory=True,
                     collate_fn=mixed_collate,
@@ -225,8 +227,8 @@ def train_and_test(
     loss = kldiv_loss
 
     # opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
-    opt = torch.optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr)
-    scaler = torch.amp.GradScaler('cuda')
+    opt = torch.optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr, fused=True)
+    # scaler = torch.amp.GradScaler('cuda')
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * len(train_loader))
     stopper = EarlyStopper(tolerance=5)
 
@@ -244,7 +246,7 @@ def train_and_test(
                 progress=tepoch,
                 writer=writer,
                 epoch=epoch,
-                scaler=scaler,
+                # scaler=scaler,
             )
 
             # Validate model and communicate results
@@ -326,6 +328,7 @@ def train(
         list[float]: A list of loss values for each batch in the training epoch.
     """
     model.train()
+    amp_dtype = torch.bfloat16
 
     loss_per_batch = []
     for i, batch in enumerate(train_loader):
@@ -334,7 +337,8 @@ def train(
         info = batch[2] if len(batch) > 2 else None
         padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
 
-        with torch.amp.autocast('cuda'):
+        optimizer.zero_grad(set_to_none=True)
+        with torch.amp.autocast('cuda', dtype=amp_dtype):
             if 'coords' in info:
                 predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
             else:
@@ -345,7 +349,7 @@ def train(
                 if padding_mask is not None:
                     padding_mask = padding_mask[:, : predictions.shape[1]]
 
-            loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone(), padding_mask)
+            loss, exp_loss, indiv_loss = loss_fn(predictions, labels, padding_mask)
 
         for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
             writer.add_scalar(
@@ -365,14 +369,13 @@ def train(
                         "loss": round(np.mean(loss_per_batch), 5),
                     }
                 )
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
-        optimizer.zero_grad()
-        # loss.backward()
-        # optimizer.step()
+        # scaler.scale(loss).backward()
+        # scaler.step(optimizer)
+        # scaler.update()
         # scheduler.step()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
     return loss_per_batch
 
 
@@ -536,8 +539,6 @@ def kldiv_loss(
         - Classes with MASKING_VALUE in labels are excluded from loss calculation.
         - The loss is normalized by the number of valid elements (time + class dimensions).
     """
-    predictions = predictions.to(DEVICE)
-    labels = labels.to(DEVICE)
 
     # Create mask for valid classes (not padded with MASKING_VALUE)
     # Shape: [B, T, C]
