@@ -226,6 +226,7 @@ def train_and_test(
 
     # opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
     opt = torch.optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr)
+    scaler = torch.amp.GradScaler('cuda')
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * len(train_loader))
     stopper = EarlyStopper(tolerance=5)
 
@@ -233,7 +234,6 @@ def train_and_test(
     for epoch in range(epochs):
         with tqdm(total=len(train_loader), unit=" batch") as tepoch:
             tepoch.set_description(f"Epoch {epoch + 1}")
-
             # Train on batches in train_loader
             batch_losses = train(
                 model,
@@ -244,6 +244,7 @@ def train_and_test(
                 progress=tepoch,
                 writer=writer,
                 epoch=epoch,
+                scaler=scaler,
             )
 
             # Validate model and communicate results
@@ -307,6 +308,7 @@ def train(
     progress: tqdm = None,
     writer: SummaryWriter = None,
     epoch: int = None,
+    scaler = None,
 ) -> list[float]:
     """
     Trains a PyTorch model for one epoch using the provided data loader, optimizer, and loss function.
@@ -331,19 +333,20 @@ def train(
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
         info = batch[2] if len(batch) > 2 else None
         padding_mask = batch[3].to(DEVICE) if len(batch) > 3 else None
-        optimizer.zero_grad()
 
-        if 'coords' in info:
-            predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
-        else:
-            predictions = model(data, task=info["task"] if info is not None else None)
+        with torch.amp.autocast('cuda'):
+            if 'coords' in info:
+                predictions = model(data, task=info["task"] if info is not None else None, coords=info["coords"].to(DEVICE))
+            else:
+                predictions = model(data, task=info["task"] if info is not None else None)
 
-        if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
-            labels = labels[:, : predictions.shape[1]]
-            if padding_mask is not None:
-                padding_mask = padding_mask[:, : predictions.shape[1]]
+            if labels.dim() > 1 and labels.shape[1] != predictions.shape[1]:
+                labels = labels[:, : predictions.shape[1]]
+                if padding_mask is not None:
+                    padding_mask = padding_mask[:, : predictions.shape[1]]
 
-        loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone(), padding_mask)
+            loss, exp_loss, indiv_loss = loss_fn(predictions.clone(), labels.clone(), padding_mask)
+
         for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
             writer.add_scalar(
                 f"train_loss_class{i_loss}",
@@ -362,10 +365,14 @@ def train(
                         "loss": round(np.mean(loss_per_batch), 5),
                     }
                 )
-
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         scheduler.step()
+        optimizer.zero_grad()
+        # loss.backward()
+        # optimizer.step()
+        # scheduler.step()
     return loss_per_batch
 
 
