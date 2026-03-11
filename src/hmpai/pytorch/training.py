@@ -369,10 +369,6 @@ def train(
                         "loss": round(np.mean(loss_per_batch), 5),
                     }
                 )
-        # scaler.scale(loss).backward()
-        # scaler.step(optimizer)
-        # scaler.update()
-        # scheduler.step()
         loss.backward()
         optimizer.step()
         scheduler.step()

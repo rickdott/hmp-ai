@@ -82,8 +82,11 @@ def build_mamba_patch(config):
                 self.mamba_dim, 
                 self.patch_size
             )
-            
-            self.classification_head = nn.ModuleDict({})
+            self.classification_head = nn.ModuleDict({
+                t: ClassificationHead(emb_dim=self.mamba_dim, n_classes=n)
+                for t, n in self.task_class_counts.items()
+            })
+            # self.classification_head = nn.ModuleDict({})
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
@@ -110,14 +113,6 @@ def build_mamba_patch(config):
             if task is None:
                 x = self.linear_out(x)
             else:
-                unique_tasks = set(task)
-                for t in unique_tasks:
-                    if t not in self.classification_head:
-                        self.classification_head[t] = ClassificationHead(
-                            emb_dim=self.mamba_dim,
-                            n_classes=self.task_class_counts.get(t, 0)
-                        ).to(x.device)
-                
                 # Compute outputs for each sample
                 outputs = []
                 for i, t in enumerate(task):
