@@ -208,13 +208,10 @@ class StageFinder:
     def _label_model(self, estimate, condition, labels, data):
         # Get union of all label subsets to use as main labels
         main_labels = (
-            list(np.unique(np.concatenate(list(labels.values()))))
+            list(dict.fromkeys(label for v in labels.values() for label in v))
             if isinstance(labels, dict)
             else labels
         )
-        if 'negative' in main_labels:
-            main_labels.remove('negative')
-            main_labels.insert(0, 'negative')
         if condition == "No condition":
             condition = None
         else:

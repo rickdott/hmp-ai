@@ -332,6 +332,7 @@ def train(
 
     loss_per_batch = []
     for i, batch in enumerate(train_loader):
+
         # (Index, samples, channels), (Index, )
         data, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
         info = batch[2] if len(batch) > 2 else None
@@ -372,6 +373,7 @@ def train(
         loss.backward()
         optimizer.step()
         scheduler.step()
+
     return loss_per_batch
 
 
@@ -543,15 +545,16 @@ def kldiv_loss(
     predictions_masked = predictions.clone()
     predictions_masked = torch.where(class_mask, predictions_masked, torch.tensor(float('-inf'), device=predictions.device))
     
-    # Now softmax only normalizes over valid classes
-    predictions = torch.nn.functional.softmax(predictions_masked, dim=2)
-    predictions = torch.clamp(predictions, 1e-8, 1.0)
-    
     # Replace MASKING_VALUE in labels with 0 to avoid numerical issues in KL div
     labels_clean = torch.where(class_mask, labels, torch.zeros_like(labels))
-    
+
+    log_predictions = torch.nn.functional.log_softmax(predictions_masked, dim=2)
+
     forward_kl_loss = torch.nn.functional.kl_div(
-        predictions.log(), labels_clean, reduction="none"
+        log_predictions,
+        labels_clean.clamp(min=0.0),  # kill float32 rounding artifacts below zero
+        reduction="none",
+        log_target=False
     )
 
     # Apply masking

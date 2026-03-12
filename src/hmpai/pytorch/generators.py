@@ -403,13 +403,13 @@ class MultiXArrayProbaDataset(Dataset):
             sample = sample.sel(channel=self.subset_channels)
         # TEMPORARY, TODO: REMOVE
         # sample = sample.isel(channels=slice(0, 63))
-        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        sample_data = torch.tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
                 sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
             )
 
-        sample_label = torch.as_tensor(sample.probabilities.values, dtype=torch.float32)
+        sample_label = torch.tensor(sample.probabilities.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_label = torch.nn.functional.pad(
                 sample_label, (pad_left, pad_right), mode="constant", value=0
@@ -511,7 +511,7 @@ class MultiXArrayProbaDataset(Dataset):
             "epoch": indices[2],
         }
         sample = ds.isel(**filter)
-        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        sample_data = torch.tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
                 sample_data,
@@ -520,7 +520,7 @@ class MultiXArrayProbaDataset(Dataset):
                 value=torch.nan,
             )
 
-        sample_label = torch.as_tensor(
+        sample_label = torch.tensor(
             sample.probabilities.values, dtype=torch.float32
         ).transpose(1, 0)
 
