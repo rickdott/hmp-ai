@@ -87,7 +87,7 @@ def mixed_collate(batch):
             if isinstance(value, torch.Tensor):
                 if key == 'coords':
                     if value.shape[0] < max_coord_channels:
-                        value = torch.nn.functional.pad(value, (0, 0, max_coord_channels - value.shape[0], 0), value=MASKING_VALUE) 
+                        value = torch.nn.functional.pad(value, (0, 0, max_coord_channels - value.shape[0], 0), value=0) 
 
                 combined_meta[key].append(value)
             else:
@@ -544,14 +544,14 @@ def kldiv_loss(
     
     predictions_masked = predictions.clone()
     predictions_masked = torch.where(class_mask, predictions_masked, torch.tensor(float('-inf'), device=predictions.device))
+    predictions = torch.nn.functional.softmax(predictions_masked, dim=2)
+    predictions = torch.clamp(predictions, 1e-8, 1.0)
     
     # Replace MASKING_VALUE in labels with 0 to avoid numerical issues in KL div
     labels_clean = torch.where(class_mask, labels, torch.zeros_like(labels))
 
-    log_predictions = torch.nn.functional.log_softmax(predictions_masked, dim=2)
-
     forward_kl_loss = torch.nn.functional.kl_div(
-        log_predictions,
+        predictions.log(),
         labels_clean.clamp(min=0.0),  # kill float32 rounding artifacts below zero
         reduction="none",
         log_target=False

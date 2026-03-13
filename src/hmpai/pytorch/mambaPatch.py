@@ -62,9 +62,6 @@ def build_mamba_patch(config):
             self.patch_size = config.get("spatial_patch_size", 50)
             self.feature_extractor = FeatureExtractor(embed_dim=self.spatial_feature_dim, patch_size=self.patch_size, use_pos_enc=self.use_pos_enc)
 
-            self.temporal_dropout = nn.Dropout1d(p=0.2)
-            self.activation = nn.SiLU()
-
             self.mamba_dim = self.__calculate_mamba_dim__()
             if config.get("use_lstm", False):
                 self.seq_model = nn.Sequential(
@@ -86,7 +83,6 @@ def build_mamba_patch(config):
                 t: ClassificationHead(emb_dim=self.mamba_dim, n_classes=n)
                 for t, n in self.task_class_counts.items()
             })
-            # self.classification_head = nn.ModuleDict({})
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
@@ -102,7 +98,7 @@ def build_mamba_patch(config):
             x = x[:, :max_seq_len, :]
 
             x = x.permute(0, 2, 1)
-            x = self.feature_extractor(x, coords)
+            x, ch_mask = self.feature_extractor(x, coords)
 
             x = self.seq_model(x)
             x = self.normalization(x)
@@ -116,7 +112,7 @@ def build_mamba_patch(config):
                 # Compute outputs for each sample
                 outputs = []
                 for i, t in enumerate(task):
-                    out = self.classification_head[t](x[i, :, :])  # (T, n_classes_for_task_t)
+                    out = self.classification_head[t](x[i, :, :], ch_mask[i])  # (T, n_classes_for_task_t)
                     outputs.append(out)
                 
                 # Find max number of classes in this batch
@@ -224,10 +220,11 @@ class FeatureExtractor(nn.Module):
 
         self.time_module = TimeModule(embed_dim, groups=8, patch_size=patch_size)
         self.spectral_module = SpectralModule(embed_dim, patch_size=patch_size)
-        self.positional_module = ConditionalPositionalEncoding(embed_dim, patch_size=patch_size)
         self.spatial_module = CoordinatePositionalEncoding(embed_dim)
         if self.use_pos_enc:
             self.trial_temporal_module = TrialTemporalEncoding(embed_dim, patch_size=patch_size)
+        self.pad_token = nn.Parameter(torch.zeros(1, 1, 1, self.embed_dim))
+
 
     def forward(self, x, coords=None):
         # Split into patches
@@ -238,13 +235,13 @@ class FeatureExtractor(nn.Module):
             pe = x[:, -1:, :, :]
             x = x[:, :-1, :, :]
 
-        x_time = self.time_module(x)
+        x_time, ch_mask = self.time_module(x)
         # x_spectral = self.spectral_module(x)
         x_total = x_time #+ x_spectral
 
-        x_pos = self.spatial_module(coords)
+        x_pos = self.spatial_module(coords, ch_mask)
         x_pos = x_pos.unsqueeze(2)  # (B, C, 1, D)
-        # x_position = self.positional_module(x_total + x_pos)
+
         if self.use_pos_enc:
             x_trial = self.trial_temporal_module(pe)
         else:
@@ -252,9 +249,12 @@ class FeatureExtractor(nn.Module):
 
         x_total = x_total + x_pos + x_trial
 
+        pad = self.pad_token.expand_as(x_total)
+        x_total = torch.where(ch_mask.unsqueeze(-1), x_total, pad)
         B, C, n, D = x_total.shape
         x_total = x_total.reshape(B, C*n, D)
-        return x_total
+
+        return x_total, ch_mask
 
 
 class TimeModule(nn.Module):
@@ -272,6 +272,8 @@ class TimeModule(nn.Module):
     def forward(self, x):
         # (B, C, T//patch_size, patch_size)
         B, C, n, t = x.shape
+        ch_mask = (x[:, :, 0, 0] != MASKING_VALUE).unsqueeze(-1).unsqueeze(-1).to(x.device)
+        x = x * ch_mask
         x = x.reshape(B*C*n, 1, t)
 
         x = self.conv(x)
@@ -279,7 +281,8 @@ class TimeModule(nn.Module):
         x = self.act(x)
 
         x = x.reshape(B, C, n, -1)
-        return x
+        x = x * ch_mask
+        return x, ch_mask.squeeze(-1)
     
 class SpectralModule(nn.Module):
     def __init__(self, embed_dim, patch_size=13):
@@ -294,28 +297,8 @@ class SpectralModule(nn.Module):
         spectral = torch.abs(spectral).view(B, C, n, -1)
         spectral_emb = self.proj(spectral)
         return spectral_emb
-
-
-class ConditionalPositionalEncoding(nn.Module):
-    def __init__(self, embed_dim, patch_size=13):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        # Conditional Positional Encoding, should encode spatial dimension
-        # (3, 1) = (space, n_patches)
-        # self.proj = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(19, 7), stride=1, padding=(9, 3), bias=True, groups=self.embed_dim)
-        self.proj = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(3, 1), stride=1, padding=(1, 0), bias=True, groups=self.embed_dim)
-
-    def forward(self, x):
-        # x: (B, C, n, D)
-        x = x.permute(0, 3, 1, 2)
-        # x: B, D, C, n
-        # Dont add residual here since this is added to orig vector anyway
-        x = self.proj(x)
-        x = x.permute(0, 2, 3, 1)
-        # x: B, C, n, D
-        return x
     
+
 class CoordinatePositionalEncoding(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
@@ -324,11 +307,13 @@ class CoordinatePositionalEncoding(nn.Module):
             nn.GELU(),
         )
     
-    def forward(self, coords):
+    def forward(self, coords, ch_mask):
         # x: (B, C, 3)
+        coords = coords * ch_mask
         pe = self.mlp(coords)
         # pe: (B, C, D)
         return pe
+
 
 class TrialTemporalEncoding(nn.Module):
     def __init__(self, emb_dim, patch_size):
@@ -389,6 +374,7 @@ class ClassificationPrep(nn.Module):
 
         return y
 
+
 class ClassificationHead(nn.Module):
     def __init__(self, emb_dim, n_classes):
         super().__init__()
@@ -407,12 +393,12 @@ class ClassificationHead(nn.Module):
             nn.Conv1d(emb_dim // 2, n_classes, 1)
         )
     
-    def forward(self, x):
-        C, D, T = x.shape
+    def forward(self, x, ch_mask):
 
         x = x.unsqueeze(0).permute(0, 2, 1, 3)
 
         weights = self.spatial_attention(x)
+        weights = weights.masked_fill(~ch_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
         weights = torch.softmax(weights, dim=2)
 
         x = (x*weights).sum(dim=2)
