@@ -495,6 +495,8 @@ class MultiXArrayProbaDataset(Dataset):
                 ])
                 if context is not None and context.get('perm', None) is not None:
                     mapped_channels = mapped_channels[context['perm']]
+                if context is not None and context.get('dropped_channels', None) is not None:
+                    mapped_channels[context['dropped_channels']] = torch.tensor([0.0, 0.0, 0.0])
                 sample_info["coords"] = mapped_channels
             return sample_data, sample_label, [sample_info]
         return sample_data, sample_label

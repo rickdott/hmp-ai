@@ -169,6 +169,8 @@ class ChannelDropoutTransform(object):
         n_to_mask = random.randint(0, int(n_channels * self.ratio))
         if n_to_mask > 0:
             channels_to_mask = random.sample(range(n_channels), n_to_mask)
+            if context is not None:
+                context['dropped_channels'] = channels_to_mask
             data[:, channels_to_mask] = torch.nan
 
         return data, labels, context
