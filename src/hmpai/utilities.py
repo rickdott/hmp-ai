@@ -41,16 +41,23 @@ def get_masking_indices(t, search_value=MASKING_VALUE):
 
 def get_masking_index(t, search_value=MASKING_VALUE):
     # Expects a single epoch as input: [time, channels]
+    # Exclude the last channel from masking check
+    t_excl_last = t[:, :-1]
+
     if isinstance(search_value, float) and math.isnan(search_value):
-        mask = torch.isnan(t[:, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     elif torch.is_tensor(search_value) and torch.isnan(search_value):
-        mask = torch.isnan(t[:, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     else:
-        mask = t[:, 0] == search_value
-    reversed_mask = torch.flip(mask, dims=[0])
-    last_block_start = (~reversed_mask).float().argmax(dim=0)
-    max_index = mask.shape[0] - last_block_start
-    return max_index
+        mask = (t_excl_last == search_value).all(dim=-1)
+
+    first_mask_index = mask.float().argmax(dim=0)
+
+    # If no masked timestep exists, return the full sequence length instead of 0
+    has_mask = mask.any()
+    first_mask_index = first_mask_index if has_mask else torch.tensor(mask.shape[0], device=t.device)
+
+    return first_mask_index
 
 
 def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
