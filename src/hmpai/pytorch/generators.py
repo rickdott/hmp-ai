@@ -136,9 +136,7 @@ class MultiXArrayProbaDataset(Dataset):
                 probas = ds["probabilities"].values
                 # Select subset of data to check valid indices
                 data = data[..., 0, :]
-                mask = ~np.isnan(data).all(axis=-1) & ~(probas.sum(axis=-1) == 0).all(
-                    axis=-1
-                )
+                mask = ~np.isnan(data).all(axis=-1)
                 if self.subset_cond is not None:
                     col, op, val = self.subset_cond
 
