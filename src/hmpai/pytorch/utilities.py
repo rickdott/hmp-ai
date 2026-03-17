@@ -20,6 +20,9 @@ TASKS = {
     "sat1": 2,
     "rdk/s1": 3,
     "rdk/s2": 4,
+    "pdm2": 5,
+    "stopsignal/go": 6,
+    "stopsignal/stopcode": 7,
 }
 
 
