@@ -98,35 +98,17 @@ def set_seaborn_style():
     matplotlib.rcParams["font.size"] = 7
     sns.set_style("ticks")
     sns.set_context("paper")
-    # sns.set_palette(
-    #     sns.color_palette(
-    #         [
-    #             "#4477AA",
-    #             "#66CCEE",
-    #             "#228833",
-    #             "#CCBB44",
-    #             "#EE6677",
-    #             "#AA3377",
-    #         ]
-    #     )
-    # )
     sns.set_palette(
         sns.color_palette(
             palette=[
-                # existing six
-                "#4477aa",
-                "#66ccee",
-                "#228833",
-                "#ccbb44",
-                "#ee6677",
-                "#aa3377",
-                # extension
-                "#44aa99",
-                "#aa7744",
-                "#ddaa33",
-                "#999933",
-                "#bb5566",
-                "#7777bb",
+                "#E69F00",  # Orange
+                "#56B4E9",  # Sky Blue
+                "#009E73",  # Bluish Green
+                "#CC79A7",  # Reddish Purple
+                "#0072B2",  # Blue
+                "#D55E00",  # Vermillion
+                "#F0E442",  # Yellow
+
             ]
         )
     )
