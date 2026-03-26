@@ -92,12 +92,12 @@ def get_trial_start_end(
 
 
 def set_seaborn_style():
+    sns.set_style("ticks")
+    sns.set_context("paper")
     matplotlib.rcParams["pdf.fonttype"] = 42
     matplotlib.rcParams["svg.fonttype"] = "none"
     matplotlib.rcParams["font.family"] = "Arial"
     matplotlib.rcParams["font.size"] = 7
-    sns.set_style("ticks")
-    sns.set_context("paper")
     sns.set_palette(
         sns.color_palette(
             palette=[

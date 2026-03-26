@@ -306,8 +306,10 @@ class MultiXArrayProbaDataset(Dataset):
 
         # Add positional encoding
         if self.add_pe:
-            # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
-            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1)
+            if 'rt' in sample:
+                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
+                start = sample.attrs.get("offset_before", 0) - self.skip_samples
+            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
 
         if self.keep_info:
             sample_info = {}
