@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from mamba_ssm import Mamba
+from mamba_ssm import Mamba, Mamba2
 from hmpai.utilities import get_masking_indices, MASKING_VALUE
 import numpy as np
 
@@ -74,11 +74,18 @@ def build_mamba_patch(config):
                 self.seq_model = nn.Sequential(*layers)
             self.normalization = nn.LayerNorm(self.mamba_dim)
             self.linear_out = nn.Linear(self.mamba_dim, sum(self.task_class_counts.values()))
-            
+
             self.classification_prep = ClassificationPrep(
                 self.mamba_dim, 
                 self.patch_size
             )
+
+            self.spatial_attention = nn.Sequential(
+                nn.Conv2d(self.mamba_dim, self.mamba_dim // 4, kernel_size=(1, 1)),
+                nn.GELU(),
+                nn.Conv2d(self.mamba_dim // 4, 1, kernel_size=(1, 1)),
+            )
+
             self.classification_head = nn.ModuleDict({
                 t: ClassificationHead(emb_dim=self.mamba_dim, n_classes=n)
                 for t, n in self.task_class_counts.items()
@@ -103,6 +110,11 @@ def build_mamba_patch(config):
             x = self.seq_model(x)
             x = self.normalization(x)
             x = self.classification_prep(x, max_seq_len)
+            x_weights = x.permute(0, 2, 1, 3)
+            weights = self.spatial_attention(x_weights)
+            weights = weights.masked_fill(~ch_mask.unsqueeze(1), float('-inf'))
+            weights = torch.softmax(weights, dim=2)
+            x = (x_weights*weights).sum(dim=2)
 
             emb = x.clone() if return_embeddings else None
             
@@ -112,7 +124,7 @@ def build_mamba_patch(config):
                 # Compute outputs for each sample
                 outputs = []
                 for i, t in enumerate(task):
-                    out = self.classification_head[t](x[i, :, :], ch_mask[i])  # (T, n_classes_for_task_t)
+                    out = self.classification_head[t](x[i, :, :])  # (T, n_classes_for_task_t)
                     outputs.append(out)
                 
                 # Find max number of classes in this batch
@@ -171,7 +183,7 @@ class MambaBlock(nn.Module):
     """
     def __init__(self, embed_dim):
         super().__init__()
-        self.mamba = Mamba(d_model=embed_dim, d_state=64, d_conv=4, expand=2)
+        self.mamba = Mamba2(d_model=embed_dim, d_state=128, d_conv=4, expand=2)
         self.norm = nn.RMSNorm(embed_dim)
 
     def forward(self, x):
@@ -378,11 +390,6 @@ class ClassificationPrep(nn.Module):
 class ClassificationHead(nn.Module):
     def __init__(self, emb_dim, n_classes):
         super().__init__()
-        self.spatial_attention = nn.Sequential(
-            nn.Conv2d(emb_dim, emb_dim // 4, kernel_size=(1, 1)),
-            nn.GELU(),
-            nn.Conv2d(emb_dim // 4, 1, kernel_size=(1, 1)),  # (1, 1, C, T)
-        )
         self.classifier = nn.Sequential(
             nn.Conv1d(emb_dim, emb_dim, 3, padding=1),
             nn.GELU(),
@@ -393,19 +400,9 @@ class ClassificationHead(nn.Module):
             nn.Conv1d(emb_dim // 2, n_classes, 1)
         )
     
-    def forward(self, x, ch_mask):
-
-        x = x.unsqueeze(0).permute(0, 2, 1, 3)
-
-        weights = self.spatial_attention(x)
-        weights = weights.masked_fill(~ch_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
-        weights = torch.softmax(weights, dim=2)
-
-        x = (x*weights).sum(dim=2)
+    def forward(self, x):
+        x = x.unsqueeze(0)
         y = self.classifier(x)
         y = y.squeeze(0).transpose(1, 0)
-        # # x: (D, T) for single sample
-        # x = x.unsqueeze(0)  # (1, D, T)
-        # y = self.classifier(x)  # (1, n_classes, T)
-        # y = y.squeeze(0).transpose(1, 0)  # (T, n_classes)
+
         return y
