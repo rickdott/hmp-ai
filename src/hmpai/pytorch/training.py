@@ -32,7 +32,7 @@ def mixed_collate(batch):
     max_label_len = max(y.shape[0] for y in ys)
     max_label_width = max(y.shape[1] for y in ys)
 
-    max_coord_channels = max_channels - 1
+    max_coord_channels = max_channels
     
     # Pad sequences to maximum length
     padded_xs = []
