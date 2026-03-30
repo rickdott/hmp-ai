@@ -46,7 +46,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             strategies.append(strategy)
     
     add_negative = True
-    add_pe = False
+    add_pe = True
     base_info = ["task", "participant", "epoch", "coords", "rt", "RT"]
     norm_fn = norm_mad_zscore
     # Build CombinedDataset for train
