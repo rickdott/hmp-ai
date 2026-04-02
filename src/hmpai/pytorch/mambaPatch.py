@@ -87,7 +87,7 @@ def build_mamba_patch(config):
             )
 
             self.classification_head = nn.ModuleDict({
-                t: ClassificationHead(emb_dim=self.mamba_dim, n_classes=n)
+                t: ClassificationHead(emb_dim=self.mamba_dim + 1, n_classes=n)
                 for t, n in self.task_class_counts.items()
             })
 
@@ -103,6 +103,7 @@ def build_mamba_patch(config):
             max_seq_len = max_indices.max()
 
             x = x[:, :max_seq_len, :]
+            pe = x[:, :, -1:] if self.use_pos_enc else None
 
             x = x.permute(0, 2, 1)
             x, ch_mask = self.feature_extractor(x, coords)
@@ -117,6 +118,7 @@ def build_mamba_patch(config):
             x = (x_weights*weights).sum(dim=2)
 
             emb = x.clone() if return_embeddings else None
+            x = torch.cat([x, pe[:, :x.shape[-1], :].permute(0, 2, 1)], dim=1)
             
             if task is None:
                 x = self.linear_out(x)
@@ -255,11 +257,13 @@ class FeatureExtractor(nn.Module):
         x_pos = x_pos.unsqueeze(2)  # (B, C, 1, D)
 
         if self.use_pos_enc:
-            x_trial = self.trial_temporal_module(pe)
+            # x_trial = self.trial_temporal_module(pe)
+            x_trial = 0
         else:
             x_trial = 0
 
-        x_total = x_total + x_pos + x_trial
+        x_total = x_total + x_pos
+        # x_total = x_total + x_pos + x_trial
 
         pad = self.pad_token.expand_as(x_total)
         x_total = torch.where(ch_mask.unsqueeze(-1), x_total, pad)
