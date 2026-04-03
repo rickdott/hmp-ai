@@ -12,7 +12,7 @@ class GradientReversal(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return -ctx.alpha * grad_output, None
+        return torch.clamp(-ctx.alpha * grad_output, -1.0, 1.0), None
     
 
 def build_mamba_patch(config):

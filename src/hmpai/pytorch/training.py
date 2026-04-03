@@ -358,20 +358,21 @@ def train(
                     padding_mask = padding_mask[:, : predictions.shape[1]]
 
             loss, exp_loss, indiv_loss = loss_fn(predictions, labels, padding_mask)
-            if dann_lambda > 0 and model._domain_logits is not None:
-                domain_loss = torch.nn.functional.cross_entropy(
-                    model._domain_logits, model._domain_targets
-                )
-                loss = loss + dann_lambda * domain_loss
-                if writer is not None:
-                    writer.add_scalar("domain_loss", domain_loss.item(),
-                                    (epoch * progress.total) + progress.n)
-                    with torch.no_grad():
-                        domain_acc = (model._domain_logits.argmax(dim=-1) == model._domain_targets).float().mean()
-                    writer.add_scalar("domain_acc", domain_acc.item(),
-                                    (epoch * progress.total) + progress.n)
-                model._domain_logits = None
-                model._domain_targets = None
+        # Outside of autocast
+        if dann_lambda > 0 and model._domain_logits is not None:
+            domain_loss = torch.nn.functional.cross_entropy(
+                model._domain_logits, model._domain_targets
+            )
+            loss = loss + dann_lambda * domain_loss
+            if writer is not None:
+                writer.add_scalar("domain_loss", domain_loss.item(),
+                                (epoch * progress.total) + progress.n)
+                with torch.no_grad():
+                    domain_acc = (model._domain_logits.argmax(dim=-1) == model._domain_targets).float().mean()
+                writer.add_scalar("domain_acc", domain_acc.item(),
+                                (epoch * progress.total) + progress.n)
+            model._domain_logits = None
+            model._domain_targets = None
 
 
         for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
