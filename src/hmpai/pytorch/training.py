@@ -118,6 +118,7 @@ def train_and_test(
     weight_decay: float = 0.0,
     lr: float = 0.002,  # Default learning rate for optimizer
     seed: int = 42,
+    dann_lambda: float = 0.1,
 ) -> dict:
     """
     Trains and evaluates a PyTorch model using the provided datasets.
@@ -236,6 +237,11 @@ def train_and_test(
     for epoch in range(epochs):
         with tqdm(total=len(train_loader), unit=" batch") as tepoch:
             tepoch.set_description(f"Epoch {epoch + 1}")
+            if hasattr(model, 'use_dann') and model.use_dann:
+                p = epoch / epochs
+                model.dann_alpha = float(2.0 / (1.0 + np.exp(-10.0 * p)) - 1.0)
+                if write_log:
+                    writer.add_scalar("dann_alpha", model.dann_alpha, global_step=epoch)
             # Train on batches in train_loader
             batch_losses = train(
                 model,
@@ -247,6 +253,7 @@ def train_and_test(
                 writer=writer,
                 epoch=epoch,
                 # scaler=scaler,
+                dann_lambda=dann_lambda,
             )
 
             # Validate model and communicate results
@@ -310,7 +317,7 @@ def train(
     progress: tqdm = None,
     writer: SummaryWriter = None,
     epoch: int = None,
-    scaler = None,
+    dann_lambda: float = 0.0,
 ) -> list[float]:
     """
     Trains a PyTorch model for one epoch using the provided data loader, optimizer, and loss function.
@@ -351,6 +358,21 @@ def train(
                     padding_mask = padding_mask[:, : predictions.shape[1]]
 
             loss, exp_loss, indiv_loss = loss_fn(predictions, labels, padding_mask)
+            if dann_lambda > 0 and model._domain_logits is not None:
+                domain_loss = torch.nn.functional.cross_entropy(
+                    model._domain_logits, model._domain_targets
+                )
+                loss = loss + dann_lambda * domain_loss
+                if writer is not None:
+                    writer.add_scalar("domain_loss", domain_loss.item(),
+                                    (epoch * progress.total) + progress.n)
+                    with torch.no_grad():
+                        domain_acc = (model._domain_logits.argmax(dim=-1) == model._domain_targets).float().mean()
+                    writer.add_scalar("domain_acc", domain_acc.item(),
+                                    (epoch * progress.total) + progress.n)
+                model._domain_logits = None
+                model._domain_targets = None
+
 
         for i_loss, loss_class in enumerate(exp_loss.mean(dim=[0, 1])):
             writer.add_scalar(

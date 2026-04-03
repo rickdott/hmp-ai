@@ -4,6 +4,16 @@ from mamba_ssm import Mamba, Mamba2
 from hmpai.utilities import get_masking_indices, MASKING_VALUE
 import numpy as np
 
+class GradientReversal(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.alpha * grad_output, None
+    
 
 def build_mamba_patch(config):
     """
@@ -91,6 +101,20 @@ def build_mamba_patch(config):
                 for t, n in self.task_class_counts.items()
             })
 
+            # DANN dataset adversarial classifier
+            self.use_dann = config.get("use_dann", False)
+            if self.use_dann:
+                self.task_to_idx = {t: i for i, t in enumerate(self.task_class_counts.keys())}
+                self.n_datasets = len(self.task_class_counts)
+                self.dataset_classifier = nn.Sequential(
+                    nn.Linear(self.mamba_dim, self.mamba_dim // 4),
+                    nn.GELU(),
+                    nn.Linear(self.mamba_dim // 4, self.n_datasets),
+                )
+                self.dann_alpha = 0.0
+            self._domain_logits = None
+            self._domain_targets = None
+
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
             # # TODO: Change if pos_enc is embedded into embedding
@@ -118,6 +142,14 @@ def build_mamba_patch(config):
             x = (x_weights*weights).sum(dim=2)
 
             emb = x.clone() if return_embeddings else None
+
+            if self.use_dann and self.training and task is not None:
+                emb_pooled = x.mean(dim=-1)  # (B, D)
+                reversed_emb = GradientReversal.apply(emb_pooled, self.dann_alpha)
+                self._domain_logits = self.dataset_classifier(reversed_emb)
+                self._domain_targets = torch.tensor(
+                    [self.task_to_idx[t] for t in task], device=x.device
+                )
             x = torch.cat([x, pe[:, :x.shape[-1], :].permute(0, 2, 1)], dim=1)
             
             if task is None:
