@@ -145,8 +145,9 @@ def build_mamba_patch(config):
 
             if self.use_dann and self.training and task is not None:
                 emb_pooled = x.mean(dim=-1)  # (B, D)
+                emb_pooled = torch.nn.functional.layer_norm(emb_pooled, [emb_pooled.shape[-1]])
                 reversed_emb = GradientReversal.apply(emb_pooled, self.dann_alpha)
-                self._domain_logits = self.dataset_classifier(reversed_emb)
+                self._domain_logits = self.dataset_classifier(reversed_emb.float())
                 self._domain_targets = torch.tensor(
                     [self.task_to_idx[t] for t in task], device=x.device
                 )

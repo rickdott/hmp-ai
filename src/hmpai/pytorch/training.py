@@ -361,9 +361,9 @@ def train(
         # Outside of autocast
         if dann_lambda > 0 and model._domain_logits is not None:
             domain_loss = torch.nn.functional.cross_entropy(
-                model._domain_logits, model._domain_targets
+                model._domain_logits.float(), model._domain_targets
             )
-            loss = loss + dann_lambda * domain_loss
+            loss = loss.float() + dann_lambda * domain_loss
             if writer is not None:
                 writer.add_scalar("domain_loss", domain_loss.item(),
                                 (epoch * progress.total) + progress.n)
@@ -394,6 +394,7 @@ def train(
                     }
                 )
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
 
