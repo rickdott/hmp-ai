@@ -451,6 +451,7 @@ class MultiXArrayProbaDataset(Dataset):
             context = {
                 "start_jitter": offset_before,
                 "end_jitter": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_end", 0)),
+                "has_pe": self.add_pe,
             }
             sample_data, sample_label, context = self.transform((sample_data, sample_label, context))
 

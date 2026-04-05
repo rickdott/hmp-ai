@@ -200,20 +200,23 @@ class RandomLowPassTransform(object):
         end_idx = get_masking_index(data, search_value=torch.nan)
         valid = data[:end_idx, :]  # (T_valid, C)
 
-        # FFT along time axis, per channel
-        spectrum = torch.fft.rfft(valid, dim=0)  # (T_valid//2+1, C)
+        # Identify real EEG channels (not PE, not masked)
+        ch_valid = ~torch.isnan(valid[0, :])  # channels that aren't NaN at t=0
+        # Exclude PE channel (always last) if present
+        if context is not None and context.get('has_pe', False):
+            ch_valid[-1] = False
+        
+        eeg = valid[:, ch_valid]
+
+        # FFT, mask, iFFT on EEG channels only
+        spectrum = torch.fft.rfft(eeg, dim=0)
         n_freqs = spectrum.shape[0]
-
-        # Frequency resolution: each bin = sfreq / T_valid Hz
         freqs = torch.linspace(0, nyquist, n_freqs)
-
-        # Smooth rolloff (width ~2Hz) instead of brick-wall to avoid ringing
         rolloff_width = 2.0
         mask = 0.5 * (1.0 - torch.tanh((freqs - cutoff) / rolloff_width))
-        mask = mask.unsqueeze(1)  # (n_freqs, 1) to broadcast over channels
+        mask = mask.unsqueeze(1)
+        filtered = torch.fft.irfft(spectrum * mask, n=eeg.shape[0], dim=0)
 
-        # Apply and inverse FFT
-        filtered = torch.fft.irfft(spectrum * mask, n=valid.shape[0], dim=0)
-        data[:end_idx, :] = filtered
+        data[:end_idx, ch_valid] = filtered
 
         return data, labels, context
