@@ -190,7 +190,6 @@ class RandomLowPassTransform(object):
             return data, labels, context
 
         cutoff = self.cutoffs[torch.randint(len(self.cutoffs), (1,)).item()]
-        print(cutoff)
         nyquist = self.sfreq / 2.0
 
         # Skip if cutoff >= nyquist (no filtering needed)
