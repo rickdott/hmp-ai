@@ -71,7 +71,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             data_labels=[desc["label"]],
             info_to_keep=desc_info,
             participants_to_keep=splits[strat][0],
-            transform=Compose([StartJitterTransform(probability=1.0), EndJitterTransform(probability=1.0), ChannelShuffleTransform(1.0), ChannelDropoutTransform(1.0, 0.1)]),
+            transform=Compose([RandomLowPassTransform(), StartJitterTransform(probability=1.0), EndJitterTransform(probability=1.0), ChannelShuffleTransform(1.0), ChannelDropoutTransform(1.0, 0.1)]),
             add_negative=add_negative,
             add_pe=add_pe,
             subset_cond=subset_cond,

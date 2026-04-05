@@ -174,3 +174,47 @@ class ChannelDropoutTransform(object):
             data[:, channels_to_mask] = torch.nan
 
         return data, labels, context
+    
+class RandomLowPassTransform(object):
+    def __init__(self, sfreq=200, cutoffs=(30, 40, 50), probability=1.0):
+        self.sfreq = sfreq
+        self.cutoffs = cutoffs
+        self.probability = probability
+
+    def __call__(self, data_in):
+        data = data_in[0]   # (T, C)
+        labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
+
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels, context
+
+        cutoff = self.cutoffs[torch.randint(len(self.cutoffs), (1,)).item()]
+        print(cutoff)
+        nyquist = self.sfreq / 2.0
+
+        # Skip if cutoff >= nyquist (no filtering needed)
+        if cutoff >= nyquist:
+            return data, labels, context
+
+        # Find valid (non-masked) region
+        end_idx = get_masking_index(data, search_value=torch.nan)
+        valid = data[:end_idx, :]  # (T_valid, C)
+
+        # FFT along time axis, per channel
+        spectrum = torch.fft.rfft(valid, dim=0)  # (T_valid//2+1, C)
+        n_freqs = spectrum.shape[0]
+
+        # Frequency resolution: each bin = sfreq / T_valid Hz
+        freqs = torch.linspace(0, nyquist, n_freqs)
+
+        # Smooth rolloff (width ~2Hz) instead of brick-wall to avoid ringing
+        rolloff_width = 2.0
+        mask = 0.5 * (1.0 - torch.tanh((freqs - cutoff) / rolloff_width))
+        mask = mask.unsqueeze(1)  # (n_freqs, 1) to broadcast over channels
+
+        # Apply and inverse FFT
+        filtered = torch.fft.irfft(spectrum * mask, n=valid.shape[0], dim=0)
+        data[:end_idx, :] = filtered
+
+        return data, labels, context
