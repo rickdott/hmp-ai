@@ -94,6 +94,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             norm_vars=norm_vars,
             channel_dict_path=montage_path,
             rt_key=rt_key,
+            transform=Compose([RandomLowPassTransform(cutoffs=(30,), probability=1.0)]),
         ))
         if len(splits[strat][2]) > 0:
             test.append(MultiXArrayProbaDataset(
