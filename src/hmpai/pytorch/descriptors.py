@@ -45,28 +45,28 @@ DESC_SAT1 = {
 # }
 DESC_CONF1 = {
     "path": DATA_PATH / "conf1" / "labelled_data_200hz.nc",
-    "label": ["conf1_op1", "conf1_op2", "conf1_op3", "conf1_op4"],
+    "label": ["conf1_op1", "conf1_op2", "conf1_op3", "conf1_op4", "conf1_op5"],
     "strategy": "conf1",
     "info_to_keep": ["confidence"],
 }
 
 DESC_CONF2 = {
     "path": DATA_PATH / "conf2" / "labelled_data_200hz.nc",
-    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4"],
+    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4", "conf2_op5"],
     "strategy": "conf2",
     "info_to_keep": ["confidenceRating"],
 }
 
 DESC_CONF3_EXP1 = {
     "path": DATA_PATH / "conf3_exp1" / "labelled_data_200hz.nc",
-    "label": ["conf3_exp1_op1", "conf3_exp1_op2", "conf3_exp1_op3", "conf3_exp1_op4"],
+    "label": ["conf3_exp1_op1", "conf3_exp1_op2", "conf3_exp1_op3", "conf3_exp1_op4", "conf3_exp1_op5"],
     "strategy": "conf3_exp1",
     "info_to_keep": ["confidence"],
 }
 
 DESC_CONF3_EXP2 = {
     "path": DATA_PATH / "conf3_exp2" / "labelled_data_200hz.nc",
-    "label": ["conf3_exp2_op1", "conf3_exp2_op2", "conf3_exp2_op3", "conf3_exp2_op4"],
+    "label": ["conf3_exp2_op1", "conf3_exp2_op2", "conf3_exp2_op3", "conf3_exp2_op4", "conf3_exp2_op5"],
     "strategy": "conf3_exp2",
     "info_to_keep": ["conf"],
 }
