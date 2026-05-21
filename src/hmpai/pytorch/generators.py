@@ -69,7 +69,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             data_labels=[desc["label"]],
             info_to_keep=desc_info,
             participants_to_keep=splits[strat][0],
-            transform=Compose([StartJitterTransform(probability=1.0), EndJitterTransform(probability=1.0), ChannelShuffleTransform(1.0), ChannelDropoutTransform(1.0, 0.1)]),
+            transform=Compose([StartJitterTransform(probability=0.5), EndJitterTransform(probability=0.5), ChannelShuffleTransform(1.0), ChannelDropoutTransform(1.0, 0.1)]),
             add_negative=add_negative,
             add_pe=add_pe,
             subset_cond=subset_cond,
@@ -95,7 +95,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             skip_samples=abs(train[-1].dataset_info[0]["offset_start"]),
             cut_samples=train[-1].dataset_info[0]["extra_offset_end"],
         ))
-        
+
         if len(splits[strat][2]) > 0:
             test.append(MultiXArrayProbaDataset(
                 [desc["path"]],
@@ -110,6 +110,8 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
                 norm_vars=norm_vars,
                 channel_dict_path=montage_path,
                 rt_key=rt_key,
+                skip_samples=abs(train[-1].dataset_info[0]["offset_start"]),
+                cut_samples=train[-1].dataset_info[0]["extra_offset_end"],
             ))
 
     return CombinedDataset(train), val, test, task_class_counts
