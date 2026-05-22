@@ -356,7 +356,6 @@ def train(
                 labels = labels[:, : predictions.shape[1]]
                 if padding_mask is not None:
                     padding_mask = padding_mask[:, : predictions.shape[1]]
-
             loss, exp_loss, indiv_loss = loss_fn(predictions, labels, padding_mask)
         # Outside of autocast
         if dann_lambda > 0 and model._domain_logits is not None:
@@ -440,7 +439,8 @@ def validate(
                 if padding_mask is not None:
                     padding_mask = padding_mask[:, : predictions.shape[1]]
 
-            loss, _, _ = loss_fn(predictions, labels, padding_mask)
+            window_mask = stim_rt_window_mask(labels)
+            loss, _, _ = loss_fn(predictions, labels, padding_mask, window_mask)
             loss_per_batch.append(loss.item())
 
     return loss_per_batch
@@ -531,38 +531,8 @@ def kldiv_loss(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     padding_mask: torch.Tensor = None,
+    window_mask: torch.Tensor = None,
 ):
-    """
-    Computes the Kullback-Leibler divergence (KLDiv) loss between predictions and labels.
-
-    Args:
-        predictions (torch.Tensor): The model logits (non-softmaxed) with shape 
-            (batch_size, sequence_length, num_classes).
-        labels (torch.Tensor): The target labels with shape 
-            (batch_size, sequence_length, num_classes). The labels should sum up to 1 
-            along the last dimension and can include negative values. Positions with
-            MASKING_VALUE are considered invalid/padded classes.
-        padding_mask (torch.Tensor, optional): Boolean mask with shape (batch_size, sequence_length)
-            where True indicates valid positions and False indicates padding. If None, no masking is applied.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
-            - loss (torch.Tensor): The normalized forward KL divergence loss.
-            - forward_kl_loss (torch.Tensor): The element-wise KL divergence loss 
-              before normalization (with invalid positions zeroed out).
-            - metrics (Dict[str, torch.Tensor]): A dictionary containing the normalized 
-              KL divergence loss under the key "kldiv".
-
-    Notes:
-        - The predictions are softmaxed along the last dimension before computing the 
-          KL divergence.
-        - When padding_mask is provided, loss is only computed on valid (non-padded) positions.
-        - Classes with MASKING_VALUE in labels are excluded from loss calculation.
-        - The loss is normalized by the number of valid elements (time + class dimensions).
-    """
-
-    # Create mask for valid classes (not padded with MASKING_VALUE)
-    # Shape: [B, T, C]
     class_mask = (labels != MASKING_VALUE)
     
     predictions_masked = predictions.clone()
@@ -580,26 +550,33 @@ def kldiv_loss(
         log_target=False
     )
 
-    # Apply masking
-    if padding_mask is not None:
-        # Combine time-based padding mask with class-based mask
-        # padding_mask: [B, T] -> [B, T, 1]
-        # class_mask: [B, T, C]
-        mask_expanded = padding_mask.unsqueeze(-1).expand_as(forward_kl_loss)
-        combined_mask = mask_expanded & class_mask
-        
-        # Zero out loss at invalid positions
-        forward_kl_loss = forward_kl_loss * combined_mask.float()
-        # Normalize by number of valid positions
-        num_valid = combined_mask.sum()
-        forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
-    else:
-        # Only apply class mask
-        forward_kl_loss = forward_kl_loss * class_mask.float()
-        num_valid = class_mask.sum()
-        forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
+    time_mask = None
+    for m in (padding_mask, window_mask):
+        if m is not None:
+            time_mask = m if time_mask is None else (time_mask & m)
+    
+    combined_mask = class_mask if time_mask is None else (time_mask.unsqueeze(-1) & class_mask)
 
-    loss = forward_kl_loss_norm
+    forward_kl_loss = forward_kl_loss * combined_mask.float()
+    num_valid = combined_mask.sum()
+    forward_kl_loss_norm = forward_kl_loss.sum() / num_valid if num_valid > 0 else forward_kl_loss.sum()
 
-    return loss, forward_kl_loss, {"kldiv": forward_kl_loss_norm}
+    return forward_kl_loss_norm, forward_kl_loss, {"kldiv": forward_kl_loss_norm}
 
+def stim_rt_window_mask(labels, null_class=0, eps=0):
+    """
+    [B, T] boolean mask, True over the contiguous stim->RT window of each trial:
+    from the first to the last timepoint where any non-null class carries mass.
+    Pre-stim / post-RT context is False
+    """
+    B, T, C = labels.shape
+    valid = labels != MASKING_VALUE
+    active = torch.where(valid, labels, torch.zeros_like(labels)).clamp(min=0.0)
+    keep = torch.ones(C, dtype=torch.bool, device=labels.device)
+    keep[null_class] = False
+    is_active = active[:, :, keep].sum(dim=-1) > eps                          # [B, T]
+
+    idx = torch.arange(T, device=labels.device).expand(B, T)
+    first = torch.where(is_active, idx, torch.full_like(idx, T)).amin(dim=1)  # [B]
+    last  = torch.where(is_active, idx, torch.full_like(idx, -1)).amax(dim=1) # [B]
+    return (idx >= first.unsqueeze(1)) & (idx <= last.unsqueeze(1))    
