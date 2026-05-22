@@ -490,8 +490,8 @@ def test(
                     labels = labels[:, : predictions.shape[1]]
                     if padding_mask is not None:
                         padding_mask = padding_mask[:, : predictions.shape[1]]
-
-                loss, _, _ = loss_fn(predictions, labels, padding_mask)
+                window_mask = stim_rt_window_mask(labels)
+                loss, _, _ = loss_fn(predictions, labels, padding_mask, window_mask)
                 loss_per_batch.append(loss)
 
 
