@@ -79,3 +79,8 @@ DESC_CONF3_EXP3 = {
     "rt_key": "RTchoice",
 }
 
+DESC_MRT = {
+    "path": DATA_PATH / "mrt/post_gedai" / "labelled_data_200hz.nc",
+    "label": ["mrt_op1", "mrt_op2", "mrt_op3", "mrt_op4", "mrt_op5"],
+    "strategy": "mrt1"
+}
