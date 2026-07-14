@@ -11,6 +11,7 @@ from typing import Type
 import pickle
 from datetime import datetime
 from hmpai.transformers import ProjCustomKeepData, ProjPCAKeepData
+from graphlib import TopologicalSorter
 
 
 class StageFinder:
@@ -207,11 +208,20 @@ class StageFinder:
 
     def _label_model(self, estimate, condition, labels, data):
         # Get union of all label subsets to use as main labels
-        main_labels = (
-            list(dict.fromkeys(label for v in labels.values() for label in v))
-            if isinstance(labels, dict)
-            else labels
-        )
+        if isinstance(labels, dict):
+            def merge_ordered(lists):
+                ts = TopologicalSorter()
+                for seq in lists:
+                    for a, b in zip(seq, seq[1:]):
+                        ts.add(b, a)
+                    for x in seq:
+                        ts.add(x)
+                return list(ts.static_order())
+
+            main_labels = merge_ordered(labels.values())
+        else:
+            main_labels = labels
+
         if condition == "No condition":
             condition = None
         else:

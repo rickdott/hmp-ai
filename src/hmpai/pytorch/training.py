@@ -286,6 +286,8 @@ def train_and_test(
             if write_log:
                 writer.add_scalar("train_loss", mean_train_loss, global_step=epoch)
                 writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
+                for i in range(len(val_loaders)):
+                    writer.add_scalar(f"val_loss_{i}", postfix_dict[f"val_loss_{i}"], global_step=epoch)
                 writer.flush()
 
             # Stop training if validation loss has not improved sufficiently
