@@ -90,6 +90,9 @@ def split_participants_str(participants: list[str], val: float, test: float = 0,
         if val == 0:
             train_participants = participants
             val_participants = []
+        elif val == 1.0:
+            train_participants = []
+            val_participants = participants
         else:
             train_participants, val_participants = train_test_split(
                 participants, test_size=val, random_state=random_state

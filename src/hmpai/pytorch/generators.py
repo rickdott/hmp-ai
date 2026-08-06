@@ -45,7 +45,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
     
     add_negative = True
     add_pe = True
-    base_info = ["task", "participant", "epoch", "coords", "rt", "RT"]
+    base_info = ["task", "participant", "epoch", "coords", "rt", "RT", "split"]
     norm_fn = norm_mad_zscore
     # Build CombinedDataset for train
     train = []
@@ -110,7 +110,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
                 rt_key=rt_key,
             ))
 
-    return CombinedDataset(train), val, test, task_class_counts
+    return CombinedDataset(train), val, test, task_class_counts, splits
 
 
 class CombinedDataset(Dataset):

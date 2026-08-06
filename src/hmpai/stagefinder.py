@@ -9,7 +9,6 @@ from hmpai.utilities import get_masking_indices_xr
 from hmpai.behaviour.sat2 import read_behavioural_info, merge_data_xr
 from typing import Type
 import pickle
-from datetime import datetime
 from hmpai.transformers import ProjCustomKeepData, ProjPCAKeepData
 from graphlib import TopologicalSorter
 
