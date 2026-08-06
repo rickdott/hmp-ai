@@ -90,6 +90,9 @@ def split_participants_str(participants: list[str], val: float, test: float = 0,
         if val == 0:
             train_participants = participants
             val_participants = []
+        elif val == 1.0:
+            train_participants = []
+            val_participants = participants
         else:
             train_participants, val_participants = train_test_split(
                 participants, test_size=val, random_state=random_state
@@ -122,10 +125,7 @@ def get_folds(
     """
     # Make sure #participants is divisible by k
     n_participants = len(data.participant)
-    if n_participants % k != 0:
-        raise ValueError(
-            f"K: {k} (amount of folds) must divide number of participants: {n_participants}"
-        )
+
 
     # Divide data into k folds
     participants = data.participant.values.copy()

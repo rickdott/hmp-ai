@@ -354,6 +354,8 @@ class StageFinder:
                     self.conditions,
                 )
             ):
+                if len(self.fits) == 1:
+                    ax = [ax]
                 sfreq = self.epoch_data.sfreq
                 max_time = (
                     max_time

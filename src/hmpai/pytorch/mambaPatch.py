@@ -1,10 +1,19 @@
-from hmpai.pytorch.utilities import TASKS
 import torch
 from torch import nn
-from mamba_ssm import Mamba
-from hmpai.utilities import get_masking_indices
+from mamba_ssm import Mamba, Mamba2
+from hmpai.utilities import get_masking_indices, MASKING_VALUE
 import numpy as np
 
+class GradientReversal(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return torch.clamp(-ctx.alpha * grad_output, -1.0, 1.0), None
+    
 
 def build_mamba_patch(config):
     """
@@ -14,7 +23,6 @@ def build_mamba_patch(config):
 
     Parameters:
         config (dict): A dictionary containing the configuration for the model. The following keys are expected:
-            - n_channels (int): Number of input channels. (Required)
             - n_mamba_layers (int): Number of Mamba or LSTM layers. (Required)
             - n_classes (int): Number of output classes. (Required)
             - use_pos_enc (bool, optional): Whether to use positional encoding. Defaults to False.
@@ -46,17 +54,12 @@ def build_mamba_patch(config):
             super().__init__()
             self.config = config
 
-            if "n_channels" not in config:
-                raise ValueError("Config must contain 'n_channels' key")
-            self.n_channels = config.get("n_channels")
-
+            if "task_class_counts" not in config:
+                raise ValueError("Config must contain 'task_class_counts' key")
+            self.task_class_counts = config.get("task_class_counts")
             if "n_mamba_layers" not in config:
                 raise ValueError("Config must contain 'n_mamba_layers' key")
             n_mamba_layers = config.get("n_mamba_layers")
-
-            if "n_classes" not in config:
-                raise ValueError("Config must contain 'n_classes' key")
-            n_classes = config.get("n_classes")
 
             self.use_pos_enc = config.get("use_pos_enc", False)
 
@@ -69,35 +72,48 @@ def build_mamba_patch(config):
             self.patch_size = config.get("spatial_patch_size", 50)
             self.feature_extractor = FeatureExtractor(embed_dim=self.spatial_feature_dim, patch_size=self.patch_size, use_pos_enc=self.use_pos_enc)
 
-            self.temporal_dropout = nn.Dropout1d(p=0.2)
-            self.activation = nn.SiLU()
-
             self.mamba_dim = self.__calculate_mamba_dim__()
             if config.get("use_lstm", False):
                 self.seq_model = nn.Sequential(
                     *[LSTMBlock(self.mamba_dim) for _ in range(n_mamba_layers)]
                 )
             else:
-                # Alternating forward and backward Mamba layers
                 layers = []
-                for i in range(n_mamba_layers):
+                for _ in range(n_mamba_layers):
                     layers.append(MambaBlock(self.mamba_dim))
                 self.seq_model = nn.Sequential(*layers)
             self.normalization = nn.LayerNorm(self.mamba_dim)
-            self.linear_out = nn.Linear(self.mamba_dim, n_classes)
-            
+            self.linear_out = nn.Linear(self.mamba_dim, sum(self.task_class_counts.values()))
+
             self.classification_prep = ClassificationPrep(
                 self.mamba_dim, 
-                self.patch_size, 
-                n_classes, 
+                self.patch_size
             )
-            
+
+            self.spatial_attention = nn.Sequential(
+                nn.Conv2d(self.mamba_dim, self.mamba_dim // 4, kernel_size=(1, 1)),
+                nn.GELU(),
+                nn.Conv2d(self.mamba_dim // 4, 1, kernel_size=(1, 1)),
+            )
+
             self.classification_head = nn.ModuleDict({
-                task_name: ClassificationHead(
-                    emb_dim=self.mamba_dim,
-                    n_classes=n_classes
-                ) for task_name in TASKS.keys()
+                t: ClassificationHead(emb_dim=self.mamba_dim + 1, n_classes=n)
+                for t, n in self.task_class_counts.items()
             })
+
+            # DANN dataset adversarial classifier
+            self.use_dann = config.get("use_dann", False)
+            if self.use_dann:
+                self.task_to_idx = {t: i for i, t in enumerate(self.task_class_counts.keys())}
+                self.n_datasets = len(self.task_class_counts)
+                self.dataset_classifier = nn.Sequential(
+                    nn.Linear(self.mamba_dim, self.mamba_dim // 4),
+                    nn.GELU(),
+                    nn.Linear(self.mamba_dim // 4, self.n_datasets),
+                )
+                self.dann_alpha = 0.0
+            self._domain_logits = None
+            self._domain_targets = None
 
         def __calculate_mamba_dim__(self):
             mamba_dim = self.spatial_feature_dim
@@ -111,22 +127,56 @@ def build_mamba_patch(config):
             max_seq_len = max_indices.max()
 
             x = x[:, :max_seq_len, :]
+            pe = x[:, :, -1:] if self.use_pos_enc else None
 
             x = x.permute(0, 2, 1)
-            x = self.feature_extractor(x, coords)
+            x, ch_mask = self.feature_extractor(x, coords)
 
             x = self.seq_model(x)
             x = self.normalization(x)
             x = self.classification_prep(x, max_seq_len)
+            x_weights = x.permute(0, 2, 1, 3)
+            weights = self.spatial_attention(x_weights)
+            weights = weights.masked_fill(~ch_mask.unsqueeze(1), float('-inf'))
+            weights = torch.softmax(weights, dim=2)
+            x = (x_weights*weights).sum(dim=2)
 
             emb = x.clone() if return_embeddings else None
+
+            if self.use_dann and self.training and task is not None:
+                emb_pooled = x.mean(dim=-1)  # (B, D)
+                emb_pooled = torch.nn.functional.layer_norm(emb_pooled, [emb_pooled.shape[-1]])
+                reversed_emb = GradientReversal.apply(emb_pooled, self.dann_alpha)
+                self._domain_logits = self.dataset_classifier(reversed_emb.float())
+                self._domain_targets = torch.tensor(
+                    [self.task_to_idx[t] for t in task], device=x.device
+                )
+            x = torch.cat([x, pe[:, :x.shape[-1], :].permute(0, 2, 1)], dim=1)
             
             if task is None:
                 x = self.linear_out(x)
             else:
-                x = torch.stack([
-                    self.classification_head[t](x[i, :, :]) for i, t in enumerate(task)
-                ])
+                # Compute outputs for each sample
+                outputs = []
+                for i, t in enumerate(task):
+                    out = self.classification_head[t](x[i, :, :])  # (T, n_classes_for_task_t)
+                    outputs.append(out)
+                
+                # Find max number of classes in this batch
+                max_classes = max(out.shape[-1] for out in outputs)
+                
+                # Pad outputs to max_classes
+                padded_outputs = []
+                for out in outputs:
+                    if out.shape[-1] < max_classes:
+                        # Pad with MASKING_VALUE
+                        pad_size = max_classes - out.shape[-1]
+                        out_padded = torch.nn.functional.pad(out, (0, pad_size), value=MASKING_VALUE)
+                        padded_outputs.append(out_padded)
+                    else:
+                        padded_outputs.append(out)
+                
+                x = torch.stack(padded_outputs)
 
             if return_embeddings:
                 return x, emb
@@ -168,7 +218,7 @@ class MambaBlock(nn.Module):
     """
     def __init__(self, embed_dim):
         super().__init__()
-        self.mamba = Mamba(d_model=embed_dim, d_state=64, d_conv=4, expand=2)
+        self.mamba = Mamba2(d_model=embed_dim, d_state=128, d_conv=4, expand=2)
         self.norm = nn.RMSNorm(embed_dim)
 
     def forward(self, x):
@@ -217,10 +267,11 @@ class FeatureExtractor(nn.Module):
 
         self.time_module = TimeModule(embed_dim, groups=8, patch_size=patch_size)
         self.spectral_module = SpectralModule(embed_dim, patch_size=patch_size)
-        self.positional_module = ConditionalPositionalEncoding(embed_dim, patch_size=patch_size)
         self.spatial_module = CoordinatePositionalEncoding(embed_dim)
         if self.use_pos_enc:
             self.trial_temporal_module = TrialTemporalEncoding(embed_dim, patch_size=patch_size)
+        self.pad_token = nn.Parameter(torch.zeros(1, 1, 1, self.embed_dim))
+
 
     def forward(self, x, coords=None):
         # Split into patches
@@ -231,23 +282,28 @@ class FeatureExtractor(nn.Module):
             pe = x[:, -1:, :, :]
             x = x[:, :-1, :, :]
 
-        x_time = self.time_module(x)
+        x_time, ch_mask = self.time_module(x)
         # x_spectral = self.spectral_module(x)
         x_total = x_time #+ x_spectral
 
-        x_pos = self.spatial_module(coords)
+        x_pos = self.spatial_module(coords, ch_mask)
         x_pos = x_pos.unsqueeze(2)  # (B, C, 1, D)
-        # x_position = self.positional_module(x_total + x_pos)
+
         if self.use_pos_enc:
-            x_trial = self.trial_temporal_module(pe)
+            # x_trial = self.trial_temporal_module(pe)
+            x_trial = 0
         else:
             x_trial = 0
 
-        x_total = x_total + x_pos + x_trial
+        x_total = x_total + x_pos
+        # x_total = x_total + x_pos + x_trial
 
+        pad = self.pad_token.expand_as(x_total)
+        x_total = torch.where(ch_mask.unsqueeze(-1), x_total, pad)
         B, C, n, D = x_total.shape
         x_total = x_total.reshape(B, C*n, D)
-        return x_total
+
+        return x_total, ch_mask
 
 
 class TimeModule(nn.Module):
@@ -265,6 +321,8 @@ class TimeModule(nn.Module):
     def forward(self, x):
         # (B, C, T//patch_size, patch_size)
         B, C, n, t = x.shape
+        ch_mask = (x[:, :, 0, 0] != MASKING_VALUE).unsqueeze(-1).unsqueeze(-1).to(x.device)
+        x = x * ch_mask
         x = x.reshape(B*C*n, 1, t)
 
         x = self.conv(x)
@@ -272,7 +330,8 @@ class TimeModule(nn.Module):
         x = self.act(x)
 
         x = x.reshape(B, C, n, -1)
-        return x
+        x = x * ch_mask
+        return x, ch_mask.squeeze(-1)
     
 class SpectralModule(nn.Module):
     def __init__(self, embed_dim, patch_size=13):
@@ -287,28 +346,8 @@ class SpectralModule(nn.Module):
         spectral = torch.abs(spectral).view(B, C, n, -1)
         spectral_emb = self.proj(spectral)
         return spectral_emb
-
-
-class ConditionalPositionalEncoding(nn.Module):
-    def __init__(self, embed_dim, patch_size=13):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        # Conditional Positional Encoding, should encode spatial dimension
-        # (3, 1) = (space, n_patches)
-        # self.proj = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(19, 7), stride=1, padding=(9, 3), bias=True, groups=self.embed_dim)
-        self.proj = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(3, 1), stride=1, padding=(1, 0), bias=True, groups=self.embed_dim)
-
-    def forward(self, x):
-        # x: (B, C, n, D)
-        x = x.permute(0, 3, 1, 2)
-        # x: B, D, C, n
-        # Dont add residual here since this is added to orig vector anyway
-        x = self.proj(x)
-        x = x.permute(0, 2, 3, 1)
-        # x: B, C, n, D
-        return x
     
+
 class CoordinatePositionalEncoding(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
@@ -317,11 +356,13 @@ class CoordinatePositionalEncoding(nn.Module):
             nn.GELU(),
         )
     
-    def forward(self, coords):
+    def forward(self, coords, ch_mask):
         # x: (B, C, 3)
+        coords = coords * ch_mask
         pe = self.mlp(coords)
         # pe: (B, C, D)
         return pe
+
 
 class TrialTemporalEncoding(nn.Module):
     def __init__(self, emb_dim, patch_size):
@@ -340,11 +381,10 @@ class TrialTemporalEncoding(nn.Module):
 
 
 class ClassificationPrep(nn.Module):
-    def __init__(self, emb_dim, patch_size, n_classes):
+    def __init__(self, emb_dim, patch_size):
         super().__init__()
         self.emb_dim = emb_dim
         self.patch_size = patch_size
-        self.n_classes = n_classes
         # Original single-step approach
         self.head = nn.ConvTranspose1d(
             in_channels=self.emb_dim, 
@@ -383,14 +423,10 @@ class ClassificationPrep(nn.Module):
 
         return y
 
+
 class ClassificationHead(nn.Module):
     def __init__(self, emb_dim, n_classes):
         super().__init__()
-        self.spatial_attention = nn.Sequential(
-            nn.Conv2d(emb_dim, emb_dim // 4, kernel_size=(1, 1)),
-            nn.GELU(),
-            nn.Conv2d(emb_dim // 4, 1, kernel_size=(1, 1)),  # (1, 1, C, T)
-        )
         self.classifier = nn.Sequential(
             nn.Conv1d(emb_dim, emb_dim, 3, padding=1),
             nn.GELU(),
@@ -402,18 +438,8 @@ class ClassificationHead(nn.Module):
         )
     
     def forward(self, x):
-        C, D, T = x.shape
-
-        x = x.unsqueeze(0).permute(0, 2, 1, 3)
-
-        weights = self.spatial_attention(x)
-        weights = torch.softmax(weights, dim=2)
-
-        x = (x*weights).sum(dim=2)
+        x = x.unsqueeze(0)
         y = self.classifier(x)
         y = y.squeeze(0).transpose(1, 0)
-        # # x: (D, T) for single sample
-        # x = x.unsqueeze(0)  # (1, D, T)
-        # y = self.classifier(x)  # (1, n_classes, T)
-        # y = y.squeeze(0).transpose(1, 0)  # (T, n_classes)
+
         return y

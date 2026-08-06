@@ -1,4 +1,3 @@
-from hmpai.pytorch.utilities import TASKS
 import torch
 from torch import nn
 from mamba_ssm import Mamba
@@ -171,8 +170,8 @@ def build_mamba(config):
             self.normalization = nn.LayerNorm(self.mamba_dim)
             self.linear_out = nn.Linear(self.mamba_dim, n_classes)
             self.classification_head = nn.ModuleDict({
-                task_name: nn.Linear(self.mamba_dim, n_classes)
-                for task_name in TASKS.keys()
+                t:nn.Linear(self.mamba_dim, n_classes)
+                for t, n in config['tasks'].items()
             })
 
         def __calculate_mamba_dim__(self):

@@ -5,13 +5,113 @@ import xarray as xr
 import torch
 import numpy as np
 from hmpai.pytorch.normalization import *
-from hmpai.pytorch.utilities import TASKS, add_relative_positional_encoding
-from hmpai.utilities import get_masking_index, MASKING_VALUE
+from hmpai.pytorch.transforms import *
+from hmpai.pytorch.utilities import add_relative_positional_encoding
+from hmpai.utilities import get_masking_index, MASKING_VALUE, get_splits_from_dataset
 from hmpai.data import SAT_CLASSES_ACCURACY
+from hmpai.training import split_participants_str
 from pathlib import Path
 from typing import Callable
 
 global_ds_cache = {}
+
+def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage_path: Path=Path('files/combined_montage.json')):
+    # Determine train/test/val splits
+    all_labels = ["negative"]
+    strategies = []
+    # Strategy > [[train], [val], [test]]
+    splits = {}
+    for desc in descriptors:
+        # TODO: Multiple dataset paths per descriptor
+        ds = xr.open_dataset(desc["path"])
+        
+        strategy = desc["strategy"]
+        all_labels.extend(desc["label"])
+        if desc.get("share_participants_with", None):
+            other_strategy = desc["share_participants_with"]
+            if other_strategy in strategies:
+                splits[strategy] = splits[other_strategy]
+        participants = ds.participant.values.tolist()
+        ds.close()
+        ds_splits = split_participants_str(participants, val=val_size, test=test_size)
+
+        if type(strategy) == list:
+            for strat in strategy:
+                splits[strat] = ds_splits
+            strategies.extend(strategy)
+        else:
+            splits[strategy] = ds_splits
+            strategies.append(strategy)
+    
+    add_negative = True
+    add_pe = True
+    base_info = ["task", "participant", "epoch", "coords", "rt", "RT", "split"]
+    norm_fn = norm_mad_zscore
+    # Build CombinedDataset for train
+    train = []
+    val = []
+    test = []
+    task_class_counts = {}
+    for desc in descriptors:
+        if type(desc["strategy"]) == list:
+            strat = desc["strategy"][0]
+        else:
+            strat = desc["strategy"]
+        subset_cond = desc.get("subset_cond", None)
+        desc_info = desc.get("info_to_keep", [])
+        desc_info = list(set(base_info + desc_info))
+        task_class_counts[strat] = len(desc["label"]) + 1 # Account for negative class
+        rt_key = desc["rt_key"] if "rt_key" in desc else None
+        print(desc)
+        train.append(MultiXArrayProbaDataset(
+            [desc["path"]],
+            labels=all_labels,
+            data_labels=[desc["label"]],
+            info_to_keep=desc_info,
+            participants_to_keep=splits[strat][0],
+            transform=Compose([StartJitterTransform(probability=1.0), EndJitterTransform(probability=1.0), ChannelShuffleTransform(1.0), ChannelDropoutTransform(1.0, 0.1)]),
+            add_negative=add_negative,
+            add_pe=add_pe,
+            subset_cond=subset_cond,
+            normalization_fn=norm_fn,
+            channel_dict_path=montage_path,
+            rt_key=rt_key,
+        ))
+        norm_vars = get_norm_vars_from_global_statistics(train[-1].statistics, norm_fn)
+
+        val.append(MultiXArrayProbaDataset(
+            [desc["path"]],
+            labels=all_labels,
+            data_labels=[desc["label"]],
+            info_to_keep=desc_info,
+            participants_to_keep=splits[strat][1],
+            add_negative=add_negative,
+            add_pe=add_pe,
+            subset_cond=subset_cond,
+            normalization_fn=norm_fn,
+            norm_vars=norm_vars,
+            channel_dict_path=montage_path,
+            rt_key=rt_key,
+        ))
+
+        if len(splits[strat][2]) > 0:
+            test.append(MultiXArrayProbaDataset(
+                [desc["path"]],
+                labels=all_labels,
+                data_labels=[desc["label"]],
+                info_to_keep=desc_info,
+                participants_to_keep=splits[strat][2],
+                add_negative=add_negative,
+                add_pe=add_pe,
+                subset_cond=subset_cond,
+                normalization_fn=norm_fn,
+                norm_vars=norm_vars,
+                channel_dict_path=montage_path,
+                rt_key=rt_key,
+            ))
+
+    return CombinedDataset(train), val, test, task_class_counts, splits
+
 
 class CombinedDataset(Dataset):
     def __init__(self, datasets: list[Dataset]):
@@ -59,6 +159,7 @@ class MultiXArrayProbaDataset(Dataset):
         add_pe: bool = False,
         subset_channels: list = None,
         channel_dict_path: dict = None,
+        rt_key: str = None, # Accounts for 'rt' and 'RT' by default, otherwise provide value
     ):
         """
         Initializes the data generator with the specified parameters.
@@ -137,6 +238,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.cut_samples = cut_samples
         self.add_pe = add_pe
         self.subset_channels = subset_channels
+        self.rt_key = rt_key
         if channel_dict_path is not None:
             with open(channel_dict_path, 'r') as f:
                 import json
@@ -215,8 +317,8 @@ class MultiXArrayProbaDataset(Dataset):
         for file_idx, file_path in enumerate(self.data_paths):
             ds = self._get_dataset(file_path)
             dataset_info[file_idx] = {
-                "offset_before": ds.attrs.get("offset_before", 0),
-                "extra_offset": ds.attrs.get("extra_offset", 0)
+                "offset_start": ds.attrs.get("offset_before", ds.attrs.get("offset_start", 0)),
+                "extra_offset_end": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_end", 0)),
             }
         return dataset_info
 
@@ -295,19 +397,18 @@ class MultiXArrayProbaDataset(Dataset):
         sample = ds.isel(**filter)
         if len(sample.sample) < self.max_length:
             pad_right += self.max_length - len(sample.sample)
-
         # Subset channels
         if self.subset_channels is not None:
             sample = sample.sel(channel=self.subset_channels)
         # TEMPORARY, TODO: REMOVE
-        # sample = sample.isel(channel=slice(0, 63))
-        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        # sample = sample.isel(channels=slice(0, 63))
+        sample_data = torch.tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
                 sample_data, (pad_left, pad_right), mode="constant", value=torch.nan
             )
 
-        sample_label = torch.as_tensor(sample.probabilities.values, dtype=torch.float32)
+        sample_label = torch.tensor(sample.probabilities.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_label = torch.nn.functional.pad(
                 sample_label, (pad_left, pad_right), mode="constant", value=0
@@ -315,15 +416,16 @@ class MultiXArrayProbaDataset(Dataset):
 
         # Convert label probabilities to correct order
         if self.data_labels is not None:
-            ds_labels = self.data_labels[indices[0]]
-            ds_label_indices = [self.labels.index(label) for label in ds_labels]
-            new_labels = torch.zeros(
-                (len(self.labels), sample_label.shape[1]), dtype=torch.float32
-            )
-            for old_idx, new_idx in enumerate(ds_label_indices):
-                # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
-                new_labels[new_idx] = sample_label[old_idx]
-            sample_label = new_labels
+            pass
+            # ds_labels = self.data_labels[indices[0]]
+            # ds_label_indices = [self.labels.index(label) for label in ds_labels]
+            # new_labels = torch.zeros(
+            #     (len(self.labels), sample_label.shape[1]), dtype=torch.float32
+            # )
+            # for old_idx, new_idx in enumerate(ds_label_indices):
+            #     # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
+            #     new_labels[new_idx] = sample_label[old_idx + 1]
+            # sample_label = new_labels
         if self.add_negative:
             sample_label[0, :] = 1 - sample_label.sum(axis=0)
         sample_label = sample_label.transpose(1, 0)
@@ -342,9 +444,13 @@ class MultiXArrayProbaDataset(Dataset):
         sample_data = sample_data[self.skip_samples :, :]
         context = None
         if self.transform is not None:
+            offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0))
+            if offset_before < 0:
+                offset_before = -offset_before
             context = {
-                "start_jitter": ds.attrs.get("offset_before", 0),
-                "end_jitter": ds.attrs.get("extra_offset", 0),
+                "start_jitter": offset_before,
+                "end_jitter": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_end", 0)),
+                "has_pe": self.add_pe,
             }
             sample_data, sample_label, context = self.transform((sample_data, sample_label, context))
 
@@ -356,11 +462,18 @@ class MultiXArrayProbaDataset(Dataset):
         # Add positional encoding
         if self.add_pe:
             # TODO: Might not work for every usecase, but probabilities should not occur across multiple sets so should (?) not matter
-            if 'rt' in sample:
-                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
-                start = sample.attrs.get("offset_before", 0) - self.skip_samples
-            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
+            rt_key = self.rt_key if self.rt_key is not None else 'rt' if 'rt' in sample else 'RT' if 'RT' in sample else None
+            rt = sample[rt_key].item()
+            if rt > 5:
+                # Is in ms, convert to s
+                rt = rt / 1000
+            offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0))
+            if offset_before < 0:
+                offset_before = -offset_before
+            end = int(rt * sample.sfreq.item()) + offset_before - self.skip_samples
+            start = offset_before - self.skip_samples
 
+            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
         if self.keep_info:
             sample_info = {}
             for key in self.info_to_keep:
@@ -382,6 +495,8 @@ class MultiXArrayProbaDataset(Dataset):
                 ])
                 if context is not None and context.get('perm', None) is not None:
                     mapped_channels = mapped_channels[context['perm']]
+                if context is not None and context.get('dropped_channels', None) is not None:
+                    mapped_channels[context['dropped_channels']] = torch.tensor([0.0, 0.0, 0.0])
                 sample_info["coords"] = mapped_channels
             return sample_data, sample_label, [sample_info]
         return sample_data, sample_label
@@ -398,7 +513,7 @@ class MultiXArrayProbaDataset(Dataset):
             "epoch": indices[2],
         }
         sample = ds.isel(**filter)
-        sample_data = torch.as_tensor(sample.data.values, dtype=torch.float32)
+        sample_data = torch.tensor(sample.data.values, dtype=torch.float32)
         if pad_left > 0 or pad_right > 0:
             sample_data = torch.nn.functional.pad(
                 sample_data,
@@ -407,7 +522,7 @@ class MultiXArrayProbaDataset(Dataset):
                 value=torch.nan,
             )
 
-        sample_label = torch.as_tensor(
+        sample_label = torch.tensor(
             sample.probabilities.values, dtype=torch.float32
         ).transpose(1, 0)
 

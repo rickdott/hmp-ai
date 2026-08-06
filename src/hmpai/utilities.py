@@ -19,49 +19,63 @@ def pretty_json(data: dict) -> str:
 
 def get_masking_indices(t, search_value=MASKING_VALUE):
     # Expects a batch as input: [batch_size, time, channels]
-    # Also use this one if epoch is unsqueezed
+    # Exclude the last channel from masking  (excludes PE if present, otherwise doesnt matter)
+    t_excl_last = t[..., :-1]
+
     if isinstance(search_value, float) and math.isnan(search_value):
-        mask = torch.isnan(t[:, :, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     elif torch.is_tensor(search_value) and torch.isnan(search_value):
-        mask = torch.isnan(t[:, :, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     else:
-        mask = t[:, :, 0] == search_value
-    reversed_mask = torch.flip(mask, dims=[1])
-    last_block_start = (~reversed_mask).float().argmax(dim=1)
-    max_indices = mask.shape[1] - last_block_start
-    return max_indices
+        mask = (t_excl_last == search_value).all(dim=-1)
+
+    # argmax finds the first True; falls back to 0 if none found
+    first_mask_index = mask.float().argmax(dim=1)
+
+    # If no masked timestep exists, return the full sequence length instead of 0
+    has_mask = mask.any(dim=1)
+    first_mask_index = torch.where(has_mask, first_mask_index, torch.tensor(mask.shape[1], device=t.device))
+
+    return first_mask_index
 
 
 def get_masking_index(t, search_value=MASKING_VALUE):
     # Expects a single epoch as input: [time, channels]
+    # Exclude the last channel from masking check
+    t_excl_last = t[:, :-1]
+
     if isinstance(search_value, float) and math.isnan(search_value):
-        mask = torch.isnan(t[:, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     elif torch.is_tensor(search_value) and torch.isnan(search_value):
-        mask = torch.isnan(t[:, 0])
+        mask = torch.isnan(t_excl_last).all(dim=-1)
     else:
-        mask = t[:, 0] == search_value
-    reversed_mask = torch.flip(mask, dims=[0])
-    last_block_start = (~reversed_mask).float().argmax(dim=0)
-    max_index = mask.shape[0] - last_block_start
-    return max_index
+        mask = (t_excl_last == search_value).all(dim=-1)
+
+    first_mask_index = mask.float().argmax(dim=0)
+
+    # If no masked timestep exists, return the full sequence length instead of 0
+    has_mask = mask.any()
+    first_mask_index = first_mask_index if has_mask else torch.tensor(mask.shape[0], device=t.device)
+
+    return first_mask_index
 
 
 def get_masking_indices_xr(data: xr.DataArray, search_value=MASKING_VALUE):
     # Check if search_value is NaN
     if isinstance(search_value, float) and np.isnan(search_value):
         mask = np.isnan(
-            data.isel(channel=0)
+            data.isel(channels=0)
         )  # Select the first channel and apply NaN mask
     else:
         mask = (
-            data.isel(channel=0) == search_value
+            data.isel(channels=0) == search_value
         )  # Comparison for non-NaN search values
 
     # Reverse mask along the time dimension
-    reversed_mask = mask.isel(sample=slice(None, None, -1))
+    reversed_mask = mask.isel(samples=slice(None, None, -1))
 
     # Find the first occurrence of non-mask values in the reversed mask
-    last_block_start = (~reversed_mask).argmax(dim="sample")
+    last_block_start = (~reversed_mask).argmax(dim="samples")
 
     # Calculate the max indices based on the mask shape and block start positions
     max_indices = (
@@ -110,23 +124,56 @@ def set_seaborn_style():
     #         ]
     #     )
     # )
+
+    # sns.set_palette(
+    #     sns.color_palette(
+    #         palette=[
+    #             # existing six
+    #             "#4477aa",
+    #             "#66ccee",
+    #             "#228833",
+    #             "#ccbb44",
+    #             "#ee6677",
+    #             "#aa3377",
+    #             # extension
+    #             "#44aa99",
+    #             "#aa7744",
+    #             "#ddaa33",
+    #             "#999933",
+    #             "#bb5566",
+    #             "#7777bb",
+    #         ]
+    #     )
+    # )
+    # sns.set_palette(sns.color_palette(
+    #     palette=[
+    #         (235/255, 172/255, 35/255),
+    #         (184/255, 0/255, 88/255),
+    #         (0/255, 140/255, 249/255),
+    #         (0/255, 110/255, 0/255),
+    #         (0/255, 187/255, 173/255),
+    #         (209/255, 99/255, 230/255),
+    #         (178/255, 69/255, 2/255),
+    #         (255/255, 146/255, 135/255),
+    #         (89/255, 84/255, 214/255),
+    #         (0/255, 198/255, 248/255),
+    #         (135/255, 133/255, 0/255),
+    #         (0/255, 167/255, 108/255),
+    #         (189/255, 189/255, 189/255),
+    #     ]
+    # ))
+    
     sns.set_palette(
         sns.color_palette(
             palette=[
-                # existing six
-                "#4477aa",
-                "#66ccee",
-                "#228833",
-                "#ccbb44",
-                "#ee6677",
-                "#aa3377",
-                # extension
-                "#44aa99",
-                "#aa7744",
-                "#ddaa33",
-                "#999933",
-                "#bb5566",
-                "#7777bb",
+                "#E69F00",  # Orange
+                "#56B4E9",  # Sky Blue
+                "#009E73",  # Bluish Green
+                "#CC79A7",  # Reddish Purple
+                "#0072B2",  # Blue
+                "#D55E00",  # Vermillion
+                "#F0E442",  # Yellow
+
             ]
         )
     )
@@ -169,8 +216,32 @@ def format_stats_latex(model):
 
 def adjust_offset(epoch_data: xr.Dataset, hmp_offset: float) -> xr.Dataset:
     sfreq = epoch_data.sfreq
-    tmp_offset = epoch_data.offset
+    if 'offset' in epoch_data.attrs:
+        offset_name = 'offset'
+    else:
+        offset_name = 'offset_end'
+    tmp_offset = epoch_data.attrs[offset_name]
     hmp_offset = int(np.rint(hmp_offset * sfreq)) # 0.05 = 50 ms worth of samples for HMP after response, remainder is not used in HMP
-    epoch_data = epoch_data.assign_attrs({'offset': hmp_offset, 'extra_offset': tmp_offset - hmp_offset})
+    epoch_data = epoch_data.assign_attrs({offset_name: hmp_offset, f'extra_{offset_name}': tmp_offset - hmp_offset})
 
     return epoch_data
+
+
+def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
+    split = xr.DataArray(np.full(ds.sizes["participant"], "unknown", dtype=object),
+                         dims=["participant"],
+                         coords={"participant": ds["participant"]})
+    split.loc[splits[0]] = "train"
+    split.loc[splits[1]] = "val"
+    split.loc[splits[2]] = "test"
+
+    ds = ds.assign_coords(split=split)
+    return ds
+
+
+def get_splits_from_dataset(ds: xr.Dataset) -> list[np.ndarray]:
+    train_split = ds.participant.where(ds.split == 'train', drop=True).values
+    val_split = ds.participant.where(ds.split == 'val', drop=True).values
+    test_split = ds.participant.where(ds.split == 'test', drop=True).values
+
+    return [train_split, val_split, test_split]

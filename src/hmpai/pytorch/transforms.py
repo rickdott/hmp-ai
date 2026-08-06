@@ -1,5 +1,7 @@
+import random
+
 import torch
-from hmpai.utilities import get_masking_index
+from hmpai.utilities import MASKING_VALUE, get_masking_index
 
 
 class StartJitterTransform(object):
@@ -33,10 +35,12 @@ class StartJitterTransform(object):
 
         if torch.rand((1,)).item() > self.probability:
             return data, labels, context
-
+        
         offset_before = context['start_jitter'] if context and 'start_jitter' in context else self.offset_before
+        if offset_before < 0:
+            offset_before = -offset_before
         offset = torch.randint(offset_before, (1,))
-
+        
         cropped_data = data[offset:, :]
         cropped_labels = labels[offset:, :]
 
@@ -94,7 +98,7 @@ class EndJitterTransform(object):
 
         if torch.rand((1,)).item() > self.probability:
             return data, labels, context
-
+        
         extra_offset = context['end_jitter'] if context and 'end_jitter' in context else self.extra_offset
         offset = torch.randint(extra_offset, (1,))
 
@@ -146,3 +150,73 @@ class ChannelShuffleTransform(object):
         shuffled_data = data[:, perm]
 
         return shuffled_data, labels, context
+    
+
+class ChannelDropoutTransform(object):
+    def __init__(self, probability=1.0, ratio=0.1):
+        self.probability = probability
+        self.ratio = ratio
+
+    def __call__(self, data_in):
+        data = data_in[0]
+        labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
+        
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels, context
+
+        n_channels = data.shape[1]
+        n_to_mask = random.randint(0, int(n_channels * self.ratio))
+        if n_to_mask > 0:
+            channels_to_mask = random.sample(range(n_channels), n_to_mask)
+            if context is not None:
+                context['dropped_channels'] = channels_to_mask
+            data[:, channels_to_mask] = torch.nan
+
+        return data, labels, context
+    
+class RandomLowPassTransform(object):
+    def __init__(self, sfreq=200, cutoffs=(30, 40, 50), probability=1.0):
+        self.sfreq = sfreq
+        self.cutoffs = cutoffs
+        self.probability = probability
+
+    def __call__(self, data_in):
+        data = data_in[0]   # (T, C)
+        labels = data_in[1]
+        context = data_in[2] if len(data_in) > 2 else None
+
+        if torch.rand((1,)).item() > self.probability:
+            return data, labels, context
+
+        cutoff = self.cutoffs[torch.randint(len(self.cutoffs), (1,)).item()]
+        nyquist = self.sfreq / 2.0
+
+        # Skip if cutoff >= nyquist (no filtering needed)
+        if cutoff >= nyquist:
+            return data, labels, context
+
+        # Find valid (non-masked) region
+        end_idx = get_masking_index(data, search_value=torch.nan)
+        valid = data[:end_idx, :]  # (T_valid, C)
+
+        # Identify real EEG channels (not PE, not masked)
+        ch_valid = ~torch.isnan(valid[0, :])  # channels that aren't NaN at t=0
+        # Exclude PE channel (always last) if present
+        if context is not None and context.get('has_pe', False):
+            ch_valid[-1] = False
+        
+        eeg = valid[:, ch_valid]
+
+        # FFT, mask, iFFT on EEG channels only
+        spectrum = torch.fft.rfft(eeg, dim=0)
+        n_freqs = spectrum.shape[0]
+        freqs = torch.linspace(0, nyquist, n_freqs)
+        rolloff_width = 2.0
+        mask = 0.5 * (1.0 - torch.tanh((freqs - cutoff) / rolloff_width))
+        mask = mask.unsqueeze(1)
+        filtered = torch.fft.irfft(spectrum * mask, n=eeg.shape[0], dim=0)
+
+        data[:end_idx, ch_valid] = filtered
+
+        return data, labels, context
