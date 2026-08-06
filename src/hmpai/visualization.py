@@ -196,19 +196,19 @@ def plot_tertile_split_single(
 
     # Calculate tertiles per participant, over conditions
     if calc_tertile_over_condition:
-        data["condition"] = data.groupby("participant")[column].transform(
+        data["condition"] = data.groupby("recording")[column].transform(
             lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"])
         )
 
     for i, condition in enumerate(conditions):
         data_subset = data[data[cue_var] == condition]
         if not calc_tertile_over_condition:
-            data_subset["condition"] = data_subset.groupby("participant")[
+            data_subset["condition"] = data_subset.groupby("recording")[
                 column
             ].transform(lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"]))
         # Calculate P(response == 1), per participant and per condition
         participant_ratios = (
-            data_subset.groupby(["participant", "condition"], observed=True)
+            data_subset.groupby(["recording", "condition"], observed=True)
             .response.mean()
             .reset_index()
         )
@@ -243,12 +243,12 @@ def plot_emg_tertile_split(data, axes, conditions, cue_var="SAT"):
     column = "confirmation" + "_ratio"
     for i, condition in enumerate(conditions):
         data_subset = data[data[cue_var] == condition]
-        data_subset["condition"] = data_subset.groupby("participant")[column].transform(
+        data_subset["condition"] = data_subset.groupby("recording")[column].transform(
             lambda x: pd.qcut(x, q=3, labels=["Low", "Medium", "High"])
         )
         # Calculate P(response == 1), per participant and per condition
         participant_ratios = (
-            data_subset.groupby(["participant", "condition"], observed=True)
+            data_subset.groupby(["recording", "condition"], observed=True)
             .EMG_group.mean()
             .reset_index()
         )

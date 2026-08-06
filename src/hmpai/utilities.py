@@ -1,3 +1,4 @@
+import mne
 import numpy as np
 import json
 import math
@@ -6,6 +7,8 @@ import torch
 import xarray as xr
 import seaborn as sns
 import matplotlib
+
+import hmp
 
 # Value that means data should not be used in training
 MASKING_VALUE = 999
@@ -228,9 +231,9 @@ def adjust_offset(epoch_data: xr.Dataset, hmp_offset: float) -> xr.Dataset:
 
 
 def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
-    split = xr.DataArray(np.full(ds.sizes["participant"], "unknown", dtype=object),
-                         dims=["participant"],
-                         coords={"participant": ds["participant"]})
+    split = xr.DataArray(np.full(ds.sizes["recording"], "unknown", dtype=object),
+                         dims=["recording"],
+                         coords={"recording": ds["recording"]})
     split.loc[splits[0]] = "train"
     split.loc[splits[1]] = "val"
     split.loc[splits[2]] = "test"
@@ -240,8 +243,40 @@ def add_splits_to_dataset(ds: xr.Dataset, splits: np.ndarray) -> xr.Dataset:
 
 
 def get_splits_from_dataset(ds: xr.Dataset) -> list[np.ndarray]:
-    train_split = ds.participant.where(ds.split == 'train', drop=True).values
-    val_split = ds.participant.where(ds.split == 'val', drop=True).values
-    test_split = ds.participant.where(ds.split == 'test', drop=True).values
+    train_split = ds.recording.where(ds.split == 'train', drop=True).values
+    val_split = ds.recording.where(ds.split == 'val', drop=True).values
+    test_split = ds.recording.where(ds.split == 'test', drop=True).values
 
     return [train_split, val_split, test_split]
+
+
+def read_mne_epochs(pfiles, montage='biosemi64', preprocessing_kwargs=None, subj_name=None, cpus=1):
+    """Read MNE epochs from pfiles and return as xarray Dataset."""
+    if preprocessing_kwargs is None:
+        preprocessing_kwargs = {}
+
+    # Read MNE epochs
+    epoch_data, info = hmp.io.read_mne_epochs(pfiles, montage=montage, preprocessing_kwargs=preprocessing_kwargs, subj_name=subj_name, cpus=cpus)
+
+    epoch_data.attrs['mne_info'] = info
+
+    return epoch_data
+
+
+def save_hmp_epochs(epoch_data: xr.Dataset, path: str):
+    if 'mne_info' in epoch_data.attrs:
+        info = epoch_data.attrs['mne_info']
+        if isinstance(info, mne.Info):
+            info_dict = info.to_json_dict()
+            epoch_data.attrs['mne_info'] = json.dumps(info_dict)
+    epoch_data.to_netcdf(path, engine="netcdf4")
+
+
+def load_hmp_epochs(path):
+    epoch_data = xr.load_dataset(path)
+    if 'mne_info' in epoch_data.attrs:
+        info_dict = json.loads(epoch_data.attrs['mne_info'])
+        info = mne.Info.from_json_dict(info_dict)
+        epoch_data.attrs['mne_info'] = info
+
+    return epoch_data

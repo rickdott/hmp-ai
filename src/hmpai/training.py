@@ -15,7 +15,7 @@ def split_participants_into_folds(
     participants = []
     for data_path in data_paths:
         with xr.open_dataset(data_path) as ds:
-            participants.extend(ds.participant.values.tolist())
+            participants.extend(ds.recording.values.tolist())
 
     if participants_to_use is not None:
         participants = [p for p in participants if p in participants_to_use]
@@ -40,7 +40,7 @@ def split_participants(
     participants = []
     for data_path in data_paths:
         with xr.open_dataset(data_path) as ds:
-            participants.extend(ds.participant.values)
+            participants.extend(ds.recording.values)
     # Ensure no duplication of participants
     participants = list(dict.fromkeys(participants))
     # Find amounts of train and test/val participants
@@ -60,7 +60,7 @@ def split_participants_custom(data_paths: list[str | Path], val: float, test: fl
     participants = []
     for data_path in data_paths:
         with xr.open_dataset(data_path) as ds:
-            participants.extend(ds.participant.values)
+            participants.extend(ds.recording.values)
     # Ensure no duplication of participants
     participants = list(dict.fromkeys(participants))
 
@@ -124,11 +124,11 @@ def get_folds(
         list[np.ndarray]: List of folds
     """
     # Make sure #participants is divisible by k
-    n_participants = len(data.participant)
+    n_participants = len(data.recording)
 
 
     # Divide data into k folds
-    participants = data.participant.values.copy()
+    participants = data.recording.values.copy()
     np.random.shuffle(participants)
     folds = np.array_split(participants, k)
     return folds

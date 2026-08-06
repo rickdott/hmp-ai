@@ -73,7 +73,7 @@ def compute_global_statistics(data_paths, participants):
         with xr.open_dataset(file_path) as ds:
             participants_in_data = [
                 index
-                for index, value in enumerate(ds.participant.values.tolist())
+                for index, value in enumerate(ds.recording.values.tolist())
                 if value in participants
             ]
             ds = ds.isel(participant=participants_in_data)

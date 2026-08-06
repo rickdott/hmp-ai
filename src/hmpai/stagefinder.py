@@ -7,9 +7,9 @@ import numpy as np
 from pathlib import Path
 from hmpai.utilities import get_masking_indices_xr
 from hmpai.behaviour.sat2 import read_behavioural_info, merge_data_xr
-from typing import Type
+from typing import Callable, Type
 import pickle
-from hmpai.transformers import ProjCustomKeepData, ProjPCAKeepData
+from hmpai.projectors import defaultKeepData
 from graphlib import TopologicalSorter
 
 
@@ -24,7 +24,8 @@ class StageFinder:
         estimates: (
             list[Path | str | xr.DataArray] | None
         ) = None,  # Must be equal length to conditions and models
-        offset_after_end_hmp: float | None = None,
+        offsets_hmp: tuple[float, float] = (0, 0), # Offsets to be used in base_data
+        offsets_mamba: tuple[float, float] = (0, 0), # Offsets to be used in data that will be labelled, will be added to offsets_HMP to create final offsets (past HMP)
         preprocessing_kwargs: (
             dict | None
         ) = None,  # Parameters used in `hmp.preprocessing.Standard`, provide pca weights here as 'weights' and # PCA components as 'n_comp'
@@ -49,11 +50,11 @@ class StageFinder:
         if len(self.conditions) == 0:
             if len(self.models) > 0:
                 self.conditions = ["No condition"]
-        if 'offset_end' in self.preprocessing_kwargs and offset_after_end_hmp is not None and offset_after_end_hmp > self.preprocessing_kwargs['offset_end']:
-            raise ValueError(
-                "offset_after_end_hmp cannot be larger than preprocessing_kwargs['offset_end']"
-            )
-        self.offset_after_end_hmp = offset_after_end_hmp
+
+        self.offsets_hmp, self.offsets_mamba = offsets_hmp, offsets_mamba
+        if offsets_hmp is not None:
+            if offsets_mamba is not None:
+                self.offsets_mamba = tuple(a + b for a, b in zip(offsets_hmp, offsets_mamba))
 
         # Load required data, making sure everything is in memory
         if type(epoched_data) is str or type(epoched_data) is Path:
@@ -75,20 +76,18 @@ class StageFinder:
 
         # Preprocess, split after if necessary per condition
         if len(self.models) == 0 and len(self.estimates) == 0:
-            # First preprocess using only offset_end_hmp
+            # First preprocess using only offsets_hmp
             first_run_kwargs = self.preprocessing_kwargs.copy()
-            del first_run_kwargs['offset_start']
-            if offset_after_end_hmp is not None:
-                first_run_kwargs['offset_end'] = offset_after_end_hmp
-            else:
-                del first_run_kwargs['offset_end']
+            first_run_kwargs["offsets"] = offsets_hmp
+
             self.first_run_kwargs = first_run_kwargs
-            self.preprocessed = ProjPCAKeepData(self.epoched_data, **first_run_kwargs)
+            self.preprocessed = defaultKeepData(self.epoched_data, **first_run_kwargs)
             self.epoched_data_no_offset = self.preprocessed.data_epoched
 
             second_run_kwargs = self.preprocessing_kwargs.copy()
             del second_run_kwargs['n_comp']
-            full_prep = ProjCustomKeepData(self.epoched_data, weights=self.preprocessed.weights, **second_run_kwargs)
+            second_run_kwargs["offsets"] = offsets_mamba
+            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, **second_run_kwargs)
             self.epoched_data = full_prep.data_epoched
             self.second_run_kwargs = second_run_kwargs
 
@@ -97,59 +96,51 @@ class StageFinder:
         model_class: Type[hmp.models.base.BaseModel],
         model_kwargs: dict = dict(),
         condition_variable: str = "condition",
-        condition_method: str = "equal",
-        event_width: int = 50,
+        condition_method: Callable = np.equal,
+        event_width: int = None,
         fit_kwargs: dict = dict(),
     ):
         # Optional if models and estimates were provided, will (re)-fill models & estimates lists
-        self.event_properties = hmp.patterns.HalfSine.create_expected(
-            sfreq=self.epoched_data.sfreq, width=event_width
-        )
+        if model_class is hmp.models.CumulativeMethod:
+            if event_width is None:
+                raise ValueError("Provide event_width when using CumulativeMethod")
+            self.event_properties = hmp.patterns.HalfSine(
+                width=event_width
+            )
         n_events = None
         if model_class == hmp.models.EventModel:
             if "n_events" not in model_kwargs:
                 raise ValueError("Provide n_events in model_kwargs when using EventModel, as a dictionary with conditions as keys if fitting multiple conditions")
             n_events = model_kwargs.pop("n_events")
 
-
         if len(self.conditions) == 0:
             if n_events is not None:
                 model_kwargs['n_events'] = n_events
-                model = model_class(self.event_properties, **model_kwargs)
+                model = model_class(**model_kwargs)
                 model_kwargs.pop('n_events')
+                pattern_data = self.preprocessed
             else:
                 model = model_class(self.event_properties, **model_kwargs)
+                pattern_data = hmp.patterndata.PatternData.from_basedata(self.preprocessed, pattern=self.event_properties)
 
-            trial_data = hmp.trialdata.TrialData.from_transformer(
-                transformed=self.preprocessed.data,
-                pattern=model.pattern.template,
-            )
-            _, estimates = model.fit_transform(trial_data, **fit_kwargs)
+            _, estimates = model.fit_transform(pattern_data, **fit_kwargs)
             self.models.append(model)
             self.estimates.append((estimates, self.epoched_data_no_offset))
             self.conditions.append("No condition")
         else:
             for condition in self.conditions:
                 print(f"Fitting model for condition: {condition}")
-                preprocessed_subset = hmp.utils.condition_selection(
-                    self.preprocessed.data,
-                    condition_string=condition,
-                    variable=condition_variable,
-                    method=condition_method,
-                )
+                preprocessed_subset = self.preprocessed.select_coord(condition, condition_variable, condition_method)
                 if n_events is not None:
                     model_kwargs['n_events'] = n_events[condition]
-                    model = model_class(self.event_properties, **model_kwargs)
+                    model = model_class(**model_kwargs)
                     model_kwargs.pop('n_events')
+                    pattern_data = self.preprocessed
                 else:
                     model = model_class(self.event_properties, **model_kwargs)
-
-                trial_data = hmp.trialdata.TrialData.from_transformer(
-                    transformed=preprocessed_subset,
-                    pattern=model.pattern.template,
-                )
+                    pattern_data = hmp.patterndata.PatternData.from_basedata(preprocessed_subset, pattern=self.event_properties)
                 
-                _, estimates = model.fit_transform(trial_data, **fit_kwargs)
+                _, estimates = model.fit_transform(pattern_data, **fit_kwargs)
                 self.models.append(model)
                 self.estimates.append((estimates, self.epoched_data_no_offset))
 
@@ -177,7 +168,7 @@ class StageFinder:
         if all_data is not None:
             kwargs = self.preprocessing_kwargs.copy()
             del kwargs["n_comp"]
-            full_prep = ProjCustomKeepData(all_data, **kwargs)
+            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, **kwargs)
 
             all_data = full_prep.data_epoched
         data = all_data if all_data is not None else self.epoched_data
@@ -196,7 +187,7 @@ class StageFinder:
 
         prob_da = xr.DataArray(
             all_labels,
-            dims=("participant", "epoch", "label", "sample"),
+            dims=("recording", "epoch", "label", "sample"),
             name="probability",
         )
         if all_data is not None:
@@ -233,10 +224,10 @@ class StageFinder:
 
         # Vectorized preprocessing of estimates
         probs = estimate.unstack()
-        pars = [participant for participant in data.participant.values if participant in probs.participant.values]
-        probs = probs.sel(participant=pars)
+        pars = [subj for subj in data.recording.values if subj in probs.recording.values]
+        probs = probs.sel(recording=pars)
         dims = probs.dims
-        participants = probs.participant.values
+        participants = probs.recording.values
         probs = probs.transpose(dims[2], dims[3], dims[1], dims[0])
 
         # Pre-compute epoch mapping for faster lookups
@@ -253,10 +244,10 @@ class StageFinder:
         probs_data = probs.data  # Convert to numpy for speed
         valid_mask = ~np.isnan(probs_data).any(
             axis=-1
-        )  # Shape: (participant, epoch, event)
+        )  # Shape: (recording, epoch, event)
 
         # Pre-compute padding parameters
-        offset_start = np.rint(-self.preprocessing_kwargs.get("offset_start", 0) * data.attrs['sfreq']).astype(int)
+        offset_start = np.rint(self.preprocessing_kwargs.get("offsets_mamba", (0, 0))[0] * data.attrs['sfreq']).astype(int)
 
         # Maybe this has to be reintroduced later? Dont know if there was a reason for it
         # Seems like right-padding to target_length already handles this
@@ -267,7 +258,7 @@ class StageFinder:
 
         # Vectorized trial processing
         for i, participant in enumerate(participants):
-            par_i = np.where(data.participant.values == participant)[0][0]
+            par_i = np.where(data.recording.values == participant)[0][0]
             participant_data = probs_data[i]  # Shape: (epoch, event, sample)
             participant_valid = valid_mask[i]  # Shape: (epoch, event)
 
@@ -406,13 +397,21 @@ class StageFinder:
             self.estimates.append((xr_probs, estim_data))
 
     def _add_offset_info(self, data):
-        offset_start = np.rint(self.preprocessing_kwargs.get("offset_start", 0) * data.attrs['sfreq']).astype(int)
-        offset_end = np.rint(self.preprocessing_kwargs.get("offset_end", 0) * data.attrs['sfreq']).astype(int)
+        # HMP offsets
+        offset_start = np.rint(self.offsets_mamba[0] * data.attrs['sfreq']).astype(int)
+        offset_end = np.rint(self.offsets_mamba[1] * data.attrs['sfreq']).astype(int)
 
         data.attrs['offset_start'] = offset_start
         data.attrs['offset_end'] = offset_end
 
-        if self.offset_after_end_hmp is not None:
-            offset_after_end_hmp = np.rint(self.offset_after_end_hmp * data.attrs['sfreq']).astype(int)
+        if self.offsets_mamba != (0, 0):
+            offset_after_end_hmp = np.rint(self.offsets_hmp[1] * data.attrs['sfreq']).astype(int)
             data.attrs['extra_offset_end'] = offset_end - offset_after_end_hmp
             data.attrs['offset_end'] = offset_after_end_hmp
+
+            offset_before_start_hmp = np.rint(self.offsets_hmp[0] * data.attrs['sfreq']).astype(int)
+            data.attrs['extra_offset_start'] = offset_start - offset_before_start_hmp
+            data.attrs['offset_start'] = offset_before_start_hmp
+        else:
+            data.attrs['extra_offset_end'] = 0
+            data.attrs['extra_offset_start'] = 0

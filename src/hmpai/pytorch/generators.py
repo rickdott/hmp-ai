@@ -31,7 +31,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
             other_strategy = desc["share_participants_with"]
             if other_strategy in strategies:
                 splits[strategy] = splits[other_strategy]
-        participants = ds.participant.values.tolist()
+        participants = ds.recording.values.tolist()
         ds.close()
         ds_splits = split_participants_str(participants, val=val_size, test=test_size)
 
@@ -45,7 +45,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
     
     add_negative = True
     add_pe = True
-    base_info = ["task", "participant", "epoch", "coords", "rt", "RT", "split"]
+    base_info = ["task", "recording", "epoch", "coords", "rt", "RT", "split"]
     norm_fn = norm_mad_zscore
     # Build CombinedDataset for train
     train = []
@@ -296,7 +296,7 @@ class MultiXArrayProbaDataset(Dataset):
             if len(self.participants_to_keep) > 0:
                 participants_in_data = [
                     index
-                    for index, value in enumerate(ds.participant.values.tolist())
+                    for index, value in enumerate(ds.recording.values.tolist())
                     if value in self.participants_to_keep
                 ]
                 index_map.extend(
@@ -391,7 +391,7 @@ class MultiXArrayProbaDataset(Dataset):
         pad_left = 0
         pad_right = 0
         filter = {
-            "participant": indices[1],
+            "recording": indices[1],
             "epoch": indices[2],
         }
         sample = ds.isel(**filter)
@@ -509,7 +509,7 @@ class MultiXArrayProbaDataset(Dataset):
         pad_left = 0
         pad_right = 0
         filter = {
-            "participant": indices[1],
+            "recording": indices[1],
             "epoch": indices[2],
         }
         sample = ds.isel(**filter)
