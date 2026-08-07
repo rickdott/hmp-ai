@@ -371,29 +371,23 @@ class StageFinder:
     def estimate(self, data, condition_variable=None, condition_method=None):
         kwargs = self.first_run_kwargs.copy()
         del kwargs["n_comp"]
-
-        preprocessed = ProjCustomKeepData(data, weights=self.preprocessed.weights, **kwargs)
+        preprocessed = defaultKeepData(data, weights=self.preprocessed.projector.weights, **kwargs)
         estim_data = preprocessed.data_epoched
-        # full_prep = ProjCustomKeepData(data, weights=preprocessed.weights, **self.second_run_kwargs)
-        # full_data = full_prep.data_epoched
 
         for i, condition in enumerate(self.conditions):
             print(f"Estimating condition: {condition}")
             if condition != 'No condition':
-                preprocessed_subset = hmp.utils.condition_selection(
-                    preprocessed.data,
-                    condition_string=condition,
-                    variable=condition_variable,
-                    method=condition_method,
-                )
+                preprocessed_subset = preprocessed.select_coord(condition, condition_variable, condition_method)
             else:
                 preprocessed_subset = preprocessed.data
             model = self.models[i]
-            trial_data = hmp.trialdata.TrialData.from_transformer(
-                transformed=preprocessed_subset,
-                pattern=model.pattern.template,
-            )
-            lkhs, xr_probs = model.transform(trial_data)
+
+            if type(model) is hmp.models.CumulativeMethod:
+                pattern_data = hmp.patterndata.PatternData.from_basedata(preprocessed_subset, pattern=self.event_properties)
+            else:
+                pattern_data = preprocessed_subset
+
+            lkhs, xr_probs = model.transform(pattern_data)
             self.estimates.append((xr_probs, estim_data))
 
     def _add_offset_info(self, data):

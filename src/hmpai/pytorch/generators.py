@@ -8,7 +8,6 @@ from hmpai.pytorch.normalization import *
 from hmpai.pytorch.transforms import *
 from hmpai.pytorch.utilities import add_relative_positional_encoding
 from hmpai.utilities import get_masking_index, MASKING_VALUE, get_splits_from_dataset
-from hmpai.data import SAT_CLASSES_ACCURACY
 from hmpai.training import split_participants_str
 from pathlib import Path
 from typing import Callable
@@ -142,7 +141,7 @@ class MultiXArrayProbaDataset(Dataset):
         self,
         data_paths: list[str | Path],
         participants_to_keep: list = None,
-        labels: list[str] = SAT_CLASSES_ACCURACY,
+        labels: list[str] = [],
         info_to_keep: list[str] = [],
         transform: Compose = None,
         normalization_fn: Callable[
@@ -167,7 +166,7 @@ class MultiXArrayProbaDataset(Dataset):
         Args:
             data_paths (list[str | Path]): List of paths to the datasets.
             participants_to_keep (list, optional): List of participants to include. Defaults to None (uses all participants).
-            labels (list[str], optional): List of labels to use. Defaults to SAT_CLASSES_ACCURACY.
+            labels (list[str], optional): List of labels to use. Defaults to an empty list.
             info_to_keep (list[str], optional): List of additional information to retain. Defaults to an empty list.
             transform (Compose, optional): Transformation to apply to the data. Defaults to None.
             normalization_fn (Callable[[torch.Tensor, float, float], torch.Tensor], optional):
