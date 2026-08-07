@@ -87,8 +87,9 @@ class StageFinder:
             second_run_kwargs = self.preprocessing_kwargs.copy()
             del second_run_kwargs['n_comp']
             second_run_kwargs["offsets"] = offsets_mamba
-            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, **second_run_kwargs)
+            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, for_mamba=True, **second_run_kwargs)
             self.epoched_data = full_prep.data_epoched
+            del full_prep
             self.second_run_kwargs = second_run_kwargs
 
     def fit_model(
@@ -168,7 +169,7 @@ class StageFinder:
         if all_data is not None:
             kwargs = self.preprocessing_kwargs.copy()
             del kwargs["n_comp"]
-            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, **kwargs)
+            full_prep = defaultKeepData(all_data, weights=self.preprocessed.projector.weights, **kwargs)
 
             all_data = full_prep.data_epoched
         data = all_data if all_data is not None else self.epoched_data

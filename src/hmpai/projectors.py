@@ -16,7 +16,8 @@ def defaultKeepData(
             common_variance: bool = False,
             standardize_recording: bool = False,
             weights: xr.DataArray | None = None,
-            verbose: bool = True
+            verbose: bool = True,
+            for_mamba: bool = False
     ):
     """
     Create a BaseData instance from data from io.
@@ -91,10 +92,11 @@ def defaultKeepData(
 
     # Keep epoched and cropped data for HMP-AI
     attrs = base_data.data.attrs
-    base_data.data_epoched = base_data.data.copy()
-    base_data.data_epoched = base_data.data_epoched.unstack().to_dataset(name="data").transpose("recording", "epoch", "channel", "sample")
+    base_data.data_epoched = base_data.data.unstack().to_dataset(name="data").transpose("recording", "epoch", "channel", "sample")
     base_data.data_epoched.attrs = attrs
 
+    if for_mamba:
+        return base_data
     if weights is not None:
         # Use custom weights for projection
         base_data.project(Custom(weights))
