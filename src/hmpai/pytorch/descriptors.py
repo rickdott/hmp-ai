@@ -32,7 +32,8 @@ DESC_PRP2 = {
 
 DESC_SAT1 = {
     "path": DATA_PATH / "sat1" / "preprocessed_500hz" / "labelled_data_200hz.nc",
-    "label": ["encoding", "decision", "confirmation", "response"],
+    # "label": ["encoding", "decision", "confirmation", "response"],
+    "label": ["sat1_op1", "sat1_op2", "sat1_op3"],
     "strategy": "sat1",
     "info_to_keep": [],
     # "subset_cond": ("condition", "equal", "long") # No need to subset force == high since we do that when estimating
@@ -44,39 +45,47 @@ DESC_SAT1 = {
 #     "info_to_keep": ["confidence"],
 # }
 DESC_CONF1 = {
-    "path": DATA_PATH / "conf1/preprocessing" / "labelled_data_200hz.nc",
-    "label": ["conf1_op1", "conf1_op2", "conf1_op3", "conf1_op4", "conf1_op5"],
+    "path": DATA_PATH / "conf1/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf1_op1", "conf1_op2", "conf1_op3", "conf1_op4", "conf1_op5", "conf1_op6"],
     "strategy": "conf1",
     "info_to_keep": ["confidence", "accuracy", "motionCoherence", "motionDirection", "directionDetected"],
 }
 
 DESC_CONF2 = {
-    "path": DATA_PATH / "conf2/preprocessing" / "labelled_data_200hz.nc",
-    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4", "conf2_op5"],
+    "path": DATA_PATH / "conf2/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4"],
     "strategy": "conf2",
     "info_to_keep": ["confidenceRating", "trialOutcome", "contrast", "absoluteContrast"],
 }
 
 DESC_CONF3_EXP1 = {
-    "path": DATA_PATH / "conf3_exp1/preprocessing" / "labelled_data_200hz.nc",
-    "label": ["conf3_exp1_op1", "conf3_exp1_op2", "conf3_exp1_op3", "conf3_exp1_op4", "conf3_exp1_op5"],
+    "path": DATA_PATH / "conf3_exp1/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf3_exp1_op1", "conf3_exp1_op2", "conf3_exp1_op3", "conf3_exp1_op4", "conf3_exp1_op5", "conf3_exp1_op6"],
     "strategy": "conf3_exp1",
     "info_to_keep": ["confidence", "accuracy", "motionCoherence", "motionDirection", "directionDetected"],
 }
 
 DESC_CONF3_EXP2 = {
-    "path": DATA_PATH / "conf3_exp2/preprocessing" / "labelled_data_200hz.nc",
-    "label": ["conf3_exp2_op1", "conf3_exp2_op2", "conf3_exp2_op3", "conf3_exp2_op4", "conf3_exp2_op5"],
+    "path": DATA_PATH / "conf3_exp2/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf3_exp2_op1", "conf3_exp2_op2", "conf3_exp2_op3", "conf3_exp2_op4", "conf3_exp2_op5", "conf3_exp2_op6"],
     "strategy": "conf3_exp2",
     "info_to_keep": ["conf", "acc", "motionNE", "motionPE", "motionDIR", "resp"],
 }
 
 DESC_CONF3_EXP3 = {
-    "path": DATA_PATH / "conf3_exp3/preprocessing" / "labelled_data_200hz.nc",
-    "label": ["conf3_exp3_op1", "conf3_exp3_op2", "conf3_exp3_op3", "conf3_exp3_op4", "conf3_exp3_op5"],
+    "path": DATA_PATH / "conf3_exp3/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf3_exp3_op1", "conf3_exp3_op2", "conf3_exp3_op3", "conf3_exp3_op4", "conf3_exp3_op5", "conf3_exp3_op6"],
     "strategy": "conf3_exp3",
     "info_to_keep": ["RTchoice", "confidence", "accuracy", "motionCoherence", "motionDirection", "directionDetected"],
     "rt_key": "RTchoice",
+}
+
+DESC_CONF6 = {
+    "path": DATA_PATH / "conf6/preprocessing" / "labeled_data_200hz.nc",
+    "label": ["conf6_op1", "conf6_op2", "conf6_op3"],
+    "strategy": "conf6",
+    "info_to_keep": ["SOA", "accuracy", "direction", "confidence"],
+
 }
 
 DESC_MRT = {

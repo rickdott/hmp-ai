@@ -23,16 +23,23 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
     for desc in descriptors:
         # TODO: Multiple dataset paths per descriptor
         ds = xr.open_dataset(desc["path"])
-        
+
         strategy = desc["strategy"]
         all_labels.extend(desc["label"])
-        if desc.get("share_participants_with", None):
-            other_strategy = desc["share_participants_with"]
-            if other_strategy in strategies:
-                splits[strategy] = splits[other_strategy]
         participants = ds.recording.values.tolist()
         ds.close()
-        ds_splits = split_participants_str(participants, val=val_size, test=test_size)
+
+        other_strategy = desc.get("share_participants_with", None)
+        if other_strategy is not None:
+            if other_strategy not in splits:
+                raise ValueError(
+                    f"'share_participants_with' references {other_strategy!r}, which has not "
+                    f"been built yet, it must appear earlier in descriptors"
+                )
+            ds_splits = splits[other_strategy]
+        else:
+            ds_splits = split_participants_str(participants, val=val_size, test=test_size)
+
 
         if type(strategy) == list:
             for strat in strategy:
@@ -159,6 +166,7 @@ class MultiXArrayProbaDataset(Dataset):
         subset_channels: list = None,
         channel_dict_path: dict = None,
         rt_key: str = None, # Accounts for 'rt' and 'RT' by default, otherwise provide value
+        reorder_labels: bool = False,
     ):
         """
         Initializes the data generator with the specified parameters.
@@ -247,6 +255,10 @@ class MultiXArrayProbaDataset(Dataset):
 
         self.index_map = self._create_index_map_whole()
         self.dataset_info = self._gather_dataset_info()
+
+        self.reorder_labels = reorder_labels
+        if reorder_labels and data_labels is None:
+            raise ValueError("If reorder_labels is True, data_labels must be provided")
 
         if norm_vars is None:
             if self.statistics is None:
@@ -414,17 +426,16 @@ class MultiXArrayProbaDataset(Dataset):
             )
 
         # Convert label probabilities to correct order
-        if self.data_labels is not None:
-            pass
-            # ds_labels = self.data_labels[indices[0]]
-            # ds_label_indices = [self.labels.index(label) for label in ds_labels]
-            # new_labels = torch.zeros(
-            #     (len(self.labels), sample_label.shape[1]), dtype=torch.float32
-            # )
-            # for old_idx, new_idx in enumerate(ds_label_indices):
-            #     # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
-            #     new_labels[new_idx] = sample_label[old_idx + 1]
-            # sample_label = new_labels
+        if self.data_labels is not None and self.reorder_labels:
+            ds_labels = self.data_labels[indices[0]]
+            ds_label_indices = [self.labels.index(label) for label in ds_labels]
+            new_labels = torch.zeros(
+                (len(self.labels), sample_label.shape[1]), dtype=torch.float32
+            )
+            for old_idx, new_idx in enumerate(ds_label_indices):
+                # Changed to old_idx+1 to account for negative class, but I dont think this was necessary earlier
+                new_labels[new_idx] = sample_label[old_idx]
+            sample_label = new_labels
         if self.add_negative:
             sample_label[0, :] = 1 - sample_label.sum(axis=0)
         sample_label = sample_label.transpose(1, 0)
@@ -443,12 +454,9 @@ class MultiXArrayProbaDataset(Dataset):
         sample_data = sample_data[self.skip_samples :, :]
         context = None
         if self.transform is not None:
-            offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0))
-            if offset_before < 0:
-                offset_before = -offset_before
             context = {
-                "start_jitter": offset_before,
-                "end_jitter": ds.attrs.get("extra_offset", ds.attrs.get("extra_offset_end", 0)),
+                "start_jitter": abs(sample.attrs.get("extra_offset_start", 0)),
+                "end_jitter": sample.attrs.get("extra_offset", sample.attrs.get("extra_offset_end", 0)),
                 "has_pe": self.add_pe,
             }
             sample_data, sample_label, context = self.transform((sample_data, sample_label, context))
@@ -466,7 +474,7 @@ class MultiXArrayProbaDataset(Dataset):
             if rt > 5:
                 # Is in ms, convert to s
                 rt = rt / 1000
-            offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0))
+            offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0)) + sample.attrs.get("extra_offset_start", 0)
             if offset_before < 0:
                 offset_before = -offset_before
             end = int(rt * sample.sfreq.item()) + offset_before - self.skip_samples

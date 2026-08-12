@@ -25,7 +25,7 @@ class StageFinder:
             list[Path | str | xr.DataArray] | None
         ) = None,  # Must be equal length to conditions and models
         offsets_hmp: tuple[float, float] = (0, 0), # Offsets to be used in base_data
-        offsets_mamba: tuple[float, float] = (0, 0), # Offsets to be used in data that will be labelled, will be added to offsets_HMP to create final offsets (past HMP)
+        offsets_mamba: tuple[float, float] = (0, 0), # Offsets to be used in data that will be labelled, includes HMP offset
         preprocessing_kwargs: (
             dict | None
         ) = None,  # Parameters used in `hmp.preprocessing.Standard`, provide pca weights here as 'weights' and # PCA components as 'n_comp'
@@ -52,9 +52,6 @@ class StageFinder:
                 self.conditions = ["No condition"]
 
         self.offsets_hmp, self.offsets_mamba = offsets_hmp, offsets_mamba
-        if offsets_hmp is not None:
-            if offsets_mamba is not None:
-                self.offsets_mamba = tuple(a + b for a, b in zip(offsets_hmp, offsets_mamba))
 
         # Load required data, making sure everything is in memory
         if type(epoched_data) is str or type(epoched_data) is Path:
@@ -81,16 +78,24 @@ class StageFinder:
             first_run_kwargs["offsets"] = offsets_hmp
 
             self.first_run_kwargs = first_run_kwargs
+            # If this errors, update xarray/numpy
             self.preprocessed = defaultKeepData(self.epoched_data, **first_run_kwargs)
             self.epoched_data_no_offset = self.preprocessed.data_epoched
 
+            # defer the mamba crop; keep what it needs to be built later
+            self._pca_weights = self.preprocessed.projector.weights
             second_run_kwargs = self.preprocessing_kwargs.copy()
             del second_run_kwargs['n_comp']
             second_run_kwargs["offsets"] = offsets_mamba
-            full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, for_mamba=True, **second_run_kwargs)
-            self.epoched_data = full_prep.data_epoched
-            del full_prep
             self.second_run_kwargs = second_run_kwargs
+
+            # second_run_kwargs = self.preprocessing_kwargs.copy()
+            # del second_run_kwargs['n_comp']
+            # second_run_kwargs["offsets"] = offsets_mamba
+            # full_prep = defaultKeepData(self.epoched_data, weights=self.preprocessed.projector.weights, for_mamba=True, **second_run_kwargs)
+            # self.epoched_data = full_prep.data_epoched
+            # del full_prep
+            # self.second_run_kwargs = second_run_kwargs
 
     def fit_model(
         self,
@@ -136,7 +141,7 @@ class StageFinder:
                     model_kwargs['n_events'] = n_events[condition]
                     model = model_class(**model_kwargs)
                     model_kwargs.pop('n_events')
-                    pattern_data = self.preprocessed
+                    pattern_data = preprocessed_subset
                 else:
                     model = model_class(self.event_properties, **model_kwargs)
                     pattern_data = hmp.patterndata.PatternData.from_basedata(preprocessed_subset, pattern=self.event_properties)
@@ -146,8 +151,9 @@ class StageFinder:
                 self.estimates.append((estimates, self.epoched_data_no_offset))
 
     def label_model(
-        self, labels: list[str] | dict[str, list[str]], all_data: xr.Dataset = None
-    ):  # If multiple conditions, should contain a (condition: list of labels) mapping for every condition
+        self, labels: list[str] | dict[str, list[str]], all_data: xr.Dataset = None, pca_weights: xr.DataArray = None
+    ):  
+        # If multiple conditions, should contain a (condition: list of labels) mapping for every condition
         if type(labels) is dict:
             if len(labels) != len(self.models):
                 raise ValueError(
@@ -166,35 +172,41 @@ class StageFinder:
         ):
             self.conditions.append("No condition")
 
-        if all_data is not None:
-            kwargs = self.preprocessing_kwargs.copy()
-            del kwargs["n_comp"]
-            full_prep = defaultKeepData(all_data, weights=self.preprocessed.projector.weights, **kwargs)
 
-            all_data = full_prep.data_epoched
-        data = all_data if all_data is not None else self.epoched_data
-        self._add_offset_info(data)
-        for i, estimate in enumerate(self.estimates):
-            condition = self.conditions[i % len(self.conditions)]
-            estimate = estimate[0]
-            print(f"Labeling dataset for condition: {condition}")
-            model_labels = self._label_model(estimate, condition, labels, data)
-            if all_labels is None:
-                all_labels = model_labels
-            else:
-                # Merge new labels with old labels, will always be disjoint since a trial + participant combo can only have one condition
-                # 0 is valid for probabilistic labels
-                all_labels = np.where(all_labels == 0, model_labels, all_labels)
-
-        prob_da = xr.DataArray(
-            all_labels,
-            dims=("recording", "epoch", "label", "sample"),
-            name="probability",
-        )
         if all_data is not None:
-            labeled_data = all_data.assign({"probabilities": prob_da})
+            source = all_data
         else:
-            labeled_data = self.epoched_data.assign({"probabilities": prob_da})
+            source = self.epoched_data
+
+        full_prep = defaultKeepData(
+            source,
+            weights=pca_weights if pca_weights is not None else self._pca_weights,
+            for_mamba=True,
+            **self.second_run_kwargs,
+        )
+        data = full_prep.data_epoched
+
+        self._add_offset_info(data)
+
+        try:
+            for i, estimate in enumerate(self.estimates):
+                condition = self.conditions[i % len(self.conditions)]
+                estimate = estimate[0]
+                print(f"Labeling dataset for condition: {condition}")
+                model_labels = self._label_model(estimate, condition, labels, data)
+                if all_labels is None:
+                    all_labels = model_labels
+                else:
+                    all_labels = np.where(all_labels == 0, model_labels, all_labels)
+
+            prob_da = xr.DataArray(
+                all_labels,
+                dims=("recording", "epoch", "label", "sample"),
+                name="probability",
+            )
+            labeled_data = data.assign({"probabilities": prob_da})
+        finally:
+            del full_prep
         return labeled_data
 
     def _label_model(self, estimate, condition, labels, data):
@@ -248,7 +260,7 @@ class StageFinder:
         )  # Shape: (recording, epoch, event)
 
         # Pre-compute padding parameters
-        offset_start = np.rint(self.preprocessing_kwargs.get("offsets_mamba", (0, 0))[0] * data.attrs['sfreq']).astype(int)
+        offset_start = data.attrs["extra_offset_start"]
 
         # Maybe this has to be reintroduced later? Dont know if there was a reason for it
         # Seems like right-padding to target_length already handles this
@@ -321,7 +333,8 @@ class StageFinder:
         if not path.exists():
             path.mkdir(parents=True)
         total_path = path / "hmp_fit.pkl"
-        pickle.dump((self.models, self.estimates), open(total_path, "wb"))
+        with open(total_path, "wb") as f:
+            pickle.dump((self.models, self.estimates, self._pca_weights), f)
 
 
     def visualize_model(self, positions, max_time=None):
@@ -345,8 +358,8 @@ class StageFinder:
                 ax=cur_ax,
                 max_time=max_time,
                 # sensors=True,
-                # vmin=-7e-6,
-                # vmax=7e-6,
+                vmin=-7e-6,
+                vmax=7e-6,
             )
             cur_ax.text(
                 0,
