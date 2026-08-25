@@ -5,7 +5,7 @@ import xarray as xr
 import hmp
 import numpy as np
 from pathlib import Path
-from hmpai.utilities import get_masking_indices_xr
+from hmpai.utilities import get_masking_indices_xr, exponential_time_pars
 from hmpai.behaviour.sat2 import read_behavioural_info, merge_data_xr
 from typing import Callable, Type
 import pickle
@@ -105,6 +105,7 @@ class StageFinder:
         condition_method: Callable = np.equal,
         event_width: int = None,
         fit_kwargs: dict = dict(),
+        exp_time_pars: bool = False,
     ):
         # Optional if models and estimates were provided, will (re)-fill models & estimates lists
         if model_class is hmp.models.CumulativeMethod:
@@ -125,10 +126,11 @@ class StageFinder:
                 model = model_class(**model_kwargs)
                 model_kwargs.pop('n_events')
                 pattern_data = self.preprocessed
+                if exp_time_pars:
+                    fit_kwargs["time_pars"] = exponential_time_pars(model, pattern_data.data.sfreq, 1500)
             else:
                 model = model_class(self.event_properties, **model_kwargs)
                 pattern_data = hmp.patterndata.PatternData.from_basedata(self.preprocessed, pattern=self.event_properties)
-
             _, estimates = model.fit_transform(pattern_data, **fit_kwargs)
             self.models.append(model)
             self.estimates.append((estimates, self.epoched_data_no_offset))
@@ -142,13 +144,29 @@ class StageFinder:
                     model = model_class(**model_kwargs)
                     model_kwargs.pop('n_events')
                     pattern_data = preprocessed_subset
+                    if exp_time_pars:
+                        fit_kwargs["time_pars"] = exponential_time_pars(model, pattern_data.data.sfreq, 1500)
                 else:
                     model = model_class(self.event_properties, **model_kwargs)
                     pattern_data = hmp.patterndata.PatternData.from_basedata(preprocessed_subset, pattern=self.event_properties)
-                
+                if "time_pars" in fit_kwargs:
+                    print(fit_kwargs["time_pars"])
                 _, estimates = model.fit_transform(pattern_data, **fit_kwargs)
                 self.models.append(model)
                 self.estimates.append((estimates, self.epoched_data_no_offset))
+
+    def fit_loocv(self, model_class: Type[hmp.models.base.BaseModel], model_kwargs: dict = dict(), fit_kwargs: dict = dict()):
+        # Does not support conditions
+        # if len(self.conditions) > 0:
+        #     raise ValueError("LOOCV does not support conditions, please provide a single condition or no conditions")
+        model = model_class(**model_kwargs)
+        loocv = hmp.loocv.LOOCV(model, quick=False, pca_cv=False)
+
+        if 'cpus' in fit_kwargs:
+            fit_kwargs['cpus_model'] = fit_kwargs.pop('cpus')
+        lkhs_loocv, modelfits_loocv = loocv.fit(self.preprocessed, **fit_kwargs)
+        return lkhs_loocv, modelfits_loocv
+
 
     def label_model(
         self, labels: list[str] | dict[str, list[str]], all_data: xr.Dataset = None, pca_weights: xr.DataArray = None
@@ -358,8 +376,8 @@ class StageFinder:
                 ax=cur_ax,
                 max_time=max_time,
                 # sensors=True,
-                vmin=-7e-6,
-                vmax=7e-6,
+                # vmin=-7e-6,
+                # vmax=7e-6,
             )
             cur_ax.text(
                 0,

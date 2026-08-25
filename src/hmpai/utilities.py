@@ -280,3 +280,58 @@ def load_hmp_epochs(path):
         epoch_data.attrs['mne_info'] = info
 
     return epoch_data
+
+
+def exponential_time_pars(model, sfreq,
+                          end_time, scale=None, seed=None):
+    """Random starting points with onsets from a truncated exponential.
+
+    Onsets are drawn on (0, end_time) with density proportional to
+    exp(-t / scale), so initializations concentrate early in the trial.
+
+    Parameters
+    ----------
+    model : EventModel
+        Used for n_events, distribution and locations (minimum stage gaps).
+    sfreq: int
+        Sampling frequency of the data, in Hz.
+    end_time : float
+        Upper bound on event onsets, in ms.
+    scale : float, optional
+        Exponential scale in ms. Smaller = more front-loaded.
+        Defaults to end_time / 3.
+    seed : int, optional
+
+    Returns
+    -------
+    ndarray, shape (n_starting_points, n_groups, n_events + 1, 2)
+        Pass directly to EventModel.fit(time_pars=...).
+    """
+    rng = np.random.default_rng(seed)
+    dist = model.distribution
+    n_events = model.n_events
+
+    end = end_time * sfreq / 1000.0                          # samples
+    scale = (end_time / 3.0 if scale is None else scale) * sfreq / 1000.0
+    min_gap = model._time_to_samples(model.locations, sfreq).astype(float)
+
+    trunc = 1.0 - np.exp(-end / scale)
+    out = np.empty((model.starting_points, n_events + 1, 2))
+    for i in range(model.starting_points):
+        for _ in range(1000):
+            u = rng.random(n_events)
+            onsets = np.sort(-scale * np.log1p(-u * trunc))  # inverse CDF
+            stages = np.diff(np.concatenate([[0.0], onsets, [end]]))
+            if np.all(stages >= min_gap):
+                break
+        else:
+            raise RuntimeError(
+                f"Could not place {n_events} events before {end_time} ms while "
+                f"respecting location ({model.locations.max()} ms). Raise end_time, "
+                f"raise scale, or lower n_events."
+            )
+        out[i, :, 0] = dist.shape
+        out[i, :, 1] = dist.mean_to_scale(stages)
+
+    n_groups = model.time_map.shape[0]
+    return np.tile(out[:, None, :, :], (1, n_groups, 1, 1))
