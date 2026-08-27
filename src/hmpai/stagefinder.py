@@ -108,7 +108,7 @@ class StageFinder:
         exp_time_pars: bool = False,
     ):
         # Optional if models and estimates were provided, will (re)-fill models & estimates lists
-        if model_class is hmp.models.CumulativeMethod:
+        if model_class is hmp.models.CumulativeMethod or model_class is hmp.models.EliminativeMethod:
             if event_width is None:
                 raise ValueError("Provide event_width when using CumulativeMethod")
             self.event_properties = hmp.patterns.HalfSine(
