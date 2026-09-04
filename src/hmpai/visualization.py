@@ -57,7 +57,7 @@ def predict_with_auc(
 
 
 def plot_peak_timing(
-    model, loader, labels, ax_ac, ax_sp, cue_var="condition", path=None, sample=True
+    model, loader, labels, ax_ac, ax_sp, cue_var="condition", path=None
 ):
     if path is None:
         output = []
@@ -100,27 +100,27 @@ def plot_peak_timing(
             continue
 
         scatter_subset = df[df["condition"] == ac_label]
-        if sample:
-            scatter_subset = scatter_subset.sample(frac=0.1)
         sns.scatterplot(
             scatter_subset,
             x=f"{label}_pred",
             y=f"{label}_true",
-            alpha=0.2,
+            alpha=0.05,
             ax=ax_ac,
             color=sns.color_palette()[i_label - 1],
             linewidth=0,
+            rasterized=True,
         )
 
-        scatter_subset = df[df["condition"] == sp_label].sample(frac=0.1)
+        scatter_subset = df[df["condition"] == sp_label]
         sns.scatterplot(
             scatter_subset,
             x=f"{label}_pred",
             y=f"{label}_true",
-            alpha=0.2,
+            alpha=0.05,
             ax=ax_sp,
             color=sns.color_palette()[i_label - 1],
             linewidth=0,
+            rasterized=True,
         )
 
 
@@ -177,7 +177,7 @@ def plot_tertile_split_single(
 ):
     pd.options.mode.chained_assignment = None
     data = data.copy()
-
+    set_seaborn_style()
     # Also do ratio here? Does not make sense since for non-confirmation operations we are certain that they exist?
     rt_col = "RT" if not "rt_x" in data else "rt_x"
     if column.endswith("_ratio"):

@@ -98,13 +98,15 @@ def set_seaborn_style():
     sns.set_context("paper")
     sns.set_palette(
         sns.color_palette(
-            [
-                "#4477AA",
-                "#66CCEE",
-                "#228833",
-                "#CCBB44",
-                "#EE6677",
-                "#AA3377",
+            palette=[
+                "#E69F00",  # Orange
+                "#56B4E9",  # Sky Blue
+                "#009E73",  # Bluish Green
+                "#CC79A7",  # Reddish Purple
+                "#0072B2",  # Blue
+                "#D55E00",  # Vermillion
+                "#F0E442",  # Yellow
+
             ]
         )
     )
