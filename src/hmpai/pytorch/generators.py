@@ -13,6 +13,29 @@ from typing import Callable
 
 global_ds_cache = {}
 
+class CombinedDataset(Dataset):
+    def __init__(self, datasets: list[Dataset]):
+        """
+        Initializes a combined dataset from multiple datasets.
+
+        Args:
+            datasets (list[Dataset]): List of datasets to combine.
+        """
+        self.datasets = datasets
+        self.cumulative_lengths = np.cumsum([len(ds) for ds in datasets])
+
+    def __len__(self):
+        return self.cumulative_lengths[-1]
+
+    def __getitem__(self, idx):
+        # Determine which dataset the index belongs to
+        dataset_idx = np.searchsorted(self.cumulative_lengths, idx, side='right')
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_lengths[dataset_idx - 1]
+        
+        return self.datasets[dataset_idx][sample_idx]
 
 class MultiXArrayProbaDataset(Dataset):
     def __init__(
