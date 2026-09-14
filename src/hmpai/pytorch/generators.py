@@ -58,6 +58,7 @@ class MultiXArrayProbaDataset(Dataset):
         data_labels: list[list] = None,
         add_pe: bool = False,
         subset_channels: list = None,
+        cut_for_sst: bool = False,
     ):
         """
         Initializes the data generator with the specified parameters.
@@ -136,6 +137,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.cut_samples = cut_samples
         self.add_pe = add_pe
         self.subset_channels = subset_channels
+        self.cut_for_sst = cut_for_sst
 
         self.index_map = self._create_index_map_whole()
 
@@ -313,27 +315,50 @@ class MultiXArrayProbaDataset(Dataset):
         sample_data[end_idx - self.cut_samples : end_idx, :] = torch.nan
 
         sample_label[end_idx - self.cut_samples : end_idx, :] = 0
+
+        if self.cut_for_sst:
+            sample_label = sample_label[:, :3]
         if self.add_negative:
             sample_label[end_idx - self.cut_samples : end_idx, 0] = 1.0
         sample_label = sample_label[self.skip_samples :, :]
-
         sample_data = sample_data[self.skip_samples :, :]
 
-        if self.transform is not None:
-            sample_data, sample_label = self.transform((sample_data, sample_label))
+        if self.cut_for_sst:
+            end_time = 0.296
+            if not np.isnan(sample.soa):
+                soa = sample.soa.item()
+                end_time = min(end_time, soa + 0.150)
+            end_time_in_samples = int(end_time * sample.sfreq.item() + sample.attrs.get("offset_before", 0))
+            sample_data = sample_data[: end_time_in_samples, :]
+            sample_label = sample_label[: end_time_in_samples, :]
+
+        # if self.transform is not None:
+        #     sample_data, sample_label = self.transform((sample_data, sample_label))
+
 
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
 
+        if self.add_pe and 'rt' in sample:
+            end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
+            start = sample.attrs.get("offset_before", 0) - self.skip_samples
+            sample_data, sample_label = add_relative_positional_encoding(
+                (sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end
+            )
+            # keep PE's padding consistent with the EEG channels
+            pad_rows = torch.isnan(sample_data[:, :-1]).all(dim=-1)
+            sample_data[pad_rows, -1] = torch.nan
+        if self.transform is not None:
+            sample_data, sample_label = self.transform((sample_data, sample_label))
+        # Add positional encoding
+        # if self.add_pe:
+        #     if 'rt' in sample:
+        #         end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
+        #         start = sample.attrs.get("offset_before", 0) - self.skip_samples
+        #     sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
+        #     # sample_data, sample_label = add_absolute_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
+
         # fillna with masking_value
         sample_data = torch.nan_to_num(sample_data, nan=MASKING_VALUE)
-
-        # Add positional encoding
-        if self.add_pe:
-            if 'rt' in sample:
-                end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
-                start = sample.attrs.get("offset_before", 0) - self.skip_samples
-            sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
-
         if self.keep_info:
             sample_info = {}
             for key in self.info_to_keep:

@@ -208,7 +208,7 @@ def train_and_test(
     loss = kldiv_loss
 
     opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr, betas=(0.9, 0.95))
-    stopper = EarlyStopper()
+    stopper = EarlyStopper(tolerance=5)
 
     lowest_mean_val_loss = np.inf
     for epoch in range(epochs):
