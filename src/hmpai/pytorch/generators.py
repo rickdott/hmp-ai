@@ -455,8 +455,8 @@ class MultiXArrayProbaDataset(Dataset):
         context = None
         if self.transform is not None:
             context = {
-                "start_jitter": abs(sample.attrs.get("extra_offset_start", 0)),
-                "end_jitter": sample.attrs.get("extra_offset", sample.attrs.get("extra_offset_end", 0)),
+                "start_offset": abs(sample.attrs.get("extra_offset_start", 0)),
+                "end_offset": sample.attrs.get("extra_offset", sample.attrs.get("extra_offset_end", 0)),
                 "has_pe": self.add_pe,
             }
             sample_data, sample_label, context = self.transform((sample_data, sample_label, context))
@@ -475,11 +475,17 @@ class MultiXArrayProbaDataset(Dataset):
                 # Is in ms, convert to s
                 rt = rt / 1000
             offset_before = sample.attrs.get("offset_before", sample.attrs.get("offset_start", 0)) + sample.attrs.get("extra_offset_start", 0)
+            end_jitter, start_jitter = 0, 0
             if offset_before < 0:
                 offset_before = -offset_before
-            end = int(rt * sample.sfreq.item()) + offset_before - self.skip_samples
+            if context is not None and 'start_jitter' in context:
+                start_jitter = context['start_jitter']
+                offset_before -= start_jitter
+            if context is not None and 'end_jitter' in context:
+                end_jitter = context['end_jitter']
+            end = int(rt * sample.sfreq.item()) + offset_before - start_jitter - self.skip_samples
             start = offset_before - self.skip_samples
-
+            
             sample_data, sample_label = add_relative_positional_encoding((sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end)
         if self.keep_info:
             sample_info = {}

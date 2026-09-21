@@ -36,10 +36,11 @@ class StartJitterTransform(object):
         if torch.rand((1,)).item() > self.probability:
             return data, labels, context
         
-        offset_before = context['start_jitter'] if context and 'start_jitter' in context else self.offset_before
+        offset_before = context['start_offset'] if context and 'start_offset' in context else self.offset_before
         if offset_before < 0:
             offset_before = -offset_before
         offset = torch.randint(offset_before, (1,))
+        context['start_jitter'] = offset.item() if context is not None else None
         
         cropped_data = data[offset:, :]
         cropped_labels = labels[offset:, :]
@@ -99,8 +100,9 @@ class EndJitterTransform(object):
         if torch.rand((1,)).item() > self.probability:
             return data, labels, context
         
-        extra_offset = context['end_jitter'] if context and 'end_jitter' in context else self.extra_offset
+        extra_offset = context['end_offset'] if context and 'end_offset' in context else self.extra_offset
         offset = torch.randint(extra_offset, (1,))
+        context['end_jitter'] = offset.item() if context is not None else None
 
         end_idx = get_masking_index(data, search_value=torch.nan)
         data[end_idx - offset :, :] = torch.nan
