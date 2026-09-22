@@ -59,6 +59,7 @@ class MultiXArrayProbaDataset(Dataset):
         add_pe: bool = False,
         subset_channels: list = None,
         cut_for_sst: bool = False,
+        end_time: float = 0.934 # 95th PCT of RTs
     ):
         """
         Initializes the data generator with the specified parameters.
@@ -138,6 +139,7 @@ class MultiXArrayProbaDataset(Dataset):
         self.add_pe = add_pe
         self.subset_channels = subset_channels
         self.cut_for_sst = cut_for_sst
+        self.end_time = end_time
 
         self.index_map = self._create_index_map_whole()
 
@@ -316,21 +318,24 @@ class MultiXArrayProbaDataset(Dataset):
 
         sample_label[end_idx - self.cut_samples : end_idx, :] = 0
 
-        if self.cut_for_sst:
-            sample_label = sample_label[:, :3]
         if self.add_negative:
             sample_label[end_idx - self.cut_samples : end_idx, 0] = 1.0
         sample_label = sample_label[self.skip_samples :, :]
         sample_data = sample_data[self.skip_samples :, :]
 
         if self.cut_for_sst:
-            end_time = 0.296
-            if not np.isnan(sample.soa):
-                soa = sample.soa.item()
-                end_time = min(end_time, soa + 0.150)
-            end_time_in_samples = int(end_time * sample.sfreq.item() + sample.attrs.get("offset_before", 0))
-            sample_data = sample_data[: end_time_in_samples, :]
-            sample_label = sample_label[: end_time_in_samples, :]
+            # Make trial end at SOA
+            # if not np.isnan(sample.soa):
+            #     soa = sample.soa.item()
+            #     end_time = min(end_time, soa + 0.150)
+            end_time_in_samples = int(self.end_time * sample.sfreq.item() + sample.attrs.get("offset_before", 0))
+            # Maybe do this like transforms? By setting to nan?
+            # Normally, samples are until RT, then + 0.25 (50 samples), then NaN (999)
+            # sample_data = sample_data[: end_time_in_samples, :]
+            sample_data[end_time_in_samples:, :] = torch.nan
+            # sample_label = sample_label[: end_time_in_samples, :]
+            sample_label[end_time_in_samples:, :] = 0
+            sample['rt'] = self.end_time
 
         # if self.transform is not None:
         #     sample_data, sample_label = self.transform((sample_data, sample_label))
@@ -339,7 +344,10 @@ class MultiXArrayProbaDataset(Dataset):
         sample_data = self.normalization_fn(sample_data, *self.norm_vars)
 
         if self.add_pe and 'rt' in sample:
-            end = int(sample['rt'].item() * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
+            rt = sample['rt'].item()
+            if self.cut_for_sst:
+                rt -= 0.25 # Offset
+            end = int(rt * sample.sfreq.item()) + sample.attrs.get("offset_before", 0) - self.skip_samples
             start = sample.attrs.get("offset_before", 0) - self.skip_samples
             sample_data, sample_label = add_relative_positional_encoding(
                 (sample_data, sample_label), 1, sample_label.shape[1] - 1, start=start, end=end
