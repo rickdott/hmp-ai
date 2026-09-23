@@ -32,8 +32,8 @@ DESC_PRP2 = {
 
 DESC_SAT1 = {
     "path": DATA_PATH / "sat1" / "preprocessed_500hz" / "labeled_data_200hz.nc",
-    # "label": ["encoding", "decision", "confirmation", "response"],
-    "label": ["sat1_op1", "sat1_op2", "sat1_op3"],
+    "label": ["encoding", "decision", "confirmation", "response"],
+    # "label": ["sat1_op1", "sat1_op2", "sat1_op3"],
     "strategy": "sat1",
     "info_to_keep": [],
     # "subset_cond": ("condition", "equal", "long") # No need to subset force == high since we do that when estimating
