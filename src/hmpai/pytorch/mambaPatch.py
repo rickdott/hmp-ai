@@ -127,6 +127,8 @@ def build_mamba_patch(config):
             max_seq_len = max_indices.max()
 
             x = x[:, :max_seq_len, :]
+            valid = torch.arange(max_seq_len, device=x.device)[None, :] < max_indices[:, None]
+            x = torch.where(valid[..., None], x, torch.zeros_like(x))
             pe = x[:, :, -1:] if self.use_pos_enc else None
 
             x = x.permute(0, 2, 1)
@@ -301,7 +303,9 @@ class FeatureExtractor(nn.Module):
         pad = self.pad_token.expand_as(x_total)
         x_total = torch.where(ch_mask.unsqueeze(-1), x_total, pad)
         B, C, n, D = x_total.shape
-        x_total = x_total.reshape(B, C*n, D)
+        # Time-major
+        x_total = x_total.permute(0, 2, 1, 3).reshape(B, n * C, D)
+        # x_total = x_total.reshape(B, C*n, D)
 
         return x_total, ch_mask
 
@@ -407,12 +411,11 @@ class ClassificationPrep(nn.Module):
         n_patches = max_seq_len // self.patch_size
         C = L // n_patches
 
-        x = x.view(B, C, n_patches, D)
+        # Time-major
+        x = x.view(B, n_patches, C, D).permute(0, 2, 3, 1)
+        # x = x.view(B, C, n_patches, D)
+        # x = x.permute(0, 1, 3, 2)
 
-        # # Mean over channels
-        # x = x.mean(dim=1)
-
-        x = x.permute(0, 1, 3, 2)
         x = x.reshape(B * C, D, n_patches)
 
         y = self.head(x)  # (B, D, C*n_patches * patch_size)
