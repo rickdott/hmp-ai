@@ -227,8 +227,24 @@ def train_and_test(
 
     loss = kldiv_loss
 
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.ndim < 2 or getattr(param, "_no_weight_decay", False) or name.endswith("pad_token"):
+            no_decay.append(param)
+        else:
+            decay.append(param)
     # opt = torch.optim.NAdam(model.parameters(), weight_decay=weight_decay, lr=lr)
-    opt = torch.optim.AdamW(model.parameters(), weight_decay=weight_decay, lr=lr, fused=True, betas=(0.9, 0.95))
+    opt = torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=lr,
+        fused=True,
+        betas=(0.9, 0.95),
+    )
     # scaler = torch.amp.GradScaler('cuda')
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * len(train_loader))
     stopper = EarlyStopper(tolerance=5)
