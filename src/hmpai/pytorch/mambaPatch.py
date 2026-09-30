@@ -272,7 +272,6 @@ class FeatureExtractor(nn.Module):
         self.spatial_module = CoordinatePositionalEncoding(embed_dim)
         if self.use_pos_enc:
             self.trial_temporal_module = TrialTemporalEncoding(embed_dim, patch_size=patch_size)
-        self.pad_token = nn.Parameter(torch.zeros(1, 1, 1, self.embed_dim))
 
 
     def forward(self, x, coords=None):
@@ -300,8 +299,7 @@ class FeatureExtractor(nn.Module):
         x_total = x_total + x_pos
         # x_total = x_total + x_pos + x_trial
 
-        pad = self.pad_token.expand_as(x_total)
-        x_total = torch.where(ch_mask.unsqueeze(-1), x_total, pad)
+        x_total = x_total * ch_mask.unsqueeze(-1)
         B, C, n, D = x_total.shape
         # Time-major
         x_total = x_total.permute(0, 2, 1, 3).reshape(B, n * C, D)
