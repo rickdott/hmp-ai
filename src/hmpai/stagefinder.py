@@ -149,23 +149,35 @@ class StageFinder:
                 else:
                     model = model_class(self.event_properties, **model_kwargs)
                     pattern_data = hmp.patterndata.PatternData.from_basedata(preprocessed_subset, pattern=self.event_properties)
-                if "time_pars" in fit_kwargs:
-                    print(fit_kwargs["time_pars"])
                 _, estimates = model.fit_transform(pattern_data, **fit_kwargs)
                 self.models.append(model)
                 self.estimates.append((estimates, self.epoched_data_no_offset))
 
-    def fit_loocv(self, model_class: Type[hmp.models.base.BaseModel], model_kwargs: dict = dict(), fit_kwargs: dict = dict()):
+    def fit_loocv(self, model_class: Type[hmp.models.base.BaseModel], model_kwargs: dict = dict(), fit_kwargs: dict = dict(), condition_variable=None, condition_method=np.equal):
         # Does not support conditions
         # if len(self.conditions) > 0:
         #     raise ValueError("LOOCV does not support conditions, please provide a single condition or no conditions")
-        model = model_class(**model_kwargs)
-        loocv = hmp.loocv.LOOCV(model, quick=False, pca_cv=False)
+        lkhs_list = []
+        if len(self.conditions) == 0:
+            model = model_class(**model_kwargs)
+            loocv = hmp.loocv.LOOCV(model, quick=False, pca_cv=False)
 
-        if 'cpus' in fit_kwargs:
-            fit_kwargs['cpus_model'] = fit_kwargs.pop('cpus')
-        lkhs_loocv, modelfits_loocv = loocv.fit(self.preprocessed, **fit_kwargs)
-        return lkhs_loocv, modelfits_loocv
+            if 'cpus' in fit_kwargs:
+                fit_kwargs['cpus_model'] = fit_kwargs.pop('cpus')
+            lkhs_loocv, modelfits_loocv = loocv.fit(self.preprocessed, **fit_kwargs)
+            lkhs_list.append((lkhs_loocv, modelfits_loocv))
+        else:
+            for condition in self.conditions:
+                print(f"Fitting LOOCV for condition: {condition}")
+                preprocessed_subset = self.preprocessed.select_coord(condition, condition_variable, condition_method)
+                model = model_class(**model_kwargs)
+                loocv = hmp.loocv.LOOCV(model, quick=False, pca_cv=False)
+
+                if 'cpus' in fit_kwargs:
+                    fit_kwargs['cpus_model'] = fit_kwargs.pop('cpus')
+                lkhs_loocv, modelfits_loocv = loocv.fit(preprocessed_subset, **fit_kwargs)
+                lkhs_list.append((lkhs_loocv, modelfits_loocv))
+        return lkhs_list
 
 
     def label_model(
