@@ -411,9 +411,23 @@ def train(
                     }
                 )
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            model.parameters(), max_norm=1.0
-        )
+        # Check BEFORE clipping: a NaN total norm makes clip_grad_norm_ write NaN into every grad
+        bad = [n for n, p in model.named_parameters()
+               if p.grad is not None and not torch.isfinite(p.grad).all()]
+        if bad:
+            from collections import Counter
+            per_module = Counter(".".join(n.split(".")[:2]) for n in bad)
+            torch.save({"data": data.cpu(), "labels": labels.cpu(), "info": info,
+                        "padding_mask": padding_mask.cpu() if padding_mask is not None else None,
+                        "model_state": model.state_dict(),
+                        "dann_alpha": getattr(model, "dann_alpha", None)},
+                       Path(writer.log_dir) / "nan_batch.pt")
+            raise RuntimeError(f"Non-finite GRAD at epoch {epoch}, batch {i}: "
+                               f"{len(bad)} params, per module: {dict(per_module)}")
+        # loss.backward()
+        # torch.nn.utils.clip_grad_norm_(
+        #     model.parameters(), max_norm=1.0
+        # )
         optimizer.step()
         scheduler.step()
 

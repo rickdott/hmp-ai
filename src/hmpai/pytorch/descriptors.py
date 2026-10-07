@@ -53,7 +53,7 @@ DESC_CONF1 = {
 
 DESC_CONF2 = {
     "path": DATA_PATH / "conf2/preprocessing" / "labeled_data_200hz.nc",
-    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4"],
+    "label": ["conf2_op1", "conf2_op2", "conf2_op3", "conf2_op4", "conf2_op5"],
     "strategy": "conf2",
     "info_to_keep": ["confidenceRating", "trialOutcome", "contrast", "absoluteContrast"],
 }

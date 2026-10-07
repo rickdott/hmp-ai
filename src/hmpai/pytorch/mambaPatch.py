@@ -134,7 +134,14 @@ def build_mamba_patch(config):
             x = x.permute(0, 2, 1)
             x, ch_mask = self.feature_extractor(x, coords)
 
+            B, L, D = x.shape
+            n = L // ch_mask.shape[1]
+            tok_real = ch_mask.squeeze(-1).unsqueeze(1).expand(B, n, -1).reshape(B, L)  # time-major, matches x
+            order = torch.argsort((~tok_real).to(torch.int8), dim=1, stable=True)
+            x = torch.gather(x, 1, order.unsqueeze(-1).expand(-1, -1, D))
             x = self.seq_model(x)
+            x = torch.gather(x, 1, torch.argsort(order, dim=1).unsqueeze(-1).expand(-1, -1, D))
+            
             x = self.normalization(x)
             x = self.classification_prep(x, max_seq_len)
             x_weights = x.permute(0, 2, 1, 3)
@@ -221,7 +228,7 @@ class MambaBlock(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
         self.mamba = Mamba2(d_model=embed_dim, d_state=128, d_conv=4, expand=2)
-        self.norm = nn.RMSNorm(embed_dim)
+        self.norm = nn.RMSNorm(embed_dim, eps=1e-5)
 
     def forward(self, x):
         x = self.mamba(self.norm(x)) + x
@@ -299,7 +306,7 @@ class FeatureExtractor(nn.Module):
         x_total = x_total + x_pos
         # x_total = x_total + x_pos + x_trial
 
-        x_total = x_total * ch_mask.unsqueeze(-1)
+        x_total = torch.where(ch_mask.unsqueeze(-1), x_total, torch.zeros_like(x_total))        
         B, C, n, D = x_total.shape
         # Time-major
         x_total = x_total.permute(0, 2, 1, 3).reshape(B, n * C, D)
