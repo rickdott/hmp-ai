@@ -82,10 +82,9 @@ DESC_CONF3_EXP3 = {
 
 DESC_CONF6 = {
     "path": DATA_PATH / "conf6/preprocessing" / "labeled_data_200hz.nc",
-    "label": ["conf6_op1", "conf6_op2", "conf6_op3", "conf6_op4"],
+    "label": ["conf6_op1", "conf6_op2", "conf6_op3", "conf6_op4", "conf6_op5"],
     "strategy": "conf6",
     "info_to_keep": ["SOA", "accuracy", "direction", "confidence"],
-
 }
 
 DESC_MRT = {
