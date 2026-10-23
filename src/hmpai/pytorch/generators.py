@@ -14,7 +14,7 @@ from typing import Callable
 
 global_ds_cache = {}
 
-def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage_path: Path=Path('files/combined_montage.json')):
+def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage_path: Path=Path('files/combined_montage.json'), swap_train_val: bool=False):
     # Determine train/test/val splits
     all_labels = ["negative"]
     strategies = []
@@ -44,9 +44,13 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
         if type(strategy) == list:
             for strat in strategy:
                 splits[strat] = ds_splits
+                if swap_train_val:
+                    splits[strat] = [ds_splits[1], ds_splits[0], ds_splits[2]]
             strategies.extend(strategy)
         else:
             splits[strategy] = ds_splits
+            if swap_train_val:
+                splits[strategy] = [ds_splits[1], ds_splits[0], ds_splits[2]]
             strategies.append(strategy)
     
     add_negative = True
@@ -57,6 +61,7 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
     train = []
     val = []
     test = []
+
     task_class_counts = {}
     for desc in descriptors:
         if type(desc["strategy"]) == list:

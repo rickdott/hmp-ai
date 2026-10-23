@@ -11,6 +11,7 @@ from typing import Callable, Type
 import pickle
 from hmpai.projectors import defaultKeepData
 from graphlib import TopologicalSorter
+from mne.viz import plot_topomap
 
 
 class StageFinder:
@@ -411,6 +412,35 @@ class StageFinder:
         for ax_ in axes_list:
             ax_.set_xlim(right=max_xlim)
         return fig, ax
+
+    def visualize_model_per_participant(self, positions, event, n_participants=5):
+        # event is 1-based (as in HMP plots), converted to 0-based for indexing
+        fig, axes = plt.subplots(
+            len(self.estimates), n_participants,
+            dpi=150, figsize=(0.8 * n_participants, 1.2 * len(self.estimates)),
+            squeeze=False,
+        )
+        for row, (estimates, epoch_data) in enumerate(self.estimates):
+            by_trial_weights = hmp.utils.event_channels(epoch_data, estimates, mean=False)
+            for col, recording in enumerate(epoch_data.recording[:n_participants]):
+                ax = axes[row, col]
+                topo = by_trial_weights.sel(event=event - 1, recording=recording).mean('epoch')
+                plot_topomap(
+                    topo,
+                    positions,
+                    sensors=False,
+                    cmap='Spectral_r',
+                    res=100,
+                    show=False,
+                    axes=ax,
+                    contours=6,
+                )
+                ax.set_title(f'{str(recording.values)[:-4]}', fontsize=6)
+            condition = self.conditions[row % len(self.conditions)]
+            axes[row, 0].text(-0.2, 0.5, condition, rotation=90, ha='center', va='center',
+                              transform=axes[row, 0].transAxes, fontsize=6)
+        plt.tight_layout()
+        return fig, axes
 
     def estimate(self, data, condition_variable=None, condition_method=None):
         kwargs = self.first_run_kwargs.copy()
