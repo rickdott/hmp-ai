@@ -245,7 +245,7 @@ def train_and_test(
         fused=True,
         betas=(0.9, 0.95),
     )
-    # scaler = torch.amp.GradScaler('cuda')
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs * len(train_loader))
     stopper = EarlyStopper(tolerance=5)
 
@@ -307,9 +307,9 @@ def train_and_test(
                 writer.flush()
 
             # Stop training if validation loss has not improved sufficiently
-            if stopper.check_stop(mean_val_loss):
-                break
-        # print(f"Epoch {epoch}: LR = {scheduler.get_last_lr()[0]:.6f}")
+            # if stopper.check_stop(mean_val_loss):
+            #     break
+        writer.add_scalar("learning_rate", scheduler.get_last_lr()[0], global_step=epoch)
     # Re-load best performing model
     if write_log:
         best_checkpoint = load_model(path / "checkpoint.pt")
