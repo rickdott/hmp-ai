@@ -282,14 +282,13 @@ def train_and_test(
 
                 epoch_val_loss += np.mean(val_losses)
                 postfix_dict[f"val_loss_{i}"] = np.mean(val_losses)
-            mean_train_loss = np.mean(batch_losses)
-            mean_val_loss = epoch_val_loss / len(val_loaders)
-            postfix_dict["mean_val_loss"] = mean_val_loss
+            if epoch_val_loss != 0:
+                mean_val_loss = epoch_val_loss / len(val_loaders)
+                postfix_dict["mean_val_loss"] = mean_val_loss
             tepoch.set_postfix(postfix_dict)
 
-
             # Save model checkpoint if validation loss is the lowest yet
-            if mean_val_loss < lowest_mean_val_loss:
+            if epoch_val_loss != 0 and mean_val_loss < lowest_mean_val_loss:
                 lowest_mean_val_loss = mean_val_loss
                 if write_log:
                     save_model(
@@ -299,17 +298,29 @@ def train_and_test(
                         opt.state_dict(),
                         loss,
                     )
+            mean_train_loss = np.mean(batch_losses)
             if write_log:
                 writer.add_scalar("train_loss", mean_train_loss, global_step=epoch)
-                writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
-                for i in range(len(val_loaders)):
-                    writer.add_scalar(f"val_loss_{i}", postfix_dict[f"val_loss_{i}"], global_step=epoch)
-                writer.flush()
+                if epoch_val_loss != 0:
+                    writer.add_scalar("val_loss", mean_val_loss, global_step=epoch)
+                    for i in range(len(val_loaders)):
+                        writer.add_scalar(f"val_loss_{i}", postfix_dict[f"val_loss_{i}"], global_step=epoch)
+                    writer.flush()
 
             # Stop training if validation loss has not improved sufficiently
             # if stopper.check_stop(mean_val_loss):
             #     break
-        writer.add_scalar("learning_rate", scheduler.get_last_lr()[0], global_step=epoch)
+        if write_log:
+            writer.add_scalar("learning_rate", scheduler.get_last_lr()[0], global_step=epoch)
+    # No checkpoint has been written, use final model as checkpoint
+    if write_log and not (path / "checkpoint.pt").exists():
+        save_model(
+            path / "checkpoint.pt",
+            epoch,
+            model.state_dict(),
+            opt.state_dict(),
+            loss,
+        )
     # Re-load best performing model
     if write_log:
         best_checkpoint = load_model(path / "checkpoint.pt")

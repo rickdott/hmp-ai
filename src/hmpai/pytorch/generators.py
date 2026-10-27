@@ -90,20 +90,21 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
         ))
         norm_vars = get_norm_vars_from_global_statistics(train[-1].statistics, norm_fn)
 
-        val.append(MultiXArrayProbaDataset(
-            [desc["path"]],
-            labels=all_labels,
-            data_labels=[desc["label"]],
-            info_to_keep=desc_info,
-            participants_to_keep=splits[strat][1],
-            add_negative=add_negative,
-            add_pe=add_pe,
-            subset_cond=subset_cond,
-            normalization_fn=norm_fn,
-            norm_vars=norm_vars,
-            channel_dict_path=montage_path,
-            rt_key=rt_key,
-        ))
+        if len(splits[strat][1]) > 0:
+            val.append(MultiXArrayProbaDataset(
+                [desc["path"]],
+                labels=all_labels,
+                data_labels=[desc["label"]],
+                info_to_keep=desc_info,
+                participants_to_keep=splits[strat][1],
+                add_negative=add_negative,
+                add_pe=add_pe,
+                subset_cond=subset_cond,
+                normalization_fn=norm_fn,
+                norm_vars=norm_vars,
+                channel_dict_path=montage_path,
+                rt_key=rt_key,
+            ))
 
         if len(splits[strat][2]) > 0:
             test.append(MultiXArrayProbaDataset(
