@@ -38,7 +38,10 @@ def build_datasets(descriptors, val_size: float=0.5, test_size: float=0, montage
                 )
             ds_splits = splits[other_strategy]
         else:
-            ds_splits = split_participants_str(participants, val=val_size, test=test_size)
+            if strategy == "sat1":
+                ds_splits = split_participants_str(participants, val=0.5, test=test_size)
+            else:
+                ds_splits = split_participants_str(participants, val=val_size, test=test_size)
 
 
         if type(strategy) == list:
