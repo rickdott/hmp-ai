@@ -132,6 +132,7 @@ def build_mamba_patch(config):
             pe = x[:, :, -1:] if self.use_pos_enc else None
 
             x = x.permute(0, 2, 1)
+            raw = x[:, :-1, :] if self.use_pos_enc else x          # drop PE channel, (B, C, T)
             x, ch_mask = self.feature_extractor(x, coords)
 
             B, L, D = x.shape
@@ -143,7 +144,10 @@ def build_mamba_patch(config):
             x = torch.gather(x, 1, torch.argsort(order, dim=1).unsqueeze(-1).expand(-1, -1, D))
             
             x = self.normalization(x)
-            x = self.classification_prep(x, max_seq_len)
+            n_p = max_seq_len // self.patch_size
+            raw = raw[..., : n_p * self.patch_size]
+            raw = torch.where(ch_mask, raw, torch.zeros_like(raw))  # zero out MASKING_VALUE channels
+            x = self.classification_prep(x, max_seq_len, raw)
             x_weights = x.permute(0, 2, 1, 3)
             weights = self.spatial_attention(x_weights)
             weights = weights.masked_fill(~ch_mask.unsqueeze(1), float('-inf'))
@@ -207,17 +211,14 @@ class MambaBlock(nn.Module):
         mamba (Mamba): A custom Mamba layer initialized with specific parameters
             such as embedding dimension, state size, convolution size, and expansion factor.
         norm (nn.RMSNorm): An RMS normalization layer applied to the input tensor.
-        backward (bool): Whether to process the sequence in reverse order.
 
     Args:
         embed_dim (int): The embedding dimension of the input tensor.
-        backward (bool, optional): Whether to reverse the sequence before processing. Defaults to False.
 
     Methods:
         forward(x):
             Applies the Mamba layer and RMS normalization to the input tensor,
-            followed by a residual connection. If backward=True, reverses the sequence
-            before and after processing.
+            followed by a residual connection. 
 
             Args:
                 x (torch.Tensor): The input tensor of shape (batch_size, seq_len, embed_dim).
@@ -316,7 +317,7 @@ class FeatureExtractor(nn.Module):
 
 
 class TimeModule(nn.Module):
-    def __init__(self, embed_dim, groups=8, patch_size=13):
+    def __init__(self, embed_dim, groups=8, patch_size=25):
         super().__init__()
         self.embed_dim = embed_dim
         self.groups = groups
@@ -390,46 +391,28 @@ class TrialTemporalEncoding(nn.Module):
 
 
 class ClassificationPrep(nn.Module):
-    def __init__(self, emb_dim, patch_size):
+    def __init__(self, emb_dim, patch_size, skip_dim=16):
         super().__init__()
         self.emb_dim = emb_dim
         self.patch_size = patch_size
-        # Original single-step approach
-        self.head = nn.ConvTranspose1d(
-            in_channels=self.emb_dim, 
-            out_channels=self.emb_dim, 
-            kernel_size=self.patch_size, 
-            stride=self.patch_size, 
-            padding=0
-        )
-        
-        # Refinement
+        self.head = nn.ConvTranspose1d(emb_dim, emb_dim, kernel_size=patch_size, stride=patch_size, padding=0)
+        self.skip = nn.Sequential(nn.Conv1d(1, skip_dim, kernel_size=7, padding=3), nn.GELU())
         self.refine = nn.Sequential(
-            nn.Conv1d(emb_dim, emb_dim, kernel_size=3, padding=1),
+            nn.Conv1d(emb_dim + skip_dim, emb_dim, kernel_size=3, padding=1),
             nn.GELU(),
             nn.Conv1d(emb_dim, emb_dim, kernel_size=3, padding=1),
         )
 
-    def forward(self, x, max_seq_len):
-        # x: (B, L, D) where L = C * n_patches
+    def forward(self, x, max_seq_len, raw):
+        # x: (B, L, D) time-major; raw: (B, C, n_patches * patch_size), padded channels zeroed
         B, L, D = x.shape
         n_patches = max_seq_len // self.patch_size
         C = L // n_patches
-
-        # Time-major
-        x = x.view(B, n_patches, C, D).permute(0, 2, 3, 1)
-        # x = x.view(B, C, n_patches, D)
-        # x = x.permute(0, 1, 3, 2)
-
-        x = x.reshape(B * C, D, n_patches)
-
-        y = self.head(x)  # (B, D, C*n_patches * patch_size)
-        y = self.refine(y)
-
-        T = y.shape[-1]
-        y = y.view(B, C, D, T)
-
-        return y
+        x = x.view(B, n_patches, C, D).permute(0, 2, 3, 1).reshape(B * C, D, n_patches)
+        y = self.head(x)                                   # (B*C, D, T)
+        s = self.skip(raw.reshape(B * C, 1, -1))           # (B*C, skip_dim, T)
+        y = self.refine(torch.cat([y, s], dim=1))
+        return y.view(B, C, D, y.shape[-1])
 
 
 class ClassificationHead(nn.Module):
